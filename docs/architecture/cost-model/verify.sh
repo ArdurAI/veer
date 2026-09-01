@@ -8,6 +8,7 @@ script_dir=$(
 )
 tmp_file=$(mktemp "${TMPDIR:-/tmp}/veer-cost-model.XXXXXX")
 
+# Remove only the file allocated by mktemp for this invocation.
 cleanup() {
     rm -f "$tmp_file"
 }

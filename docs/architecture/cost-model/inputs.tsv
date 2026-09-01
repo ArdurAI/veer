@@ -6,13 +6,13 @@ small	database_compute	storage	730	instance-hour	0.129	aws-rds-postgresql	Multi-
 small	database_storage	storage	50	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
 small	recovery_backup_storage	recovery	50	GB-month	0.095	aws-rds-recovery-storage	Encrypted copy in the recovery region
 small	recovery_backup_transfer	recovery	50	GB	0.02	aws-rds-cross-region	One full-dataset equivalent of monthly changed data
-small	queue_requests	queue	4	million-requests	0.40	aws-sqs	Five million total requests less one million free allowance
+small	queue_requests	queue	5	million-requests	0.40	aws-sqs	No account or service free allowance applied
 small	load_balancer	network	730	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer
 small	load_balancer_capacity	network	730	LCU-hour	0.008	aws-elb	Average one LCU
-small	nat_gateways	network	1460	gateway-hour	0.045	aws-vpc-nat	One NAT gateway in each of two active zones
-small	nat_processing	network	100	GB	0.045	aws-vpc-nat	Non-endpoint outbound processing
+small	nat_gateways	network	1460	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of two active zones
+small	nat_processing	network	100	GB	0.045	aws-ec2-nat	Non-endpoint outbound processing
 small	public_ipv4	network	2920	address-hour	0.005	aws-vpc-ipv4	Two NAT and two load-balancer addresses
-small	internet_egress	network	50	GB	0.09	aws-data-transfer	150 GB total less 100 GB aggregated account allowance
+small	internet_egress	network	150	GB	0.09	aws-data-transfer	No account-level free allowance applied
 small	cross_az_transfer	network	200	directional-GB	0.01	aws-data-transfer	100 GB round trip billed in each direction
 small	log_ingestion	telemetry	50	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
 small	log_archive	telemetry	10	GB-month	0.03	aws-cloudwatch	Assumes 5 to 1 compression during online retention
@@ -26,13 +26,13 @@ target	database_compute	storage	730	instance-hour	0.478	aws-rds-postgresql	Multi
 target	database_storage	storage	500	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
 target	recovery_backup_storage	recovery	500	GB-month	0.095	aws-rds-recovery-storage	Encrypted copy in the recovery region
 target	recovery_backup_transfer	recovery	500	GB	0.02	aws-rds-cross-region	One full-dataset equivalent of monthly changed data
-target	queue_requests	queue	49	million-requests	0.40	aws-sqs	Fifty million total requests less one million free allowance
+target	queue_requests	queue	50	million-requests	0.40	aws-sqs	No account or service free allowance applied
 target	load_balancer	network	730	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer
 target	load_balancer_capacity	network	3650	LCU-hour	0.008	aws-elb	Average five LCU
-target	nat_gateways	network	2190	gateway-hour	0.045	aws-vpc-nat	One NAT gateway in each of three active zones
-target	nat_processing	network	1000	GB	0.045	aws-vpc-nat	Non-endpoint outbound processing
+target	nat_gateways	network	2190	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of three active zones
+target	nat_processing	network	1000	GB	0.045	aws-ec2-nat	Non-endpoint outbound processing
 target	public_ipv4	network	4380	address-hour	0.005	aws-vpc-ipv4	Three NAT and three load-balancer addresses
-target	internet_egress	network	500	GB	0.09	aws-data-transfer	600 GB total less 100 GB aggregated account allowance
+target	internet_egress	network	600	GB	0.09	aws-data-transfer	No account-level free allowance applied
 target	cross_az_transfer	network	2000	directional-GB	0.01	aws-data-transfer	1000 GB round trip billed in each direction
 target	log_ingestion	telemetry	500	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
 target	log_archive	telemetry	100	GB-month	0.03	aws-cloudwatch	Assumes 5 to 1 compression during online retention

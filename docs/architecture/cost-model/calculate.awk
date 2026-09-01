@@ -4,16 +4,19 @@ BEGIN {
     error_count = 0
 }
 
+# Record a validation error while allowing the current file to be fully checked.
 function fail(message) {
     print FILENAME ":" FNR ": " message > "/dev/stderr"
     error_count++
 }
 
+# Return the final component of a slash-separated path.
 function basename(path, parts, count) {
     count = split(path, parts, "/")
     return parts[count]
 }
 
+# Accept only unsigned decimal quantities; scientific notation is disallowed.
 function is_amount(value) {
     return value ~ /^[0-9]+([.][0-9]+)?$/
 }
@@ -42,6 +45,12 @@ file == "sources.tsv" {
     }
     if ($4 !~ /^https:\/\//) {
         fail("source URL must use HTTPS")
+    }
+    immutable_offer = "^https://pricing[.]us-east-1[.]amazonaws[.]com/" \
+        "offers/v1[.]0/aws/[A-Za-z0-9]+/[0-9]{14}" \
+        "(/[a-z0-9-]+)?/index[.]json$"
+    if ($1 != "internal-local" && $4 !~ immutable_offer) {
+        fail("billable source URL must pin an immutable AWS Offers version")
     }
     sources[$1] = 1
     next
@@ -94,6 +103,9 @@ file == "inputs.tsv" {
     }
     if (!($7 in sources)) {
         fail("unknown source_id " $7)
+    }
+    if ($7 == "internal-local" && ($6 + 0) != 0) {
+        fail("internal-local may only support a zero unit rate")
     }
     items[key] = 1
     profile_items[$1]++

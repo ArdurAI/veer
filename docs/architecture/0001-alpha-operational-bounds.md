@@ -237,8 +237,8 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 587.46 | USD 750.00 | USD 162.54 |
-| Target-scale qualification | USD 2,076.93 | USD 2,500.00 | USD 423.07 |
+| Small production | USD 596.86 | USD 750.00 | USD 153.14 |
+| Target-scale qualification | USD 2,086.33 | USD 2,500.00 | USD 413.67 |
 
 These figures cover the Veer control plane only. They exclude taxes, support,
 discount programs, CI minutes, developer workstations, domain registration,
