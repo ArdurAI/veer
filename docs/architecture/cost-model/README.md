@@ -110,8 +110,12 @@ generated request schedule after reserving two synthetic calls per minute. One
 send, receive, and delete for every generated and synthetic write consumes
 10,639,935 units small and 52,824,735 target. The remaining units are hard
 partitions for retries/redeliveries, empty polls, and critical work, enforced by
-the fail-closed meter in the ADR. Encoded bodies are capped at 2 KiB even though
-each request is conservatively priced as a 64 KiB billable unit.
+the fail-closed meter in the ADR. A durable schedule ledger pre-reserves the
+complete baseline and atomically claims send/receive/delete units at admission,
+and only steady/peak schedule-token holders can consume those claims. The fixed
+workload therefore remains admissible after the 90% warning while excess bursts
+are fenced before they can steal future slots. Encoded bodies are capped at 2
+KiB even though each request is conservatively priced as a 64 KiB billable unit.
 A separate counter expands batches and caps all send, receive, redelivery, and
 recovery body occurrences at 40/200 GB. That queue budget, 140/1,600 GB for
 database and internal service traffic, and 20/200 GB for failover and retries
@@ -141,6 +145,14 @@ binary-to-decimal factor twice. The operational wire and retained-storage caps
 remain decimal-byte envelopes and are rounded up before pricing, which is
 conservative against the binary-scaled billing unit. See the
 [CloudWatch pricing examples](https://aws.amazon.com/cloudwatch/pricing/).
+
+Custom metric quantities count every unique metric name plus complete dimension
+set first emitted during the billing month. A durable 50/500-identity registry
+does not reclaim identities after deletion or relabeling, freezes new identities
+at 90%, and rejects unknown series at the collector when full or stale. The
+10/100 GiB trace quantities are separate durable accepted-byte caps; threshold
+qualification verifies sampling, dropped-byte observability, seven-day expiry,
+and inclusion in the telemetry wire budget.
 
 ALB limits use the maximum of the four AWS LCU dimensions. Small remains below
 one LCU at 20 new and 2,500 active TLS connections, 0.5 GB/hour, and 500

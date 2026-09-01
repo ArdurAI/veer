@@ -174,6 +174,7 @@ an explicit quota response; they must not cause silent data loss.
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
 | Retained platform log storage, GB | 14 | 135 | 1,343 |
 | Accepted trace data/month, GiB | 1 | 10 | 100 |
+| Billable custom metric identities/billing month | local | 50 | 500 |
 | Secrets Manager API requests/month, primary region | 0 | 45,000 | 450,000 |
 | Secrets Manager API requests/month, recovery region | 0 | 5,000 | 50,000 |
 | Recovery-region secret replicas | 0 | 10 | 100 |
@@ -210,12 +211,29 @@ counts every send, receive, delete, retry, redelivery, and empty long poll. It
 partitions the 20/100 million hard caps into the baseline above, 5/25 million
 retry and redelivery units, 3/15 million empty-poll units, and
 1,360,065/7,175,265 units reserved for recovery, deletion, cancellation, and
-security work. At 80% of any non-critical partition, Veer alerts and reduces
-poll frequency. At 90%, it rejects new non-reserved queue-producing mutations
-before persistence and backs off empty polls. Partition exhaustion fences that
-class; only the critical reserve remains usable. A missing, stale, or
-non-durable meter fails closed with `503`. Accepted work is never discarded, and
-the total meter reaching 100% fails qualification and blocks further admission.
+security work.
+
+At the start of each accounting window, a durable schedule ledger earmarks the
+entire 10,639,935/52,824,735-unit baseline for the fixed generated and synthetic
+workload. Before persistence, every accepted queue-producing action atomically
+claims one send, one receive, and one delete unit from that ledger; the send
+consumes its claim immediately, while receive and delete settle their claims as
+the work drains. Retry or redelivery never consumes a claimed baseline unit and
+must use its separate partition. Only an action holding a token from the
+profile's steady/peak generated or synthetic schedule may claim baseline units;
+excess bursts are rejected before the ledger and cannot steal a later slot.
+Baseline claims that fit the pre-reserved schedule remain admissible through
+100% of that partition, including after its 90% threshold, so accepted and
+scheduled work can complete.
+
+At 80% of any non-critical partition, Veer alerts and reduces poll frequency.
+At 90%, it rejects queue-producing mutations that cannot claim a remaining
+baseline slot before persistence and backs off empty polls; already claimed
+work continues. Partition exhaustion fences new claims in that class, while
+settlement of already claimed receive/delete work and the critical reserve stay
+usable. A missing, stale, or non-durable meter fails closed with `503` before a
+new claim. Accepted work is never discarded, and the total meter reaching 100%
+fails qualification and blocks further admission.
 
 Encoded queue bodies contain only identifiers, generations, and integrity
 metadata and are rejected above 2 KiB; larger state is stored separately and
@@ -360,10 +378,23 @@ target result cannot substitute for the small profile:
     80%, 90%, and 100% paths with synthetic accounting. Verify connection
     admission, processed bytes, billable rule evaluations, and every hourly LCU
     dimension remain inside 1/5 LCUs.
-12. Feed deterministic incompressible logs at the ingestion limits and verify
+12. In an isolated registry fixture, exercise deterministic metric name-and-
+    dimension identities and create/delete churn below 90%, then restore signed
+    snapshots at 80%, 90%, and 100% of the 50/500 monthly caps. At each state,
+    attempt both admitted and unknown identities. Verify alerting, new-identity
+    freeze, rejection of unknown identities at the collector, continued emission
+    of admitted identities, and a stable rejected-metric counter without
+    emitting equivalent billable series.
+13. Feed deterministic incompressible logs at the ingestion limits and verify
     retained-byte accounting against two boundary-concentrated 31-day envelopes,
     14/30-day expiry, and the 14/135/1,343 GB storage caps.
-13. Report every SLI and bounded capacity/cost dimension for the entire run and
+14. Feed deterministic OTLP traces with fixed serialized sizes through 80%, 90%,
+    and 100% of the 10/100 GiB accepted-volume caps. Verify projected usage,
+    error-prioritized sampling, observable accepted and dropped bytes, fail-
+    closed span admission when the durable meter is missing or exhausted,
+    seven-day expiry, and inclusion of accepted trace bytes in the 81/806 GB
+    telemetry wire counter without sending equivalent billable traffic.
+15. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
 
@@ -598,7 +629,7 @@ service claims.
 | Database point-in-time recovery | 35 days in primary region | 7 days replicated in recovery region | Monthly restore verification is required. |
 | Platform logs | 14 days small; 30 days target | None by default | Security events belong in the audit stream, not ordinary logs. |
 | Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
-| High-resolution metrics | 15 days | 13 months for SLO rollups | Workspace, resource ID, request ID, and provider object ID are forbidden metric labels. |
+| High-resolution metrics | 15 days | 13 months for SLO rollups | Workspace, resource ID, request ID, and provider object ID are forbidden metric labels. A durable billing-month registry caps unique name-plus-complete-dimension identities at 50/500; identity churn never reclaims budget. |
 
 Platform log storage is priced without a compression assumption. Two complete
 31-day ingestion envelopes can fall inside the 14/30-day retention windows when
@@ -607,6 +638,20 @@ developer/small/target maxima to decimal GB, adding 25% for service framing, and
 rounding up produces hard retained-storage bounds of 14/135/1,343 GB. Expiry and
 the service's stored-byte metric must verify the bounds; compression is only
 unpriced headroom.
+
+The metric-identity registry is updated before a collector emits a new series.
+At 80% it alerts; at 90% it freezes new identities; at 100%, or when registry
+state is missing or stale, the collector rejects unknown identities while
+continuing already admitted series. Deletion, relabeling, or recreation cannot
+reclaim a billing-month identity. Rejections increment one pre-admitted
+low-cardinality counter and never fail business work.
+
+Trace admission counts the uncompressed serialized OTLP bytes accepted by the
+collector in a durable billing-month meter. At 80% it alerts and reduces
+non-error sampling; at 90% only error-prioritized sampling remains; at 100%, or
+when the meter is missing or stale, all new spans are dropped before billable
+ingestion. Accepted bytes, dropped bytes, drop reason, projected month-end
+volume, and seven-day expiry are observable without using new metric identities.
 
 Database changed bytes include user data, indexes, engine logs, compaction or
 vacuum, maintenance, and schema-migration amplification. A durable meter uses
