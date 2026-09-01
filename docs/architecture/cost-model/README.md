@@ -43,6 +43,9 @@ does not contact AWS or read environment credentials.
 | gp3 root storage per node | 30 GiB | 30 GiB |
 | Multi-AZ database proxy | db.t4g.medium | db.r7g.large |
 | Database gp3 storage | 50 GiB | 500 GiB |
+| Database changed blocks per 30 days | 50 GiB | 500 GiB |
+| Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
+| Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
 | Modeled queue requests with no free allowance | 5 million | 50 million |
 | Average ALB capacity | 1 LCU | 5 LCU |
 | NAT processed data | 100 GiB | 1,000 GiB |
@@ -52,9 +55,13 @@ does not contact AWS or read environment credentials.
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Stored archive ingress per 30-day month | 8 GB | 80 GB |
+| Archive objects written | 2,000 | 20,000 |
+| S3 tier-1 archive requests, primary plus recovery | 6,000 | 60,000 |
+| KMS archive requests, primary plus recovery | 8,000 | 80,000 |
 | Encrypted primary archive/object storage | 100 GiB | 1,000 GiB |
 | Encrypted recovery archive/object storage | 100 GiB | 1,000 GiB |
 | Secrets Manager API requests | 50,000 | 500,000 |
+| Recovery-region secret replicas | 10 | 100 |
 
 The database and queue rows are price proxies so issue #12 can compare
 alternatives on equal assumptions. They do not select the final implementation.
@@ -62,6 +69,12 @@ RDS Multi-AZ rates include the standby instance. Database storage uses the
 Multi-AZ gp3 rate. Recovery storage and transfer model one provisioned database
 copy plus one archive copy, each with one full-size equivalent of monthly
 changed data; incremental copies may cost less.
+
+Backup storage conservatively applies no included allocation. At one
+dataset-equivalent of changed blocks per 30 days, primary storage is
+`dataset * (1 + 35/30)` and recovery storage is `dataset * (1 + 7/30)`, rounded
+up to two decimals. Cross-region transfer retains the one-dataset monthly change
+assumption.
 
 The archive quantities hold 365 days at the ADR's measured 8 GB and 80 GB
 monthly ingress caps. Secret values use a version-aware, single-flight cache;
@@ -78,7 +91,7 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | EKS | [AmazonEKS 20260831092157](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEKS/20260831092157/us-east-1/index.json) | `ZYWMR684YSMFHWEU` at USD 0.10/cluster-hour; extended-support surcharge `M7977BSVFGDUJZ67` at USD 0.50/cluster-hour |
 | EC2 compute and root storage | [AmazonEC2 20260831181331](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/20260831181331/us-east-1/index.json) | `Y7X6HJY9G859NU23` at USD 0.1632/m7g.xlarge-hour; `JG3KUJMBRGHV3N8G` at USD 0.08/gp3 GB-month |
 | RDS compute | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `SCBZU9XX357QUA4D` at USD 0.129/db.t4g.medium Multi-AZ-hour; `QPKXCKEKNV5DW3QA` at USD 0.478/db.r7g.large Multi-AZ-hour |
-| RDS primary storage | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `J7S7KD4WFDNQWKNX` at USD 0.23/GB-month Multi-AZ gp3 |
+| RDS primary storage and backup | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `J7S7KD4WFDNQWKNX` at USD 0.23/GB-month Multi-AZ gp3; charged PostgreSQL backup `6W8ECRFVDATCER7J` at USD 0.095/GB-month |
 | RDS recovery storage | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-west-2/index.json) | `PAHDKG6EF4XSHYXC` at USD 0.095/GB-month |
 | Queue | [AWSQueueService 20250828200713](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSQueueService/20250828200713/us-east-1/index.json) | `8RN6B8U4MERHRXP3` at USD 0.40/million standard requests |
 | Load balancer | [AWSELB 20260831092255](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSELB/20260831092255/us-east-1/index.json) | `37CUWUT8GSNQEPUV` at USD 0.0225/hour; `P2XGEJ8N3KU52WA8` at USD 0.008/LCU-hour |
@@ -86,10 +99,10 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | Public IPv4 | [AmazonVPC 20260831092232](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/20260831092232/us-east-1/index.json) | `4GQUNXTFWVSGPUZK` at USD 0.005/address-hour |
 | Data transfer | [AWSDataTransfer 20260831121448](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/20260831121448/us-east-1/index.json) | `HQEH3ZWJVT46JHRG` at USD 0.09/GB internet egress; `PNUBVW4CPC8XA46W` at USD 0.01/directional-GB cross-AZ; `XGXYRYWGNXSSEUVT` at USD 0.02/GB cross-region |
 | Telemetry | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | `S8QGXX5R2BKKMDSJ` at USD 0.50/GB log ingest; `GF9Q9S5QWW3RHMGQ` at USD 0.50/GB OTEL ingest; `6K9ADYQAHV5KX9KZ` at USD 0.03/GB-month; `KG586CTNGQ4VRZKZ` at USD 0.30/metric-month |
-| Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month |
-| Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month |
-| Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month |
-| Managed secrets | [AWSSecretsManager 20260831092330](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-east-1/index.json) | `BJ3PQ9BYGU6P632F` at USD 0.40/secret-month; API request SKU `4MDZ5VNEJPMUTG9B` at USD 0.000005/request (USD 0.05/10,000) |
+| Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one request `E9YHNFENF4XQBZR6` at USD 0.000005/request |
+| Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month; tier-one request `D4PMUVH6F64HK2D6` at USD 0.000005/request |
+| Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month; request SKUs `MFEBZPX8NHM5FY7Z` and `SE9KXT6M6JTP7E4W` at USD 0.000003/request |
+| Managed secrets | [AWSSecretsManager 20260831092330 primary](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-east-1/index.json), [recovery](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-west-2/index.json) | Primary `BJ3PQ9BYGU6P632F` and recovery `DWJP9S4V3HP98UNC` at USD 0.40/secret-month; request SKUs `4MDZ5VNEJPMUTG9B` and `AEBQHWFEG8Q4Y7AT` at USD 0.000005/request |
 
 ## Updating the model
 

@@ -98,6 +98,12 @@ flowchart TB
 - Cross-region recovery copies are encrypted under a key in the recovery
   region. Restore never grants provider authority until credentials and policy
   are revalidated.
+- Third-party secrets that cannot be reissued are replicated by Secrets Manager
+  into `us-west-2` under the recovery-region key and a separately scoped
+  resource policy. Cloud credentials are never copied: restored workloads
+  obtain new short-lived credentials through workload identity. Recovery drills
+  verify secret version, policy, rotation, and reissuance without exporting
+  plaintext.
 
 ### Capacity profiles
 
@@ -117,17 +123,34 @@ an explicit quota response; they must not cause silent data loss.
 | Accepted desired-state mutations/minute, steady | 6 | 30 | 150 |
 | Accepted desired-state mutations/minute, 15-minute peak | 12 | 120 | 600 |
 | Concurrent non-terminal operations | 10 | 100 | 1,000 |
+| Pending reconciliation items | 100 | 10,000 | 100,000 |
+| Oldest ready-item admission threshold | 30 min | 15 min | 15 min |
 | Provider mutations/minute, aggregate | 10 | 60 | 600 |
 | Audit events/month | 100,000 | 2,000,000 | 20,000,000 |
 | Archived audit and evidence bytes/30-day month, GB | 0.4 | 8 | 80 |
+| Archive objects written/month | 100 | 2,000 | 20,000 |
+| Archive S3 tier-1 requests/month, both regions | 300 | 6,000 | 60,000 |
+| Archive KMS requests/month, both regions | 400 | 8,000 | 80,000 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
+| Database changed blocks/month, GiB | 5 | 50 | 500 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
 | Accepted trace data/month, GiB | 1 | 10 | 100 |
 | Secrets Manager API requests/month | 0 | 50,000 | 500,000 |
+| Recovery-region secret replicas | 0 | 10 | 100 |
 
 The developer profile is a single-machine functional environment. It has no
 availability commitment and must not be used to claim HA or disaster-recovery
 evidence.
+
+Pending depth counts ready, delayed, in-flight, retrying, and quarantined work.
+Five percent of queue capacity is reserved for cancellation, deletion, and
+security remediation. When an affected provider/workspace reaches 95% of its
+depth allocation or the oldest ready item reaches the age threshold, Veer
+rejects new non-reserved mutations before persistence with `429` and
+`Retry-After`; a system-wide threshold returns `503`. Reads and reserved work
+continue, accepted work is never discarded, and depth, age, rejection count,
+and projected drain time are observable. Qualification holds a provider fake
+in throttling until each threshold is crossed and verifies this response.
 
 ### Load qualification
 
@@ -143,10 +166,13 @@ deterministic test mode, followed by bounded live-provider smoke tests:
 5. Report every SLI below for the entire run and for each failure window.
 
 The request generator uses a checked-in seed and a fixed mix at both steady and
-peak rates: 80% reads (50% point resource reads, 20% operation/status reads,
+peak rates: 75% reads (45% point resource reads, 20% operation/status reads,
 and 10% paginated list reads), 10% successful desired-state mutations, 5%
-idempotent replays of a prior successful mutation, and 5% stale-version
-conflicts. Successful mutations are 20% creates, 60% updates, and 20% deletes,
+idempotent replays of a prior successful mutation, 5% stale-version conflicts,
+and 5% accepted cancellation requests. Cancellations target operations created
+earlier in the seeded run, split equally between an interruptible provider fake
+and a provider fake that must finish safely before reporting canceled.
+Successful mutations are 20% creates, 60% updates, and 20% deletes,
 selected across Workspace, Environment, Application, Component, Policy, and
 ProviderConnection resources at 5%, 15%, 20%, 40%, 15%, and 5% respectively.
 The steady mix therefore produces the stated 30 and 150 accepted mutations per
@@ -168,6 +194,9 @@ environments have measurement coverage but no SLO.
 | API availability | 99.9% per calendar month | A 30-second external synthetic probe performs authenticated read and no-op write transactions. All server errors, timeouts, and planned maintenance count as unavailable. |
 | API read latency | p95 <= 300 ms; p99 <= 750 ms | Server-side duration from accepted request to complete response under the profile's steady load, excluding client network time. |
 | API write acceptance latency | p95 <= 500 ms; p99 <= 1 s | Server-side duration through durable desired-state, outbox, and required audit commit. Provider execution is asynchronous and excluded. |
+| Invalid or unauthenticated rejection latency | p99 <= 250 ms | Server receipt of a complete, size-bounded request through the final documented response; no durable write is permitted. |
+| Unauthorized or quota rejection latency | p99 <= 500 ms | Server receipt of a complete, authenticated request through the final documented response, including policy and quota evaluation. |
+| Client-cancellation cleanup | p99 <= 100 ms | Time from server observation of request-context cancellation to handler termination, with no partial uncommitted state retained. |
 | Planning start delay | 99% <= 30 s; 99.9% <= 2 min | Time from successful write commit to a worker acquiring the current generation. |
 | Observation freshness | 95% <= 5 min; 99% <= 15 min | Age of the newest successful provider observation for every non-deleted resource that requires observation. Rate-limited and terminally failed resources remain in the denominator; a resource with no successful observation is aged from activation. |
 | Audit publication delay | 99.9% <= 60 s | Time from security-relevant commit to availability in the append-only audit query/export path. Missing required audit events are a correctness failure, not error-budget consumption. |
@@ -195,9 +224,12 @@ error budget:
 
 ### SLO exclusions
 
-- Invalid, unauthenticated, unauthorized, quota-rejected, and client-canceled
-  requests are excluded from availability only when Veer returns the documented
-  response within the latency objective.
+- Invalid and unauthenticated requests are excluded from availability only when
+  the documented response completes within 250 ms p99. Unauthorized and
+  quota-rejected requests require 500 ms p99. A client-canceled request is
+  excluded only when the handler terminates within 100 ms p99 after observing
+  cancellation and commits no partial state; a response is not required after
+  the client transport is gone.
 - Provider API unavailability, provider throttling, and provider-side operation
   duration are excluded from API availability and acceptance latency. They are
   not excluded from observation-freshness reporting and must be surfaced as
@@ -221,14 +253,15 @@ error budget:
 | Primary-region loss | 4 hr | 30 min | 2 min | Independent regional probes, encrypted cross-region restore, control-plane deployment, authority revalidation, and endpoint switch |
 
 RTO starts at failure onset, not incident declaration. Fault-injection evidence
-uses the injection timestamp; production evidence uses the earliest applicable
-provider event, deployment event, failed 30-second external probe, or failed
-internal integrity signal. Detection and declaration consume the same RTO.
-Two consecutive external failures and platform health signals must open an
-incident within the table's detection bound; supported logical-corruption
-classes are checked at least every 15 minutes. Missing the detection bound or
-the end-to-end RTO fails the objective. RPO is measured against the latest
-acknowledged write present after recovery. Issue
+uses the injection timestamp. Production evidence uses a provider or deployment
+event when it identifies onset; otherwise it conservatively starts at the last
+successful 30-second external probe or integrity check before the first failed
+signal. Detection and declaration consume the same RTO. External probing uses
+two consecutive failures; platform health signals must open an incident within
+the table's detection bound. Supported logical-corruption classes are checked
+at least every 15 minutes. Missing the detection bound or the end-to-end RTO
+fails the objective. RPO is measured against the latest acknowledged write
+present after recovery. Issue
 [#64](https://github.com/ArdurAI/veer/issues/64) must exercise these objectives.
 Until those exercises pass, they are design targets rather than demonstrated
 service claims.
@@ -246,6 +279,13 @@ service claims.
 | Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
 | High-resolution metrics | 15 days | 13 months for SLO rollups | Workspace, resource ID, request ID, and provider object ID are forbidden metric labels. |
 
+Database changed blocks and logs are bounded to one provisioned-dataset
+equivalent per 30 days. Conservatively applying no included backup allocation,
+the primary copy plus 35 days of changes requires 108.34 GB-month small and
+1,083.34 GB-month target. The recovery copy plus seven days of changes requires
+61.67 GB-month and 616.67 GB-month. The worksheet prices all four quantities;
+actual managed-service incremental backups may consume less.
+
 Canonical audit events are at most 16 KiB before archive compression and must
 average no more than 3,000 bytes at the full event count. That allocates at most
 6 GB/month small and 60 GB/month target to audit records, leaving 2 GB and 20 GB
@@ -256,6 +296,14 @@ the combined cap consumes at most 97.34 GB small and 973.34 GB target, fitting
 the worksheet's 100 GB and 1,000 GB primary and recovery copies. Audit records
 are never sampled or dropped: exceeding the bound rejects or backpressures new
 work and surfaces a capacity condition.
+
+The archive writer batches at least 1,000 audit records per object except for a
+final or five-minute flush, and caps compressed objects at 8 MiB. All archived
+data, including non-audit evidence, must remain within 2,000 objects/month small
+and 20,000 target. Each profile budgets three S3 tier-1 requests and four KMS
+requests per object across primary write, recovery replication, retries,
+manifest/list work, and validation. Exceeding the object or request budget uses
+the same non-dropping backpressure path as the byte cap.
 
 Issue [#14](https://github.com/ArdurAI/veer/issues/14) owns data classification
 and handling rules. It may reduce retention where privacy or secret exposure
@@ -271,8 +319,13 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 611.21 | USD 750.00 | USD 138.79 |
-| Target-scale qualification | USD 2,196.23 | USD 2,500.00 | USD 303.77 |
+| Small production | USD 626.66 | USD 750.00 | USD 123.34 |
+| Target-scale qualification | USD 2,350.77 | USD 2,500.00 | USD 149.23 |
+
+The target reference consumes 94.03% of its ceiling after conservatively
+pricing all retained backup data and request allowances. No additional
+recurring target resource may be added without reducing another input or
+approving a replacement ADR.
 
 These figures cover the Veer control plane only. They exclude taxes, support,
 discount programs, CI minutes, developer workstations, domain registration,
@@ -287,7 +340,7 @@ the exercise continues.
 
 - Every billable resource carries owner, environment, profile, and Veer
   component cost-allocation tags.
-- Budget alerts fire at 50%, 80%, and 100% of the selected profile ceiling.
+- Budget alerts fire at 50%, 80%, 90%, and 100% of the selected profile ceiling.
   Daily anomaly detection must identify an expected month-end run rate above
   the ceiling.
 - The Kubernetes version is upgraded before extended support. At current EKS
@@ -305,6 +358,11 @@ the exercise continues.
   cache and never once per provider operation. Cache invalidation follows
   rotation events and expiry; requests are capped at 50,000/month small and
   500,000/month target, with cache hits, misses, and projected usage observable.
+- Recovery-region secret replicas, archive tier-1 requests, and KMS envelope
+  operations are priced without free request allowances. Replication lag,
+  version mismatch, request volume, and restore-time access are alarmed.
+- Backup storage includes the current copy and bounded changed blocks for both
+  the 35-day primary and seven-day recovery retention windows.
 - High-cardinality identifiers are logs or traces, never metric dimensions.
 - Nodes stay private. S3 gateway endpoints avoid NAT processing for backup and
   artifact traffic; interface endpoints require a before/after cost comparison.
