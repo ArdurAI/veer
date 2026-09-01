@@ -1,0 +1,9 @@
+id	text
+1	Deny access unless an explicit policy allows it.
+2	Authenticate people and workloads with short-lived credentials.
+3	Keep provider credentials outside API resources, plans, logs, and events.
+4	Bind every provider operation to one workspace and environment.
+5	Separate request acceptance from provider execution and authorize both.
+6	Encrypt control-plane traffic and persistent state.
+7	Record immutable security-relevant audit events.
+8	Treat provider responses, manifests, webhooks, and user input as untrusted.

@@ -73,6 +73,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [Alpha implementation stack](docs/architecture/0002-alpha-implementation-stack.md)
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)
+- [Formal threat model and data classification](docs/security/threat-model.md)
 - [Roadmap](docs/roadmap.md)
 
 ## License

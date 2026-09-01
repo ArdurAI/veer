@@ -405,7 +405,7 @@ sanitize_external_environment() {
 }
 
 bootstrap() {
-  for host_command in awk curl date diff git grep head mktemp sed tar uname wc xargs; do
+  for host_command in awk curl date diff git grep head mktemp sed sort tar uname wc xargs; do
     require_command "$host_command"
   done
   validate_manifest
@@ -655,6 +655,8 @@ check_docs() {
   "$bin_dir/rumdl" check --disable MD013 README.md docs
   "$repo_root/docs/architecture/cost-model/verify.sh"
   "$repo_root/docs/architecture/stack-evaluation/verify.sh"
+  "$repo_root/docs/security/verify.sh"
+  "$repo_root/docs/security/verify_test.sh"
 }
 
 run_step() {
