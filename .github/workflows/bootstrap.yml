@@ -1,0 +1,38 @@
+name: Foundation bootstrap
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-bootstrap-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-bootstrap:
+    name: Clean checkout contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bootstrap pinned tools
+        shell: sh
+        run: ./hack/dev bootstrap
+
+      - name: Run the local fast gate
+        shell: sh
+        run: ./hack/dev check
+
+      - name: Verify a non-mutating check
+        shell: sh
+        run: git diff --exit-code

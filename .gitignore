@@ -10,6 +10,7 @@ artifacts/private/
 
 # Generated discovery context and scratch output.
 .context/
+.tools/
 tmp/
 dist/
 coverage/
