@@ -36,7 +36,7 @@ Bootstrap supports these host combinations:
 | Linux | `amd64`, `arm64` |
 
 The clean host must provide POSIX `sh`, `awk`, `curl`, `date`, `diff`, `git`,
-`grep`, `head`, `mktemp`, `sed`, `tar`, `uname`, `wc`, `xargs`, and either
+`grep`, `head`, `mktemp`, `sed`, `sort`, `tar`, `uname`, `wc`, `xargs`, and either
 `shasum` or `sha256sum`. These are base utilities on supported macOS and common
 Linux development or CI images. No package manager or administrator access is
 required.

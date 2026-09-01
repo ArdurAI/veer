@@ -76,6 +76,7 @@ alpha actors, assets, trust boundaries, abuse cases, credential blast radius,
 workspace isolation assumptions, handling rules, owners, residual risks, and
 unsupported deployment modes. Its machine-checked ledgers are
 [summary-invariants.tsv](summary-invariants.tsv),
+[security-objectives.tsv](security-objectives.tsv),
 [model-inventory.tsv](model-inventory.tsv), [threats.tsv](threats.tsv), and
 [data-classes.tsv](data-classes.tsv).
 

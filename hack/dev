@@ -405,7 +405,7 @@ sanitize_external_environment() {
 }
 
 bootstrap() {
-  for host_command in awk curl date diff git grep head mktemp sed tar uname wc xargs; do
+  for host_command in awk curl date diff git grep head mktemp sed sort tar uname wc xargs; do
     require_command "$host_command"
   done
   validate_manifest

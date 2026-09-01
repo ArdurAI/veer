@@ -1,0 +1,11 @@
+id	text
+1	Default-deny every actor, action, resource, workspace, and environment unless an explicit current policy permits it.
+2	Bind admission, plan, approval, queue work, execution, provider identity, observation, and audit to stable workspace, environment, resource, generation, and operation identifiers.
+3	Reauthorize before provider effects; a stale plan, revoked actor, expired credential, lost fence, or changed generation cannot execute.
+4	Never persist or emit raw user or provider credentials in resources, plans, queues, state, fixtures, logs, traces, metrics, errors, or support output.
+5	Treat every external request, desired-state document, queue delivery, provider response, webhook, restore input, and artifact as untrusted and size-bound.
+6	Commit accepted state, integrity evidence, required audit data, and outbox work atomically; duplicate delivery never becomes duplicate logical effect.
+7	Separate runtime, migration, read-only, audit, backup, integrity, administration, redrive, build, and release authority.
+8	Encrypt control-plane and provider traffic, persistent state, backups, and retained audit data; verify the peer and intended destination.
+9	Bound per-workspace consumption, global concurrency, provider calls, telemetry volume/cardinality, retained bytes, and external cost.
+10	Require retained test or operational evidence before changing a design requirement into an implemented security claim.

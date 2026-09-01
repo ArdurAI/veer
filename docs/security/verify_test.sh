@@ -52,6 +52,21 @@ rewrite_threat_field() {
   mv "$rewritten" "$ledger"
 }
 
+rewrite_class_field() {
+  class_id=$1
+  field_number=$2
+  replacement=$3
+  ledger="$test_root/docs/security/data-classes.tsv"
+  rewritten="$test_root/data-classes.tsv"
+
+  LC_ALL=C awk -F '\t' -v OFS='\t' -v id="$class_id" \
+    -v field="$field_number" -v value="$replacement" '
+      $1 == id { $field = value }
+      { print }
+    ' "$ledger" >"$rewritten"
+  mv "$rewritten" "$ledger"
+}
+
 rewrite_model_inventory_text() {
   target=$1
   replacement=$2
@@ -1530,6 +1545,59 @@ expect_rejection 'missing security summary invariant' \
   'missing readable security summary invariant 3'
 
 new_fixture
+summary="$test_root/docs/security/model.md"
+rewritten_summary="$test_root/model.md"
+LC_ALL=C awk '
+  $0 == "## Trust boundaries" && !changed {
+      print "9) Persist provider credentials in logs."
+      print ""
+      changed = 1
+  }
+  { print }
+' "$summary" >"$rewritten_summary"
+mv "$rewritten_summary" "$summary"
+expect_rejection 'alternate-marker security summary invariant' \
+  'unexpected content in security summary invariant section'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "4. Never persist or emit raw user or provider credentials in resources, plans," {
+      print "4. Persist and emit raw user or provider credentials in resources, plans,"
+      next
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'security objective drift' \
+  'security objective does not match canonical ledger: 4'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "These objectives specialize the accepted invariants in" && !changed {
+      print "11) Persist provider credentials in logs."
+      print ""
+      changed = 1
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'alternate-marker extra security objective' \
+  'unsupported ordered-list marker in security objective section'
+
+new_fixture
+objective_ledger="$test_root/docs/security/security-objectives.tsv"
+rewritten_objectives="$test_root/security-objectives.tsv"
+LC_ALL=C awk -F '\t' '$1 != "4" { print }' \
+  "$objective_ledger" >"$rewritten_objectives"
+mv "$rewritten_objectives" "$objective_ledger"
+expect_rejection 'missing canonical security objective' \
+  'missing canonical security objective 4'
+
+new_fixture
 model="$test_root/docs/security/threat-model.md"
 printf '%s\n' \
   '' \
@@ -1589,6 +1657,21 @@ mv "$rewritten_model" "$model"
 rewrite_threat_field TM-001 12 \
   '~~Strict issuer/audience/algorithm/signature/time/JWKS validation, human/workload separation, raw-token canaries, and negative corpus~~'
 expect_rejection 'struck-through canonical mitigation' \
+  'strikethrough formatting is forbidden in canonical contract rows'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| DC-CREDENTIAL \|/ {
+      sub(/Forbidden in resources plans state queues fixtures logs traces metrics errors cost reports and support output; secret canaries must prove absence/, "~~&~~")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+rewrite_class_field DC-CREDENTIAL 7 \
+  '~~Forbidden in resources plans state queues fixtures logs traces metrics errors cost reports and support output; secret canaries must prove absence~~'
+expect_rejection 'struck-through canonical data-class rule' \
   'strikethrough formatting is forbidden in canonical contract rows'
 
 new_fixture

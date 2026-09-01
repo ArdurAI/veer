@@ -10,6 +10,7 @@ threat_file="$script_dir/threats.tsv"
 class_file="$script_dir/data-classes.tsv"
 summary_file="$script_dir/model.md"
 summary_invariants_file="$script_dir/summary-invariants.tsv"
+security_objectives_file="$script_dir/security-objectives.tsv"
 issue_inventory_file="$script_dir/issue-inventory.txt"
 max_verified_file_bytes=262144
 max_verified_line_bytes=4096
@@ -422,6 +423,7 @@ for checked_file in \
   "$class_file" \
   "$summary_file" \
   "$summary_invariants_file" \
+  "$security_objectives_file" \
   "$issue_inventory_file"; do
   validate_regular_file "$checked_file"
 done
@@ -479,6 +481,14 @@ write_visible_markdown "$model_file" "$visible_model_file" ||
   fail 'formal threat model contains unsupported rendered markup'
 write_visible_markdown "$summary_file" "$visible_summary_file" ||
   fail 'security summary contains unsupported rendered markup'
+
+LC_ALL=C awk '
+  index($0, "~~") {
+      print FILENAME ":" FNR ": strikethrough formatting is forbidden in canonical contract rows" > "/dev/stderr"
+      failed = 1
+  }
+  END { exit failed ? 1 : 0 }
+' "$visible_model_file" || fail 'formal security contract contains strikethrough formatting'
 
 LC_ALL=C awk '
   function trim(value) {
@@ -658,6 +668,16 @@ require_markdown_link \
   "$model_file" \
   "$visible_model_file"
 require_markdown_link \
+  'security-objectives.tsv' \
+  'security-objectives.tsv' \
+  "$summary_file" \
+  "$visible_summary_file"
+require_markdown_link \
+  'security-objectives.tsv' \
+  'security-objectives.tsv' \
+  "$model_file" \
+  "$visible_model_file"
+require_markdown_link \
   'model-inventory.tsv' \
   'model-inventory.tsv' \
   "$model_file" \
@@ -734,6 +754,10 @@ in_invariants && /^[1-9][0-9]*[.] / {
         error("security summary invariant does not match canonical ledger: " invariant_id)
     }
     readable_rows++
+    next
+}
+in_invariants && $0 != "" {
+    error("unexpected content in security summary invariant section")
 }
 END {
     for (required_id = 1; required_id <= 8; required_id++) {
@@ -756,6 +780,157 @@ END {
 }
 ' "$summary_invariants_file" "$visible_summary_file" ||
   fail 'security summary invariant contract is invalid'
+
+LC_ALL=C awk -F '\t' '
+function error(message) {
+    print FILENAME ":" FNR ": " message > "/dev/stderr"
+    failed = 1
+}
+function has_inline_markup(value) {
+    return index(value, "*") || index(value, "_") || index(value, "~") ||
+        index(value, "[") || index(value, "]") || index(value, "`") ||
+        index(value, "\\")
+}
+function is_continuation(line, width, character_index) {
+    if (width < 1 || length(line) <= width) {
+        return 0
+    }
+    for (character_index = 1; character_index <= width; character_index++) {
+        if (substr(line, character_index, 1) != " ") {
+            return 0
+        }
+    }
+    return substr(line, width + 1) !~ /^[[:space:]]*$/
+}
+function flush_readable_objective() {
+    if (current_id == "") {
+        return
+    }
+    if (!(current_id in canonical)) {
+        error("unexpected readable security objective " current_id)
+    }
+    if (readable_seen[current_id]++) {
+        error("duplicate readable security objective " current_id)
+    }
+    if ((current_id in canonical) && current_text != canonical[current_id]) {
+        error("security objective does not match canonical ledger: " current_id)
+    }
+    readable_rows++
+    current_id = ""
+    current_text = ""
+    current_indent = 0
+}
+FNR == NR {
+    if (FNR == 1) {
+        if ($0 != "id\ttext") {
+            error("unexpected security objective header")
+        }
+        next
+    }
+    if (NF != 2) {
+        error("expected 2 tab-separated security objective fields")
+        next
+    }
+    if ($1 !~ /^([1-9]|10)$/) {
+        error("unexpected security objective ID " $1)
+    }
+    if (ledger_seen[$1]++) {
+        error("duplicate security objective ID " $1)
+    }
+    if ($2 == "" || $2 == "-" || has_inline_markup($2)) {
+        error("invalid canonical security objective " $1)
+    }
+    canonical[$1] = $2
+    ledger_rows++
+    next
+}
+$0 == "### Security objectives" {
+    flush_readable_objective()
+    objective_sections++
+    if (objective_sections > 1) {
+        error("duplicate readable security objective section")
+    }
+    in_objectives = 1
+    list_started = 0
+    list_done = 0
+    next
+}
+in_objectives && /^### / {
+    flush_readable_objective()
+    in_objectives = 0
+    next
+}
+!in_objectives { next }
+{
+    candidate = $0
+    for (leading_space = 0;
+         leading_space < 3 && substr(candidate, 1, 1) == " ";
+         leading_space++) {
+        candidate = substr(candidate, 2)
+    }
+}
+candidate ~ /^[1-9][0-9]*[)] / {
+    error("unsupported ordered-list marker in security objective section")
+    next
+}
+candidate ~ /^[1-9][0-9]*[.] / {
+    if (list_done || candidate != $0) {
+        error("unexpected list item in security objective section")
+        next
+    }
+    flush_readable_objective()
+    match(candidate, /^[1-9][0-9]*[.] /)
+    current_indent = RLENGTH
+    current_id = substr(candidate, 1, RLENGTH - 2)
+    current_text = substr(candidate, RLENGTH + 1)
+    list_started = 1
+    next
+}
+current_id != "" && is_continuation($0, current_indent) {
+    current_text = current_text " " substr($0, current_indent + 1)
+    next
+}
+$0 == "" {
+    if (current_id != "") {
+        flush_readable_objective()
+        list_done = 1
+    }
+    next
+}
+list_done {
+    if (candidate ~ /^([1-9][0-9]*[.)]|[-+*]) /) {
+        error("unexpected list item after canonical security objectives")
+    }
+    next
+}
+{
+    error("unexpected content in security objective list")
+}
+END {
+    flush_readable_objective()
+    for (required_id = 1; required_id <= 10; required_id++) {
+        if (!(required_id in ledger_seen)) {
+            error("missing canonical security objective " required_id)
+        }
+        if (!(required_id in readable_seen)) {
+            error("missing readable security objective " required_id)
+        }
+    }
+    if (objective_sections != 1) {
+        error("expected exactly one readable security objective section")
+    }
+    if (ledger_rows != 10) {
+        error("expected exactly ten canonical security objectives")
+    }
+    if (readable_rows != 10) {
+        error("expected exactly ten readable security objectives")
+    }
+    if (failed) {
+        exit 1
+    }
+}
+' "$security_objectives_file" "$visible_model_file" ||
+  fail 'security objective contract is invalid'
 
 LC_ALL=C awk -F '\t' -v issue_inventory="$issue_inventory_file" \
   -v model_inventory="$model_inventory_file" '
@@ -921,10 +1096,6 @@ function valid_evidence(value, values, count, citation_index) {
     return 1
 }
 function valid_readable_row(line, expected_columns, cells, count, cell_index, value) {
-    if (index(line, "~~")) {
-        error("strikethrough formatting is forbidden in canonical contract rows")
-        return 0
-    }
     count = split(line, cells, "|")
     if (count != expected_columns + 2 || trim(cells[1]) != "" || trim(cells[count]) != "") {
         return 0
