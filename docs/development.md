@@ -73,7 +73,7 @@ with an instruction to rerun bootstrap.
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
-| `./hack/dev docs` | Lint Markdown and verify checked-in architecture and cost evidence. |
+| `./hack/dev docs` | Lint Markdown and verify checked-in architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
 
 The aggregate command emits machine-readable lines such as
