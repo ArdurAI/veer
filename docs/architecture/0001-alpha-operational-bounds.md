@@ -128,12 +128,13 @@ an explicit quota response; they must not cause silent data loss.
 | Pending reconciliation items | 100 | 10,000 | 100,000 |
 | Oldest ready-item admission threshold | 30 min | 15 min | 15 min |
 | Durable queue 64 KiB request units/month | 0 | 20,000,000 | 100,000,000 |
+| Provider 16 KiB transfer units/minute, all attempts | 20 | 120 | 1,200 |
 | Provider mutations/minute, aggregate | 10 | 60 | 600 |
 | Audit events/month | 100,000 | 4,000,000 | 20,000,000 |
 | Archived audit and evidence bytes/30-day month, GB | 0.4 | 16 | 80 |
-| Archive objects written/month | 2,000 | 12,000 | 80,000 |
-| Archive S3 tier-1 requests/month, both regions | 6,000 | 36,000 | 240,000 |
-| Archive KMS requests/month, both regions | 8,000 | 48,000 | 320,000 |
+| Archive objects written/month | 2,000 | 22,000 | 110,000 |
+| Archive S3 tier-1 requests/month, both regions | 6,000 | 66,000 | 330,000 |
+| Archive KMS requests/month, both regions | 8,000 | 88,000 | 440,000 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Database changed blocks/month, GiB | 5 | 50 | 500 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
@@ -163,6 +164,15 @@ per accepted action consumes 10,347,750 and 51,738,750 queue units before
 retries or empty long polls. The rounded 20 million and 100 million limits leave
 the remaining units for those paths; batching does not reduce billable message
 units.
+
+Every provider request, response page, observation, retry, and error response
+consumes `ceil(combined request and response wire bytes / 16 KiB)` transfer
+units, including protocol and TLS overhead; zero-byte responses still consume
+one. The 120/1,200 per-minute limits include all attempts, while the 60/600
+mutation limits are a subset. At a continuous monthly maximum, transfer volume
+is 86.12 GB small and 861.15 GB target, fitting the worksheet's rounded 100 GB
+and 1,000 GB NAT-processing quantities. Adapters must paginate, stream, or
+reject before crossing the selected profile's unit budget.
 
 ### Load qualification
 
@@ -306,7 +316,7 @@ error budget:
 | Single Availability Zone loss | 15 min | 0 for acknowledged state | 2 min | Multi-AZ database and queue failover plus endpoint health routing |
 | Bad application release | 30 min | 0 for committed data | 5 min | Version rollback with backward-compatible persisted formats |
 | Logical database corruption or operator error | 2 hr | 5 min | 15 min | Relationship and audit-integrity checks plus in-region point-in-time restore into an isolated validation target before cutover |
-| Primary-region loss | 4 hr | 30 min | 2 min | Independent regional probes, freshness alarms, encrypted cross-region restore, control-plane deployment, authority revalidation, and endpoint switch |
+| Primary-region loss | 4 hr | 30 min | 4 min | Independent regional probes, freshness alarms, encrypted cross-region restore, control-plane deployment, authority revalidation, and endpoint switch |
 
 RTO starts at failure onset, not incident declaration. Fault-injection evidence
 uses the injection timestamp. Production evidence uses a provider or deployment
@@ -314,9 +324,12 @@ event when it identifies onset; otherwise it conservatively starts at the last
 successful one-minute external probe or integrity check before the first failed
 signal. Detection and declaration consume the same RTO. The external probe uses
 two consecutive failures; platform health signals must open an incident within
-the table's detection bound. Supported logical-corruption classes are checked
-at least every 15 minutes. Missing the detection bound or the end-to-end RTO
-fails the objective.
+the table's detection bound. A regional failure immediately after a successful
+probe yields failed results no later than 80 and 140 seconds after onset (one-
+minute cadence plus the 20-second timeout); alarm evaluation and paging have a
+further 60-second limit, keeping detection below four minutes. Supported
+logical-corruption classes are checked at least every 15 minutes. Missing the
+detection bound or the end-to-end RTO fails the objective.
 
 Recovery freshness compares a primary commit watermark with the newest common
 checkpoint whose database backup, outbox, audit manifest, and required objects
@@ -325,13 +338,18 @@ warns operators; at 25 minutes it pages as critical. Reaching 30 minutes fails
 qualification, suspends the production regional-RPO claim, and blocks planned
 cutover. An emergency restore may still proceed but records an RPO breach.
 
-For every recovery test, define the cutoff as `failure onset - stated RPO`.
+For an RPO greater than zero, define the recovery cutoff as
+`failure onset - stated RPO`. For RPO zero, the expected set instead includes
+every write acknowledged before onset and throughout the failure window through
+recovery completion or an explicitly recorded quiescence point. If the durable
+path cannot preserve that set, Veer must fence write admission before sending
+another acknowledgement.
+
 The qualification harness keeps an ordered, hashed ledger of acknowledged
-state, outbox, and required audit records. Every ledger entry at or before the
-cutoff must exist after restore with matching content and referential-integrity
-checks; RPO zero uses failure onset as the cutoff. A recent recovered record
-cannot hide an older omission, and any missing or mismatched prefix entry fails
-the recovery objective. Issue
+state, outbox, and required audit records. Every ledger entry in the expected
+set must exist after restore with matching content and referential-integrity
+checks. A recent recovered record cannot hide an older omission, and any
+missing or mismatched entry fails the recovery objective. Issue
 [#64](https://github.com/ArdurAI/veer/issues/64) must exercise these objectives.
 Until those exercises pass, they are design targets rather than demonstrated
 service claims.
@@ -375,21 +393,31 @@ worksheet's 200 GB and 1,000 GB primary and recovery copies. Audit records are
 never sampled or dropped: exceeding the bound rejects or backpressures new work
 and surfaces a capacity condition.
 
+Each successful mutation adds one compact plan, authorization-decision, and
+operation record; each accepted operation cancellation adds one authorization
+decision and one operation transition. That is 40% of the fixed monthly request
+schedule, or 9,198,000 small and 45,990,000 target non-audit records. Their
+canonical archive representation is capped at 4 KiB and must average at most
+400 bytes, consuming at most 3.68 GB and 18.40 GB inside the non-audit byte
+allocations. Larger evidence is chunked and every chunk counts as another
+record.
+
 The archive writer fills an object until it contains 1,000 records, the next
 record would exceed the 8 MiB compressed-object limit, or the oldest buffered
 record reaches 30 minutes; one final accounting-window flush is also allowed.
 Process shutdown transfers the durable buffer and does not create an extra
-partial object. The timer is shared across record types rather than creating
-one partial object per stream.
-Audit objects have a 10,000/month small and 60,000/month target sublimit;
-non-audit evidence has 2,000 and 20,000, for total limits of 12,000 and 80,000.
-Even ignoring the stricter 3,000-byte average, packing every audit record at the
-16 KiB maximum requires at most 7,813 and 39,063 objects; no more than 1,440
-timer flushes occur in a 30-day month, so full in-profile audit volume fits its
-sublimit. Each profile budgets three S3 tier-1 requests and four KMS requests
-per object across primary write, recovery replication, retries, manifest/list
-work, and validation. Exceeding an object, request, or record-type sublimit uses
-the same non-dropping backpressure path as the byte cap.
+partial object. The timer path, including the final accounting-window flush,
+emits no more than 1,440 partial objects per stream in a 30-day window.
+
+At 1,000 records per object plus no more than 1,440 timer flushes per stream,
+the fixed non-audit workload requires at most 10,638 and 47,430 objects. Even
+ignoring the stricter 3,000-byte average, packing every audit record at the 16
+KiB maximum plus its timer flushes requires at most 9,253 and 40,503 objects.
+The combined worst cases are therefore 19,891 and 87,933, fitting total caps of
+22,000 and 110,000. Each profile budgets three S3 tier-1 requests and four KMS
+requests per object across primary write, recovery replication, retries,
+manifest/list work, and validation. Exceeding the object or request cap uses the
+same non-dropping backpressure path as the byte cap.
 
 Issue [#14](https://github.com/ArdurAI/veer/issues/14) owns data classification
 and handling rules. It may reduce retention where privacy or secret exposure
@@ -405,10 +433,10 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 712.41 | USD 750.00 | USD 37.59 |
-| Target-scale qualification | USD 2,463.27 | USD 2,500.00 | USD 36.73 |
+| Small production | USD 712.68 | USD 750.00 | USD 37.32 |
+| Target-scale qualification | USD 2,464.08 | USD 2,500.00 | USD 35.92 |
 
-The target reference consumes 98.53% of its ceiling after conservatively
+The target reference consumes 98.56% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional
 recurring target resource may be added without reducing another input or

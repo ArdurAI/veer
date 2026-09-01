@@ -48,16 +48,17 @@ does not contact AWS or read environment credentials.
 | Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
 | Modeled 64 KiB queue request units with no free allowance | 20 million | 100 million |
 | Average ALB capacity | 1 LCU | 5 LCU |
-| NAT processed data | 100 GiB | 1,000 GiB |
+| Derived provider traffic through NAT | 86.12 GB | 861.15 GB |
+| Billable NAT processed data | 100 GB | 1,000 GB |
 | Derived response egress | 135.11 GB | 675.56 GB |
 | Billable internet egress with no free allowance | 150 GB | 800 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Stored archive ingress per 30-day month | 16 GB | 80 GB |
-| Archive objects written | 12,000 | 80,000 |
-| S3 tier-1 archive requests, primary plus recovery | 36,000 | 240,000 |
-| KMS archive requests, primary plus recovery | 48,000 | 320,000 |
+| Archive objects written | 22,000 | 110,000 |
+| S3 tier-1 archive requests, primary plus recovery | 66,000 | 330,000 |
+| KMS archive requests, primary plus recovery | 88,000 | 440,000 |
 | Encrypted primary archive/object storage | 200 GiB | 1,000 GiB |
 | Encrypted recovery archive/object storage | 200 GiB | 1,000 GiB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
@@ -79,6 +80,11 @@ monthly request schedule. One send, receive, and delete consumes 10.35 million
 units small and 51.74 million target; the rounded limits reserve the balance for
 retries, empty long polls, and recovery traffic.
 
+Provider traffic is metered in 16 KiB units across requests, responses,
+pagination, observations, and retries. The continuous 120/1,200 unit-per-minute
+limits derive 86.12/861.15 GB per 730-hour month; the worksheet rounds those
+quantities up and does not subtract free allowances.
+
 Backup storage conservatively applies no included allocation. At one
 dataset-equivalent of changed blocks per 30 days, primary storage is
 `dataset * (1 + 35/30)` and recovery storage is `dataset * (1 + 7/30)`, rounded
@@ -86,9 +92,10 @@ up to two decimals. Cross-region transfer retains the one-dataset monthly change
 assumption.
 
 The archive quantities hold 365 days at the ADR's measured 16 GB and 80 GB
-monthly ingress caps. Secret values use a version-aware, single-flight cache;
-the request rows are hard monthly budgets rather than an assumption that every
-provider operation reads Secrets Manager.
+monthly ingress caps. Audit and compact non-audit record multiplicity derives
+the object/request quantities. Secret values use a version-aware, single-flight
+cache; the request rows are hard monthly budgets rather than an assumption that
+every provider operation reads Secrets Manager.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
