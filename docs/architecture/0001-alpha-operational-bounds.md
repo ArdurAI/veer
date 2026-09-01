@@ -1,8 +1,7 @@
 # ADR 0001: Alpha operational bounds
 
-- Status: accepted
+- Status: proposed
 - Date: 2026-08-31
-- Accepted: 2026-09-01
 - Decision owners: ArdurAI maintainers
 - Scope: first operable alpha
 - Tracking issue: [#11](https://github.com/ArdurAI/veer/issues/11)
@@ -170,14 +169,16 @@ an explicit quota response; they must not cause silent data loss.
 | Normal archive cross-region transfer/month, GB | 0 | 16 | 80 |
 | Retained archive objects/region, maximum | local | 481,000 | 2,119,000 |
 | Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,331,000 each |
-| Full-reseed KMS decrypt plus encrypt requests | 0 | 1,060,000 | 4,662,000 |
+| Full-reseed KMS source-decrypt, destination-encrypt, and validation data-key/decrypt requests | 0 | 2,120,000 | 9,324,000 |
 | Full-reseed cross-region transfer, GB | 0 | 229 | 1,144 |
 | Full-reseed S3 Batch Operations jobs | 0 | 1 | 1 |
 | Full-reseed S3 Batch object operations | 0 | 530,000 | 2,331,000 |
 | Full-reseed generated-manifest source objects scanned | 0 | 481,000 | 2,119,000 |
 | Full-reseed transient manifest objects | 0 | 1 | 1 |
 | Full-reseed transient manifest storage, GB-month | 0 | 0.26 | 0.26 |
-| Full-reseed destination HEAD validation attempts | 0 | 530,000 | 2,331,000 |
+| Full-reseed candidate overlap storage, GB-month | 0 | 7.39 | 36.91 |
+| Full-reseed destination GET validation attempts | 0 | 530,000 | 2,331,000 |
+| Full-reseed cleanup ListObjectVersions requests | 0 | 530,001 | 2,331,001 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Database changed blocks/rolling 7 days, GiB | 1.17 | 11.67 | 116.67 |
 | Database changed blocks/rolling 30 days, GiB | 5 | 50 | 500 |
@@ -190,6 +191,8 @@ an explicit quota response; they must not cause silent data loss.
 | Secrets Manager API requests/month, recovery region | 0 | 5,000 | 50,000 |
 | Recovery-region secret replicas | 0 | 10 | 100 |
 | Recovery-region synthetic runs/month | 0 | 44,640 | 44,640 |
+| Retained recovery-probe identity claims, maximum | 0 | 46,080 | 46,080 |
+| Encoded recovery-probe identity claim, maximum | 0 | 256 bytes | 256 bytes |
 
 The developer profile is a single-machine functional environment. Its request
 and provider rates are short smoke-test ceilings, not a full-month sustained-
@@ -368,21 +371,43 @@ target result cannot substitute for the small profile:
    synthetic and acknowledged-record completeness oracle. End-to-end recovery
    must finish within four hours and the recovered cutoff must be no older than
    30 minutes.
-8. In an isolated archive-recovery exercise, remove the preloaded recovery
-   prefix and rebuild it with one S3 Batch Replication job against the existing
-   CRR rule. Use one S3-generated manifest in a source-region recovery-control
-   prefix, disable the completion report, and expire the manifest within 24
-   hours. Traverse and validate every embedded Veer manifest and data object,
-   including version, encoded size, signed-digest metadata, byte, and object
-   cardinality; compare S3 job and replication status with the relational
-   checkpoint; inject bounded GET, PUT, HEAD, and KMS retries; and verify the
-   Batch job, object-operation, manifest-scan, source-read, destination-write,
-   destination-validation, KMS, and transfer counters. Drive each
-   counter through 80%, 90%, and 100% with synthetic accounting, verify that
-   another attempt is stopped at exhaustion, and prove that a failed partial
-   prefix and its transient manifest are removed before retry. Public CI uses a
-   deterministic S3 service fake. An opt-in live fixture uses dedicated buckets,
-   exact-prefix IAM, an exercise cost cap, and verified teardown.
+8. In an isolated archive-recovery exercise, keep the active recovery bucket,
+   replication rule, and newest verified checkpoint restorable. For the attempt,
+   create a fresh versioned candidate bucket and temporary exact-archive-prefix
+   replication rule, then rebuild the candidate with one S3 Batch Replication
+   job. Use one S3-generated manifest in a source-region recovery-control prefix,
+   disable the completion report, and expire the manifest within 24 hours. Live
+   CRR to the active generation continues while the temporary rule tails new
+   versions into the candidate inside the reseed retry reserve. Fetch every exact
+   destination object version with checksum mode enabled; verify the returned S3
+   checksum; recompute SHA-256 over the exact serialized body; authenticate its
+   embedded Veer manifest header, footer, signature, digest, sequence, and size;
+   and compare byte/object cardinality, S3 job and replication status, signed
+   stream root, and relational checkpoint. Inject bounded GET, PUT, and KMS
+   retries, and verify the Batch job, object-operation, manifest-scan,
+   source-read, destination-write, destination-validation, KMS, transfer,
+   candidate-storage, and cleanup-list counters. Drive each counter through 80%,
+   90%, and 100% with synthetic accounting and verify that exhaustion stops the
+   attempt before another billable call. Promote the candidate checkpoint
+   atomically only after every object and the live tail pass, while both
+   replication rules remain live.
+   Sign the candidate rule and grants as the new baseline, switch the checkpoint,
+   then remove the old rule, grants, versions, and bucket before the 24-hour
+   overlap expires. At no point may the active restorable checkpoint become
+   unavailable or older than 30 minutes.
+
+   Abort an incomplete attempt after 24 hours or budget exhaustion. On failure,
+   enumerate and delete every exact candidate object version and delete marker,
+   verify
+   [`ListObjectVersions`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectVersions.html)
+   is empty, remove the temporary rule and bucket,
+   remove its temporary replication-role grants, restore the signed baseline
+   replication configuration and role policy, and expire the transient manifest.
+   Lifecycle expiry is defense in depth, not retry readiness. A retry always
+   receives a new candidate bucket and never reuses a partially cleaned
+   generation. Public CI uses a deterministic S3 service fake. An opt-in live
+   fixture uses dedicated buckets, exact-prefix IAM, an exercise cost cap, and
+   verified teardown.
 9. In an isolated accounting test, drive each cross-AZ byte partition through
    its 80%, 90%, and 100% thresholds and verify alert, admission-control, and
    qualification-failure behavior without sending equivalent billable traffic.
@@ -424,7 +449,26 @@ target result cannot substitute for the small profile:
     observable accepted and dropped bytes, fail-closed span admission, seven-day
     expiry, and inclusion of accepted trace bytes in the 81/806 GB telemetry
     wire counter without sending equivalent billable traffic.
-15. Report every SLI and bounded capacity/cost dimension for the entire run and
+15. In isolated primary- and recovery-region secret fixtures, race two/six cold
+   nodes and rotation/invalidation work against the final request allowance.
+   Drive the durable request ledgers through 80%, 90%, and 100%; verify the 90/10
+   general/critical partition, single-flight behavior, confirmed pre-dispatch
+   release, uncertain-outcome retention, cache expiry, and fail-closed behavior
+   for missing or stale ledger state without issuing equivalent billable calls.
+16. Exercise the pinned recovery probe for a complete bounded window. Verify
+   each admitted identity produces at most one full probe, one encrypted
+   artifact-object version, and one non-retried `PutObject` attempt. Inject a
+   concurrent duplicate and confirm its idempotent write returns the original
+   receipt before the read, metric, or artifact path. Pre-create the deterministic
+   artifact key and verify the conditional PUT creates no new version. Inject an
+   identity older than 60 seconds and verify rejection before any API or artifact
+   call. Count
+   even a short duplicate invocation against the Lambda ledgers and fail the
+   profile if invocation or duration quantities exceed the worksheet. Drive
+   schedule, invocation, duration, log-byte, artifact-byte, and artifact-request
+   ledgers through 80%, 90%, and 100%, and verify no new schedule slot is enabled
+   at exhaustion. A runtime or schedule change must repeat this gate.
+17. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
 
@@ -522,17 +566,42 @@ At 99.9% monthly API availability, the maximum unavailable time in a 744-hour
 month is 44 minutes 38 seconds. Error-budget reporting uses raw probe intervals,
 not rounded incident duration.
 
-The production synthetic is a CloudWatch Synthetics API canary in `us-west-2`,
-outside the primary failure boundary, and runs 44,640 times per 744-hour month.
-Each run is limited to 1 GB of Lambda memory and 20 seconds, 0.00015 GB of logs,
-and 0.001 GB of encrypted S3 artifacts retained for 30 days. It publishes only
-the three default metrics and one alarm. The least-privilege probe principal
-can access only a dedicated fixture, obtains short-lived credentials through
-workload identity, and never records tokens, response bodies, or screenshots.
-Its read and write calls count against the selected profile's API, load
-balancer, and gross internet-egress budgets.
-The worksheet prices runs, Lambda requests and duration, logs, artifacts,
-metrics, and the alarm without free allowances.
+The production synthetic is a purpose-built Lambda probe in `us-west-2`, outside
+the primary failure boundary. EventBridge Scheduler emits one immutable
+schedule identity per minute with flexible windows disabled and target retries
+set to zero under the
+[`RetryPolicy` API](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_RetryPolicy.html),
+with `MaximumEventAgeInSeconds` set to 60, for 44,640 intended dispatches in a
+744-hour month; Lambda asynchronous retries are also zero under
+[`PutFunctionEventInvokeConfig`](https://docs.aws.amazon.com/lambda/latest/api/API_PutFunctionEventInvokeConfig.html).
+At function entry, the probe rejects a scheduled timestamp older than 60 seconds,
+then performs its authenticated idempotent no-op write with the schedule identity
+as the idempotency key. Probe identity claims are retained for the complete fixed
+31-day accounting window plus 24 hours. Only the newly committed claim continues
+to the read and result path; a replay returns the original receipt and exits.
+At most 46,080 claims of 256 encoded bytes coexist across a window boundary,
+using 11,796,480 bytes inside the existing relational and qualification-preload
+allocations. Each full run is limited to one Lambda invocation with 1 GB of
+memory and 20 seconds, 0.00015 GB of
+Embedded Metric Format logs, and one non-retried conditional `PutObject` attempt
+with `If-None-Match: *` to its deterministic key in a versioned result bucket.
+The object contains at most 0.001 GB of encrypted result evidence retained for
+30 days. No alternate artifact path exists, so duplicate delivery cannot
+multiply artifact writes.
+The probe emits only `SuccessPercent`, `Duration`, and `Failed` from the bounded
+log event and has one missing-or-failed-run alarm.
+
+The Scheduler role may invoke only the probe function; the probe role can access
+only a dedicated fixture, emit its exact log group, and write its deterministic
+schedule-identity key under the result prefix; it has no result-bucket delete or
+list permission. It obtains short-lived
+credentials through workload identity and never records tokens or response
+bodies. Artifact SDK retries are disabled: a failed write makes the interval
+unavailable rather than creating another billable attempt. Its read and write
+calls count against the selected profile's API, load-balancer, and gross
+internet-egress budgets. The worksheet prices Scheduler dispatches, Lambda
+requests and duration, logs, one artifact write per admitted run, metrics, and
+the alarm without free allowances.
 
 ### Correctness invariants
 
@@ -656,6 +725,7 @@ service claims.
 | Operations, plans, and policy decisions | 90 days | 365 days in encrypted object storage | Secret-bearing inputs are prohibited. |
 | Security audit events | 90 days queryable | 365 days immutable and encrypted | Shorter retention requires a reviewed security decision. |
 | Idempotency records | 24 hours minimum | None | A caller cannot rely on replay safety after expiry. |
+| Recovery-probe identity claims | Fixed 31-day accounting window plus 24 hours | None | At most 46,080 claims of 256 encoded bytes prevent cross-window replay. |
 | Database point-in-time recovery | 35 days in primary region | 7 days replicated in recovery region | Monthly restore verification is required. |
 | Platform logs | 14 days small; 30 days target | None by default | Security events belong in the audit stream, not ordinary logs. |
 | Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
@@ -749,7 +819,11 @@ Canonical audit events are at most 16 KiB before archive compression and must
 average no more than 1,000 bytes at the full event count. This allocates at most
 9 GB/month small and 52 GB/month target to audit records. After the compact
 non-audit records below, 2.98 GB and 8.04 GB remain inside the combined 16 GB and
-80 GB archive-ingress caps for recovery evidence and framing. The archive
+80 GB archive-ingress caps for framing and unused byte headroom; they do not
+authorize another record stream. Per-object recovery evidence is the embedded
+manifest already counted as framing. Recovery and qualification summaries are
+required system audit events and consume the remaining 857,221/1,359,941-event
+allowance above. The archive
 writer measures actual stored object bytes, including framing and encryption
 overhead. A 365-day retention interval can intersect 13 fixed 31-day accounting
 windows when writes are concentrated at their boundaries. Pricing all 13 full
@@ -770,8 +844,9 @@ plan, authorization decision, and operation record. The complete workload
 therefore produces 10,056,268 small and 49,897,468 target non-audit records.
 Their canonical archive representation is capped at 4 KiB and must average at
 most 400 bytes, consuming at most 4.03 GB and 19.96 GB inside the non-audit byte
-allocations. Larger evidence is chunked and every chunk counts as another
-record.
+allocations. There is zero allowance for additional compact non-audit records.
+Oversized compact records or evidence that would require another chunk are
+rejected or backpressured and require a replacement worksheet before admission.
 
 The archive writer fills an object until it contains 1,000 records, the next
 record would exceed the 8 MiB compressed-object limit, or the oldest buffered
@@ -787,9 +862,15 @@ and fails qualification before the 30-minute hard bound.
 
 Every Veer archive data object carries its own signed manifest header and footer
 inside the already reserved framing. Its digest, sequence, encoded size, and
-signature are duplicated in bounded S3 user metadata so a destination
-[`HEAD` without checksum mode](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html)
-can authenticate the object identity without a KMS decrypt. The relational
+signature are duplicated in bounded S3 user metadata for indexing, but metadata
+is never accepted as proof of body integrity. The archive writer supplies an S3
+checksum supported by its selected single- or multipart-upload path, verifies
+the returned checksum metadata, and rejects a commit if S3 does not persist it.
+Recovery validation performs an exact-version
+[`GetObject` with checksum mode enabled](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html),
+verifies the returned value according to S3's checksum type, recomputes Veer's
+full-body SHA-256 over the returned serialized bytes, and authenticates the
+embedded signature and digest. The relational
 archive checkpoint stores the prefix, sequence, object
 digest, and signed stream root atomically with archive progress. Veer creates
 exactly zero standalone persistent manifest objects, so the monthly and retained
@@ -815,39 +896,66 @@ cap. Its 30,000 request and 40,000 envelope-operation counters preserve the same
 three/four-per-object qualification contract without creating cloud charges.
 
 Thirteen retained envelopes contain at most 481,000/2,119,000 objects per
-region. Live CRR handles every new version; a full reseed uses one S3 Batch
-Replication job with a service-generated object list filtered to the archive
-prefix and the existing CRR rule. The generated list is exactly one transient
-manifest object in a source-region recovery-control prefix, is excluded from
-the job's own source filter, is capped at 8 GiB, and expires within 24 hours.
-Completion reporting is disabled; Veer records the job identifier and terminal
-status in relational audit state and independently authenticates every
-destination version, size, and signed digest through `HEAD` without checksum
-mode.
+region. Live CRR handles every new version into the active recovery generation.
+A full reseed leaves that generation and its verified checkpoint intact while
+one S3 Batch Replication job copies retained versions into a fresh versioned
+candidate bucket through a temporary exact-prefix replication rule. The
+generated list is exactly one transient manifest object in a source-region
+recovery-control prefix, is excluded from the job's own source filter, is capped
+at 8 GiB, and expires within 24 hours. Completion reporting is disabled; Veer
+records the job identifier and terminal status in relational audit state and
+independently authenticates every destination body as described above.
 
-The reseed reserves at least 10% retry headroom, rounding the small allowance
-up: 530,000/2,331,000 S3 Batch object operations, source GETs, destination PUTs,
-and destination validation HEADs; 1,060,000/4,662,000 KMS operations; and
-229/1,144 GB cross-region transfer. Manifest generation scans
+The reseed reserves at least 10% headroom shared by bounded retries and the live
+candidate tail, rounding the small allowance up: 530,000/2,331,000 S3 Batch
+object operations, source GETs, destination PUTs, and destination validation
+GETs; 2,120,000/9,324,000 KMS operations for source decrypt, destination
+encrypt, and validation `GenerateDataKey` plus decrypt; and 229/1,144 GB
+cross-region transfer.
+Same-region validation reads at most the same 229/1,144 GB through an S3 gateway
+endpoint, so they add neither cross-region transfer nor NAT processing.
+Manifest generation scans
 481,000/2,119,000 source objects, one Batch Operations job is allowed, and its
 8 GiB 24-hour artifact rounds up to 0.26 GB-month plus one tier-one write. The
-source GET and destination HEAD use pinned Tier-2 rates; the destination PUT
-uses Tier-1. The primary copy remains authoritative while an empty recovery
-prefix is rebuilt; failed partial prefixes and the transient manifest are
-lifecycle-deleted, so the storage model never assumes two retained recovery
-copies. Exhausting a job, object-operation, manifest-scan, request, KMS, or byte
-allowance stops the reseed before another attempt. A second job requires
-operator approval inside the exercise's transient-cost cap. Normal archive and
-reseed caps use the same non-dropping backpressure path as the byte cap.
+source and destination GETs use pinned Tier-2 rates; the destination PUT uses
+Tier-1. Candidate overlap is capped at the full retry-inclusive transfer
+envelope for 24 hours, or 7.39/36.91 GB-month. The active copy remains
+authoritative until atomic promotion. Failed candidate versions and delete
+markers are enumerated and removed, `ListObjectVersions` must return empty, and
+the candidate bucket is deleted; asynchronous lifecycle cleanup is never a
+precondition for retry. The LIST-request allowance is one request per possible
+retry-inclusive version plus one final empty response—530,001/2,331,001—so cost
+correctness does not depend on full 1,000-entry pages. DELETE requests are free
+under the dated S3 price contract. Exhausting a job, object-operation,
+manifest-scan, request, KMS, byte, storage, or 24-hour allowance stops the
+attempt before the next billable action. A second job requires operator approval
+inside the exercise's transient-cost cap and a new candidate bucket. Normal
+archive and reseed caps use the same non-dropping backpressure path as the byte
+cap.
 
-The live-replication and Batch Operations roles are distinct and trusted only
-by `s3.amazonaws.com` and `batchoperations.s3.amazonaws.com`, respectively.
-The live role receives only source version-for-replication reads, destination
-replication actions, and KMS decrypt/encrypt on the exact bucket prefixes and
-keys. The Batch role receives `s3:InitiateReplication` on source archive
-versions, replication-configuration reads, inventory configuration, and writes
-only to the recovery-control manifest prefix. The job submitter can create only
-tagged recovery jobs and pass only the Batch role. Source and destination
+S3 replication configuration exposes one bucket-level
+[`Role`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ReplicationConfiguration.html)
+for all rules. That role is trusted only by `s3.amazonaws.com` and normally has
+only source version-for-replication reads, active-destination replication
+actions, and KMS decrypt/encrypt on the exact archive prefixes and keys. Before
+the temporary candidate rule is enabled, declarative infrastructure adds only
+the candidate bucket/prefix and candidate-key statements. Abort removes those
+changes and verifies the prior signed baseline is restored. Promotion signs the
+candidate rule and statements as the new baseline before removing the former
+active rule and grants; the final configuration and policy must match that new
+baseline. The Batch Operations role is separately trusted only by
+`batchoperations.s3.amazonaws.com`. It receives `s3:InitiateReplication` on
+source archive versions, replication-configuration and inventory reads, plus
+`s3:GetObject`, `s3:GetObjectVersion`, and `s3:PutObject` only on the exact
+recovery-control manifest prefix. A separate validator role receives only
+`s3:GetObjectVersion` on the exact candidate prefix and `kms:GenerateDataKey`
+plus `kms:Decrypt` on the candidate key. A cleanup role receives
+`s3:ListBucketVersions` with the exact-prefix condition,
+`s3:DeleteObjectVersion` on that prefix, and `s3:DeleteBucket` only for the
+tagged candidate or retired bucket. Its session requires a signed state token
+showing either candidate abort or completed promotion; it cannot target the
+current active baseline. The job submitter can create only tagged recovery jobs
+and pass only the Batch role. Source and destination
 versioning, ownership, replication status, and signed-digest verification are
 qualification gates. S3 Replication Time Control is not enabled or priced; the
 separate freshness oracle enforces Veer's accepted 30-minute bound. The workflow
@@ -870,10 +978,10 @@ resources, and `us-west-2` recovery storage.
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 979.37 | USD 1,000.00 | USD 20.63 |
-| Target-scale qualification | USD 2,646.26 | USD 2,650.00 | USD 3.74 |
+| Small production | USD 931.85 | USD 1,000.00 | USD 68.15 |
+| Target-scale qualification | USD 2,619.23 | USD 2,650.00 | USD 30.77 |
 
-The target reference consumes 99.86% of its ceiling after conservatively
+The target reference consumes 98.84% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional recurring target resource may be added without
 reducing another input or approving a replacement ADR.
@@ -898,7 +1006,7 @@ the exercise continues.
   8 API/SLO, 10 queue/admission, 8 reconciliation/provider, 8 database/backup,
   10 network/ingress, 10 telemetry/archive, 6 recovery/security/secrets, and
   4 EKS/budget/cost. This budget counts every metric evaluation used by a
-  standard alarm, including repeated thresholds; the external recovery canary
+  standard alarm, including repeated thresholds; the external recovery probe
   alarm is priced separately. A required alert that cannot fit this allocation
   requires a replacement worksheet rather than silent omission.
 - The Kubernetes version is upgraded before extended support. At current EKS
@@ -917,15 +1025,27 @@ the exercise continues.
 - Retained log storage prices two uncompressed boundary-concentrated ingestion
   envelopes plus 25% framing; compression is not required for cost correctness.
 - Secret values are fetched through a single-flight, version-aware in-memory
-  cache and never once per provider operation. Cache invalidation follows
-  rotation events and expiry; primary/recovery request caps are 45,000/5,000
-  per month small and 450,000/50,000 target, with cache hits, misses, and
-  projected usage observable.
+  cache and never once per provider operation, but the cache is not the cost
+  control. Before every Veer-issued Secrets Manager API call, a durable
+  region/profile/accounting-window ledger atomically claims one request. A
+  confirmed pre-dispatch failure releases the claim idempotently; an uncertain
+  outcome retains it. Each regional cap reserves 90% for general reads and 10%
+  for rotation, invalidation, and recovery; neither partition can borrow from
+  the other. Aggregate use alerts at 80%. Exhausting the general partition
+  rejects general calls while unused critical tokens remain available only to
+  critical callers; at 100% every call is rejected before dispatch. Missing
+  state, or a last confirmed durable read older than two minutes, fails any
+  cache miss or refresh closed without calling the service; a still-valid cache
+  hit continues until its version-aware expiry or invalidation.
+  Cache invalidation follows rotation events and expiry; primary/recovery caps
+  remain 45,000/5,000 per month small and 450,000/50,000 target, with claims,
+  releases, retained uncertainties, cache hits/misses, and projected usage
+  observable.
 - Recovery-region secret replicas, managed CRR transfer and requests, and one
   S3 Batch Replication reseed with job, object-operation, generated-manifest,
-  byte, request, and KMS allowances are priced without free allowances.
-  Replication lag, version mismatch, request volume, job status, and restore-
-  time access are alarmed.
+  candidate-overlap storage, validation GET/KMS, cleanup LIST, byte, and request
+  allowances are priced without free allowances. Replication lag, version
+  mismatch, request volume, job status, and restore-time access are alarmed.
 - Backup storage includes the current copy and rolling 7/30/35-day changed-byte
   envelopes for recovery retention, transfer, and primary retention. The meter
   includes engine and maintenance amplification, not only accepted payloads.
@@ -943,9 +1063,13 @@ the exercise continues.
 - Directional cross-AZ bytes are measured without netting against the
   200/2,000 GB monthly caps and their queue, database/service, and failure
   reserves. The 80% alert and 90% admission guard preserve recovery headroom.
-- The recovery-region synthetic's run count, Lambda duration, output bytes, and
-  retention are hard limits. Missing runs page operators and count as failed
-  availability intervals so a broken monitor cannot hide a regional outage.
+- The recovery-region synthetic's schedule claims, Lambda invocations and
+  duration, output bytes, single artifact attempt, and retention are hard
+  limits. Scheduler and Lambda retries are disabled; duplicate immutable
+  schedule identities exit after the idempotent write and before read, metric,
+  or artifact work. Missing runs page
+  operators and count as failed availability intervals so a broken monitor
+  cannot hide a regional outage.
 - A production profile uses one NAT path per active Availability Zone to avoid
   a cross-zone egress dependency. Developer deployments use no managed NAT.
 - Queue consumers use long polling and batching where correctness permits.
@@ -1006,11 +1130,11 @@ same recovery and operability bounds with total cost included.
 
 ## Review checklist
 
-- [x] Architecture reviewers accept the single-region failure boundary.
-- [x] Security reviewers accept the backup, key, credential, and residual-risk
+- [ ] Architecture reviewers accept the single-region failure boundary.
+- [ ] Security reviewers accept the backup, key, credential, and residual-risk
       boundaries.
-- [x] Operators accept the SLO, RTO/RPO, retention, and qualification methods.
-- [x] The cost worksheet verifies from a clean checkout and remains below both
+- [ ] Operators accept the SLO, RTO/RPO, retention, and qualification methods.
+- [ ] The cost worksheet verifies from a clean checkout and remains below both
       production ceilings.
-- [x] Pricing sources, regions, dates, quantities, exclusions, and free-tier
+- [ ] Pricing sources, regions, dates, quantities, exclusions, and free-tier
       treatment are explicit.

@@ -22,15 +22,15 @@ small	log_archive	telemetry	135	GB-month	0.03	aws-cloudwatch	Two uncompressed bo
 small	trace_ingestion	telemetry	10	GB	0.50	aws-cloudwatch	OTEL byte proxy enforcing the accepted monthly trace cap
 small	custom_metrics	telemetry	50	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
 small	primary_alarm_metrics	monitoring	64	alarm-metric-month	0.10	aws-cloudwatch	Bounded primary-region standard alarm metric evaluations across all required alert domains
-small	external_synthetic_runs	monitoring	44640	canary-run	0.0012	aws-cloudwatch-recovery	One API canary run per minute for a thirty-one-day month with no free allowance
-small	external_synthetic_lambda_requests	monitoring	44640	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per canary run with no free allowance
-small	external_synthetic_lambda_duration	monitoring	892800	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per canary run
+small	external_synthetic_schedule_invocations	monitoring	44640	scheduled-invocation	0.000001	aws-eventbridge-recovery	One admitted probe dispatch per minute priced at the paid tier with no free allowance
+small	external_synthetic_lambda_requests	monitoring	44640	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per admitted probe identity with no free allowance
+small	external_synthetic_lambda_duration	monitoring	892800	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per admitted probe identity
 small	external_synthetic_log_ingestion	monitoring	6.696	GB	0.50	aws-cloudwatch-recovery	0.00015 GB per run with no free allowance
-small	external_synthetic_log_storage	monitoring	6.696	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded canary logs
+small	external_synthetic_log_storage	monitoring	6.696	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded probe logs
 small	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
 small	external_synthetic_alarm	monitoring	1	alarm-month	0.10	aws-cloudwatch-recovery	One standard-resolution missing-or-failed-run alarm
 small	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
-small	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
+small	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One conditional tier-one S3 PUT attempt per admitted probe identity
 small	object_archive	storage	208	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
 small	recovery_object_archive	recovery	208	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
 small	normal_recovery_object_transfer	recovery	16	GB	0.02	aws-cross-region-transfer	One full monthly archive ingress envelope replicated to the recovery region
@@ -39,13 +39,15 @@ small	primary_archive_requests	storage	55500	API-request	0.000005	aws-s3	Half of
 small	recovery_archive_requests	recovery	55500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of thirty-seven thousand monthly archive objects
 small	full_reseed_source_get_requests	recovery	530000	API-request	0.0000004	aws-s3	Source GET attempts for four hundred eighty-one thousand retained objects plus ten percent retry headroom
 small	full_reseed_destination_put_requests	recovery	530000	API-request	0.000005	aws-s3-recovery	Destination PUT attempts for four hundred eighty-one thousand retained objects plus ten percent retry headroom
-small	full_reseed_kms_requests	recovery	1060000	API-request	0.000003	aws-kms	One decrypt and one encrypt per full-reseed object attempt
+small	full_reseed_kms_requests	recovery	2120000	API-request	0.000003	aws-kms	Source decrypt destination encrypt and validation data-key plus decrypt per full-reseed attempt
 small	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations replication job per modeled full reseed
 small	full_reseed_batch_object_operations	recovery	530000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including rounded-up retry headroom
 small	full_reseed_generated_manifest_scan	recovery	481000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
 small	full_reseed_manifest_storage	recovery	0.26	GB-month	0.023	aws-s3	Eight GiB generated manifest retained for at most twenty-four hours and rounded up
 small	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
-small	full_reseed_destination_head_requests	recovery	530000	API-request	0.0000004	aws-s3-recovery	Destination signed-metadata HEAD validation attempts including rounded-up retry headroom
+small	full_reseed_candidate_storage	recovery	7.39	GB-month	0.023	aws-s3-recovery	Retry-inclusive candidate generation retained for at most twenty-four hours
+small	full_reseed_destination_get_requests	recovery	530000	API-request	0.0000004	aws-s3-recovery	Exact-version destination body GET validation attempts including rounded-up retry headroom
+small	full_reseed_cleanup_list_requests	recovery	530001	API-request	0.000005	aws-s3-recovery	One version-list request per possible version plus one final empty proof
 small	encryption_keys	security	3	key-month	1.00	aws-kms	Primary data audit and recovery-region keys
 small	archive_kms_requests	security	148000	API-request	0.000003	aws-kms	Four normal envelope and validation requests per monthly archive object
 small	managed_secrets	security	10	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
@@ -73,15 +75,15 @@ target	log_archive	telemetry	1343	GB-month	0.03	aws-cloudwatch	Two uncompressed 
 target	trace_ingestion	telemetry	100	GB	0.50	aws-cloudwatch	OTEL byte proxy enforcing the accepted monthly trace cap
 target	custom_metrics	telemetry	500	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
 target	primary_alarm_metrics	monitoring	64	alarm-metric-month	0.10	aws-cloudwatch	Bounded primary-region standard alarm metric evaluations across all required alert domains
-target	external_synthetic_runs	monitoring	44640	canary-run	0.0012	aws-cloudwatch-recovery	One API canary run per minute for a thirty-one-day month with no free allowance
-target	external_synthetic_lambda_requests	monitoring	44640	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per canary run with no free allowance
-target	external_synthetic_lambda_duration	monitoring	892800	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per canary run
+target	external_synthetic_schedule_invocations	monitoring	44640	scheduled-invocation	0.000001	aws-eventbridge-recovery	One admitted probe dispatch per minute priced at the paid tier with no free allowance
+target	external_synthetic_lambda_requests	monitoring	44640	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per admitted probe identity with no free allowance
+target	external_synthetic_lambda_duration	monitoring	892800	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per admitted probe identity
 target	external_synthetic_log_ingestion	monitoring	6.696	GB	0.50	aws-cloudwatch-recovery	0.00015 GB per run with no free allowance
-target	external_synthetic_log_storage	monitoring	6.696	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded canary logs
+target	external_synthetic_log_storage	monitoring	6.696	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded probe logs
 target	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
 target	external_synthetic_alarm	monitoring	1	alarm-month	0.10	aws-cloudwatch-recovery	One standard-resolution missing-or-failed-run alarm
 target	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
-target	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
+target	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One conditional tier-one S3 PUT attempt per admitted probe identity
 target	object_archive	storage	1040	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
 target	recovery_object_archive	recovery	1040	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
 target	normal_recovery_object_transfer	recovery	80	GB	0.02	aws-cross-region-transfer	One full monthly archive ingress envelope replicated to the recovery region
@@ -90,13 +92,15 @@ target	primary_archive_requests	storage	244500	API-request	0.000005	aws-s3	Half 
 target	recovery_archive_requests	recovery	244500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of one hundred sixty-three thousand monthly archive objects
 target	full_reseed_source_get_requests	recovery	2331000	API-request	0.0000004	aws-s3	Source GET attempts for two million one hundred nineteen thousand retained objects plus ten percent retry headroom
 target	full_reseed_destination_put_requests	recovery	2331000	API-request	0.000005	aws-s3-recovery	Destination PUT attempts for two million one hundred nineteen thousand retained objects plus ten percent retry headroom
-target	full_reseed_kms_requests	recovery	4662000	API-request	0.000003	aws-kms	One decrypt and one encrypt per full-reseed object attempt
+target	full_reseed_kms_requests	recovery	9324000	API-request	0.000003	aws-kms	Source decrypt destination encrypt and validation data-key plus decrypt per full-reseed attempt
 target	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations replication job per modeled full reseed
 target	full_reseed_batch_object_operations	recovery	2331000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including retry headroom
 target	full_reseed_generated_manifest_scan	recovery	2119000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
 target	full_reseed_manifest_storage	recovery	0.26	GB-month	0.023	aws-s3	Eight GiB generated manifest retained for at most twenty-four hours and rounded up
 target	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
-target	full_reseed_destination_head_requests	recovery	2331000	API-request	0.0000004	aws-s3-recovery	Destination signed-metadata HEAD validation attempts including retry headroom
+target	full_reseed_candidate_storage	recovery	36.91	GB-month	0.023	aws-s3-recovery	Retry-inclusive candidate generation retained for at most twenty-four hours
+target	full_reseed_destination_get_requests	recovery	2331000	API-request	0.0000004	aws-s3-recovery	Exact-version destination body GET validation attempts including retry headroom
+target	full_reseed_cleanup_list_requests	recovery	2331001	API-request	0.000005	aws-s3-recovery	One version-list request per possible version plus one final empty proof
 target	encryption_keys	security	6	key-month	1.00	aws-kms	Separated primary recovery and rotation key set
 target	archive_kms_requests	security	652000	API-request	0.000003	aws-kms	Four normal envelope and validation requests per monthly archive object
 target	managed_secrets	security	100	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
