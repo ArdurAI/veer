@@ -179,6 +179,100 @@ expect_rejection 'required heading hidden in a comment' \
   'is missing visible heading: ### Workspace isolation assumptions'
 
 new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '   ```text' \
+  '### Workspace isolation assumptions' \
+  '   ```' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'required heading hidden in an indented fence' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| OWN-SECURITY \|/ { next }
+  { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '   ```text' \
+  '### Control owners' \
+  '| ID | Accountable surface | Live verification work |' \
+  '| --- | --- | --- |' \
+  '| OWN-SECURITY | fake surface | fake verification |' \
+  '   ```' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'owner table hidden in an indented fence' \
+  'undeclared owner OWN-SECURITY'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+required_source='https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+LC_ALL=C awk -v source="$required_source" '
+  index($0, source) { next }
+  { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' "<!-- $required_source -->" >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'required source hidden in a comment' \
+  'is missing visible text: https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| A-01 \|/ { print "| A-01 | | | |"; next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'empty protected-asset cells' \
+  'invalid required cells in canonical assets row'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| OWN-SECURITY \|/ { print "| OWN-SECURITY | | |"; next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'empty control-owner cells' \
+  'invalid required cells in canonical owners row'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      print "| High | **TM-001 — placeholder.** | | | | | |"
+      next
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'empty attacker-story cells' \
+  'invalid required cells in canonical threats row'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| DC-PERSONAL \|/ { print "| DC-PERSONAL | Personal | | | |"; next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'empty data-class cells' \
+  'invalid required cells in canonical classes row'
+
+new_fixture
 ledger="$test_root/docs/security/threats.tsv"
 rewritten="$test_root/threats.tsv"
 LC_ALL=C awk '

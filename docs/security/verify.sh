@@ -24,17 +24,11 @@ validate_regular_file() {
     fail "${checked_file#"$repo_root/"} must end with a newline"
 }
 
-require_text() {
-  required_text=$1
-  checked_file=$2
-  grep -Fq -- "$required_text" "$checked_file" ||
-    fail "${checked_file#"$repo_root/"} is missing required text: $required_text"
-}
-
-require_visible_heading() {
-  required_heading=$1
-  checked_file=$2
-  LC_ALL=C awk -v required="$required_heading" '
+visible_markdown_has() {
+  required_content=$1
+  match_mode=$2
+  checked_file=$3
+  LC_ALL=C awk -v required="$required_content" -v mode="$match_mode" '
     {
         line = $0
         if (in_comment) {
@@ -50,17 +44,32 @@ require_visible_heading() {
             }
             next
         }
-        if (line ~ /^```/ || line ~ /^~~~/) {
+        if (line ~ /^[ ]?[ ]?[ ]?```/ || line ~ /^[ ]?[ ]?[ ]?~~~/) {
             in_fence = !in_fence
             next
         }
-        if (!in_fence && line == required) {
+        if (!in_fence &&
+            ((mode == "exact" && line == required) ||
+             (mode == "contains" && index(line, required)))) {
             found = 1
         }
     }
     END { exit found ? 0 : 1 }
-  ' "$checked_file" ||
+  ' "$checked_file"
+}
+
+require_visible_heading() {
+  required_heading=$1
+  checked_file=$2
+  visible_markdown_has "$required_heading" exact "$checked_file" ||
     fail "${checked_file#"$repo_root/"} is missing visible heading: $required_heading"
+}
+
+require_visible_text() {
+  required_text=$1
+  checked_file=$2
+  visible_markdown_has "$required_text" contains "$checked_file" ||
+    fail "${checked_file#"$repo_root/"} is missing visible text: $required_text"
 }
 
 for checked_file in "$model_file" "$threat_file" "$class_file" "$summary_file"; do
@@ -89,12 +98,12 @@ for required_source in \
   'https://kubernetes.io/docs/concepts/security/multi-tenancy/' \
   'https://kubernetes.io/docs/concepts/security/service-accounts/' \
   'https://www.postgresql.org/docs/18/ddl-rowsecurity.html'; do
-  require_text "$required_source" "$model_file"
+  require_visible_text "$required_source" "$model_file"
 done
 
-require_text '[formal threat model and data classification](threat-model.md)' "$summary_file"
-require_text "[\`threats.tsv\`](threats.tsv)" "$model_file"
-require_text "[\`data-classes.tsv\`](data-classes.tsv)" "$model_file"
+require_visible_text '[formal threat model and data classification](threat-model.md)' "$summary_file"
+require_visible_text "[\`threats.tsv\`](threats.tsv)" "$model_file"
+require_visible_text "[\`data-classes.tsv\`](data-classes.tsv)" "$model_file"
 
 LC_ALL=C awk -F '\t' '
 function trim(value) {
@@ -130,6 +139,19 @@ function valid_evidence(value, values, count, citation_index) {
     }
     return 1
 }
+function valid_readable_row(line, expected_columns, cells, count, cell_index, value) {
+    count = split(line, cells, "|")
+    if (count != expected_columns + 2 || trim(cells[1]) != "" || trim(cells[count]) != "") {
+        return 0
+    }
+    for (cell_index = 2; cell_index < count; cell_index++) {
+        value = trim(cells[cell_index])
+        if (value == "" || value == "-") {
+            return 0
+        }
+    }
+    return 1
+}
 FNR == NR {
     if (in_model_comment) {
         if (index($0, "-->")) {
@@ -144,7 +166,7 @@ FNR == NR {
         }
         next
     }
-    if ($0 ~ /^```/ || $0 ~ /^~~~/) {
+    if ($0 ~ /^[ ]?[ ]?[ ]?```/ || $0 ~ /^[ ]?[ ]?[ ]?~~~/) {
         in_model_fence = !in_model_fence
         next
     }
@@ -158,33 +180,45 @@ FNR == NR {
     if (section == "### Protected assets" &&
         $0 == "| ID | Asset | Required property | Evidence |") {
         table = "assets"
+        table_columns = 4
         next
     }
     if (section == "### Actors and realistic starting capabilities" &&
         $0 == "| ID | Actor and starting capability | Capability not assumed |") {
         table = "attackers"
+        table_columns = 3
         next
     }
     if (section == "### Trust boundaries" &&
         $0 == "| ID | Crossing and transferred authority | Required enforcement | Verification owner |") {
         table = "boundaries"
+        table_columns = 4
         next
     }
     if (section == "### Control owners" &&
         $0 == "| ID | Accountable surface | Live verification work |") {
         table = "owners"
+        table_columns = 3
         next
     }
     if (section == "## Attack surface, mitigations, and attacker stories" &&
         $0 ~ /^\| Priority \| Scenario and capability gain \|/) {
         table = "threats"
+        table_columns = 7
         next
     }
     if (table != "" && $0 ~ /^\| ---/) {
+        separator_count = split($0, separator_cells, "|")
+        if (separator_count != table_columns + 2) {
+            error("unexpected column count in canonical " table " separator")
+        }
         next
     }
     if (table == "assets" && $0 ~ /^\| A-[0-9][0-9] \|/) {
-        split($0, cells, "|")
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical assets row")
+            next
+        }
         asset_id = trim(cells[2])
         if (assets[asset_id]++) {
             error("duplicate protected-asset row " asset_id)
@@ -192,7 +226,10 @@ FNR == NR {
         next
     }
     if (table == "attackers" && $0 ~ /^\| ACT-[A-Z0-9-][A-Z0-9-]* \|/) {
-        split($0, cells, "|")
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical attackers row")
+            next
+        }
         attacker_id = trim(cells[2])
         if (attackers[attacker_id]++) {
             error("duplicate attacker row " attacker_id)
@@ -200,7 +237,10 @@ FNR == NR {
         next
     }
     if (table == "boundaries" && $0 ~ /^\| TB-[0-9][0-9] \|/) {
-        split($0, cells, "|")
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical boundaries row")
+            next
+        }
         boundary_id = trim(cells[2])
         if (boundaries[boundary_id]++) {
             error("duplicate trust-boundary row " boundary_id)
@@ -208,7 +248,10 @@ FNR == NR {
         next
     }
     if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
-        split($0, cells, "|")
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical owners row")
+            next
+        }
         owner_id = trim(cells[2])
         if (owners[owner_id]++) {
             error("duplicate control-owner row " owner_id)
@@ -217,7 +260,10 @@ FNR == NR {
     }
     if (table == "threats" &&
         $0 ~ /^\| (Critical|High|Medium|Low) \| \*\*TM-[0-9][0-9][0-9] /) {
-        split($0, cells, "|")
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical threats row")
+            next
+        }
         match($0, /TM-[0-9][0-9][0-9]/)
         threat_id = substr($0, RSTART, RLENGTH)
         if (model_threat[threat_id]++) {
@@ -232,6 +278,7 @@ FNR == NR {
     }
     if (table != "" && $0 !~ /^\|/) {
         table = ""
+        table_columns = 0
     }
     next
 }
@@ -374,6 +421,19 @@ function valid_links(value, values, count, link_index) {
     }
     return 1
 }
+function valid_readable_row(line, expected_columns, cells, count, cell_index, value) {
+    count = split(line, cells, "|")
+    if (count != expected_columns + 2 || trim(cells[1]) != "" || trim(cells[count]) != "") {
+        return 0
+    }
+    for (cell_index = 2; cell_index < count; cell_index++) {
+        value = trim(cells[cell_index])
+        if (value == "" || value == "-") {
+            return 0
+        }
+    }
+    return 1
+}
 FNR == NR {
     if (in_model_comment) {
         if (index($0, "-->")) {
@@ -388,7 +448,7 @@ FNR == NR {
         }
         next
     }
-    if ($0 ~ /^```/ || $0 ~ /^~~~/) {
+    if ($0 ~ /^[ ]?[ ]?[ ]?```/ || $0 ~ /^[ ]?[ ]?[ ]?~~~/) {
         in_model_fence = !in_model_fence
         next
     }
@@ -402,18 +462,27 @@ FNR == NR {
     if (section == "### Control owners" &&
         $0 == "| ID | Accountable surface | Live verification work |") {
         table = "owners"
+        table_columns = 3
         next
     }
     if (section == "### Data classification" &&
         $0 == "| ID | Class | Central rule | Retention boundary | Owner and verification |") {
         table = "classes"
+        table_columns = 5
         next
     }
     if (table != "" && $0 ~ /^\| ---/) {
+        separator_count = split($0, separator_cells, "|")
+        if (separator_count != table_columns + 2) {
+            error("unexpected column count in canonical " table " separator")
+        }
         next
     }
     if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
-        split($0, cells, "|")
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical owners row")
+            next
+        }
         owner_id = trim(cells[2])
         if (owners[owner_id]++) {
             error("duplicate control-owner row " owner_id)
@@ -421,7 +490,10 @@ FNR == NR {
         next
     }
     if (table == "classes" && $0 ~ /^\| DC-[A-Z][A-Z-]* \|/) {
-        split($0, cells, "|")
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical classes row")
+            next
+        }
         class_id = trim(cells[2])
         if (class_seen[class_id]++) {
             error("duplicate readable data-class row " class_id)
@@ -440,6 +512,7 @@ FNR == NR {
     }
     if (table != "" && $0 !~ /^\|/) {
         table = ""
+        table_columns = 0
     }
     next
 }
