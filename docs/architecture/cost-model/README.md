@@ -79,7 +79,10 @@ does not contact AWS or read environment credentials.
 | Encrypted primary archive/object storage | 208 GB | 1,040 GB |
 | Encrypted recovery archive/object storage | 208 GB | 1,040 GB |
 | Normal archive cross-region transfer | 16 GB | 80 GB |
-| Retained archive objects per region | 481,000 | 2,119,000 |
+| Retained current archive data versions per region | 481,000 | 2,119,000 |
+| Physical archive versions plus delete markers per region | 518,000 | 2,282,000 |
+| Retention-cleanup ListObjectVersions requests, both regions | 148,002 | 652,002 |
+| Delete-marker cleanup-overlap storage per region | 0.02 GB-month | 0.09 GB-month |
 | Full-reseed source GET/destination PUT attempts | 530,000 each | 2,331,000 each |
 | Full-reseed KMS source-decrypt/destination-encrypt/validation-data-key-and-decrypt requests | 2,120,000 | 9,324,000 |
 | Full-reseed cross-region transfer | 229 GB | 1,144 GB |
@@ -87,18 +90,20 @@ does not contact AWS or read environment credentials.
 | Full-reseed S3 Batch object operations | 530,000 | 2,331,000 |
 | Full-reseed generated-manifest source objects scanned | 481,000 | 2,119,000 |
 | Full-reseed transient manifest objects | 1 | 1 |
-| Full-reseed transient manifest storage | 0.26 GB-month | 0.26 GB-month |
+| Full-reseed transient manifest storage | 0.28 GB-month | 0.28 GB-month |
 | Full-reseed candidate overlap storage | 7.39 GB-month | 36.91 GB-month |
 | Full-reseed destination GET validation attempts | 530,000 | 2,331,000 |
 | Full-reseed cleanup ListObjectVersions requests | 530,001 | 2,331,001 |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
 | Secrets Manager API requests, recovery region | 5,000 | 50,000 |
 | Recovery-region secret replicas | 10 | 100 |
-| Recovery-region scheduled probe dispatches | 44,640 | 44,640 |
+| Recovery-region intended probe identities | 44,640 | 44,640 |
+| Scheduler/Lambda delivery attempts, including reserves | 93,744 | 93,744 |
+| Duplicate/shutdown-race delivery reserves | 44,640/4,464 | 44,640/4,464 |
 | Retained recovery-probe identity claims | 46,080 | 46,080 |
 | Encoded recovery-probe identity claim | 256 bytes | 256 bytes |
-| Probe Lambda duration | 892,800 GB-seconds | 892,800 GB-seconds |
-| Probe logs/artifacts retained 30 days | 6.696/44.64 GB | 6.696/44.64 GB |
+| Probe Lambda duration | 937,440 GB-seconds | 937,440 GB-seconds |
+| Probe logs/artifacts retained 30 days | 14.0616/44.64 GB | 14.0616/44.64 GB |
 | Probe artifact PUT attempts | 44,640 | 44,640 |
 
 The database and queue rows are price proxies so issue #12 can compare
@@ -209,8 +214,8 @@ attempts, destination PUT attempts, and destination validation GET attempts;
 four KMS requests per attempt; 229/1,144 GB transferred; and a generated-
 manifest scan of 481,000/2,119,000 source objects. One generated manifest object
 lives in a source-region recovery-control prefix for at most 24 hours, is capped
-at 8 GiB, and is priced as 0.26 GB-month plus one tier-one write; completion-
-report output is disabled. Candidate overlap is capped at the retry-inclusive
+at 8 GiB, and is priced as 0.28 decimal GB-month plus one tier-one write;
+completion-report output is disabled. Candidate overlap is capped at the retry-inclusive
 transfer envelope for 24 hours, yielding 7.39/36.91 GB-month. Each exact
 destination version is read with checksum mode, its service checksum is checked,
 and its body digest and embedded signature are recomputed. The
@@ -223,6 +228,25 @@ from hiding recovery work. Secret values use a version-aware, single-flight
 cache plus a durable pre-call request ledger; the request rows are hard monthly
 budgets rather than an assumption that every provider operation reads Secrets
 Manager.
+
+Archive objects use immutable, date-partitioned keys capped at 512 encoded
+bytes. Both regions use S3 Object Lock with default 365-day governance
+retention, expire current versions at 365 days, permanently expire noncurrent
+versions after one day, remove expired delete markers, and abort incomplete
+multipart uploads after one day. Replication preserves source retention
+metadata and creation time. Runtime and active-retention roles cannot bypass or
+shorten governance retention. A separate signed cleanup role may bypass only a
+tagged, non-authoritative recovery candidate or retired generation so failed
+reseed storage can still meet its 24-hour teardown bound. A daily exact-version
+sweeper is the
+24-hour hard bound and verifies an empty expired prefix; lifecycle remains
+defense in depth. One boundary-concentrated envelope of noncurrent versions and
+markers raises the physical cap to 518,000/2,282,000 entries per region and
+marker-key storage to 0.02/0.09 GB-month. The worksheet prices a deliberately
+pessimistic one LIST response per version and marker plus the final empty proof:
+74,001/326,001 per region, 148,002/652,002 total. DELETE requests remain free.
+Protected data bytes are already priced as S3 Standard storage; the default
+retention path adds no separate API request row.
 
 Failed candidates and retired active generations are cleaned by exact version.
 The LIST budget assumes only one returned version per request plus one final
@@ -242,17 +266,20 @@ flight and reserves 14/70 GB of monthly handshake bytes while retaining the
 
 The one-minute recovery-region probe uses 44,640 immutable schedule identities
 in a 744-hour month. EventBridge Scheduler target retries and Lambda asynchronous
-retries are zero. The identity is also the idempotency key for the probe's no-op
-write; only a newly committed claim proceeds to the read, metric, and artifact
-paths. The probe emits one bounded Embedded Metric Format log event and makes at
-most one non-retried encrypted artifact PUT per admitted identity, even if a
-duplicate delivery reaches Lambda. Any invocation or duration above the fixed
-worksheet quantities is a qualification failure and disables further schedule
-slots until the accounting window is reconciled.
+retries are zero, but at-least-once delivery is not treated as exactly once.
+The worksheet reserves one duplicate per intended identity plus 4,464
+non-borrowable shutdown-race attempts: 93,744 paid Scheduler/Lambda attempts.
+Every attempt is allowed the full 1 GB, ten-second timeout and 0.00015 GB log
+envelope, producing 937,440 GB-seconds and 14.0616 GB. The identity is also the
+idempotency key for the probe's no-op write; only a newly committed claim
+proceeds to the read, result metric, and artifact paths. At duplicate-reserve
+exhaustion a delete-only circuit breaker removes the exact schedule, while the
+shutdown partition absorbs in-flight delivery. The 44,640 artifact attempts and
+44.64 GB artifact storage remain winner-only bounds.
 The worksheet prices Scheduler at its USD 1 per million paid tier even though the
 published offer includes a free tier, then prices Lambda, logs, one artifact
-attempt, three custom metrics, and one alarm. Free service allowances are not
-subtracted.
+attempt, three custom metrics, and one high-resolution alarm. Free service
+allowances are not subtracted.
 
 ## Immutable rate evidence
 
@@ -274,9 +301,9 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | Telemetry | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | `S8QGXX5R2BKKMDSJ` at USD 0.50/GB log ingest; `GF9Q9S5QWW3RHMGQ` at USD 0.50/GB OTEL ingest; `6K9ADYQAHV5KX9KZ` at USD 0.03/GB-month; `KG586CTNGQ4VRZKZ` at USD 0.30/metric-month |
 | Primary alarms | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | Standard-resolution alarm metric `EVETVUGEN3MUTMXM` at USD 0.10/alarm-metric-month |
 | Recovery scheduling | [AWSEvents 20260831092301](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSEvents/20260831092301/index.json) | us-west-2 scheduled invocation `QNGCFAB5SW8AUQEB` at USD 0.000001 after the free tier; the worksheet applies that paid rate to every dispatch |
-| Recovery monitoring | [AmazonCloudWatch 20260831092148 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-west-2/index.json) | Logs `CWY7X4MZ4F3MP5SD` at USD 0.50/GB and `MN45SJANDTCPR9QA` at USD 0.03/GB-month; metrics `CN6TP6ZEVS58RK7M` at USD 0.30/month; alarm `SJTFAZNHSW2WVZB2` at USD 0.10/month |
+| Recovery monitoring | [AmazonCloudWatch 20260831092148 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-west-2/index.json) | Logs `CWY7X4MZ4F3MP5SD` at USD 0.50/GB and `MN45SJANDTCPR9QA` at USD 0.03/GB-month; metrics `CN6TP6ZEVS58RK7M` at USD 0.30/month; high-resolution alarm `JQ7VDDDHEZA9XV78` at USD 0.30/alarm-metric-month |
 | Recovery probe compute | [AWSLambda 20260831092318 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/20260831092318/us-west-2/index.json) | Request `ZWHFK83WS2P4WZR6` at USD 0.0000002/request; tier-one duration `XCU6U9G4FCKZQWG9` at USD 0.0000166667/GB-second |
-| Primary object storage and Batch Operations | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one PUT request `E9YHNFENF4XQBZR6` at USD 0.000005/request; tier-two GET request `ZWQ6Q48CRJXX4FXE` at USD 0.0000004/request; Batch job `JS698V37SA2BFFYW` at USD 0.25/job; object operation `VFSW6ADYJ5NS2Z6P` at USD 0.000001/object; generated-manifest scan `VUCQUWK8JADFEN65` at USD 0.000000015/source object |
+| Primary object storage and Batch Operations | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one PUT/LIST request `E9YHNFENF4XQBZR6` at USD 0.000005/request; tier-two GET request `ZWQ6Q48CRJXX4FXE` at USD 0.0000004/request; Batch job `JS698V37SA2BFFYW` at USD 0.25/job; object operation `VFSW6ADYJ5NS2Z6P` at USD 0.000001/object; generated-manifest scan `VUCQUWK8JADFEN65` at USD 0.000000015/source object; DELETE requests are free |
 | Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month; Tier-1 PUT/LIST request `D4PMUVH6F64HK2D6` at USD 0.000005/request; Tier-2 GET request `E77AQEM2DC4VV3FC` at USD 0.0000004/request; DELETE requests are free |
 | Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month; request SKUs `MFEBZPX8NHM5FY7Z` and `SE9KXT6M6JTP7E4W` at USD 0.000003/request |
 | Managed secrets | [AWSSecretsManager 20260831092330 primary](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-east-1/index.json), [recovery](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-west-2/index.json) | Primary `BJ3PQ9BYGU6P632F` and recovery `DWJP9S4V3HP98UNC` at USD 0.40/secret-month; request SKUs `4MDZ5VNEJPMUTG9B` and `AEBQHWFEG8Q4Y7AT` at USD 0.000005/request |

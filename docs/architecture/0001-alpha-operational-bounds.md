@@ -98,12 +98,18 @@ flowchart TB
 - Nodes, database endpoints, and queue endpoints are private. Public IPv4 is
   limited to the regional ingress and required egress endpoints.
 - Source and recovery buckets are versioned, use Bucket owner enforced object
-  ownership, and are connected by Amazon S3 Cross-Region Replication (CRR).
-  S3 assumes a dedicated replication role scoped to read the selected source
-  versions, replicate only the archive prefix, and encrypt writes with the
-  recovery-region key. Restore never grants provider authority until
-  credentials and policy are revalidated. The bucket and role prerequisites
-  follow the [S3 replication requirements](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-requirements.html).
+  ownership, have S3 Object Lock enabled with default 365-day governance
+  retention, and are connected by Amazon S3 Cross-Region Replication (CRR).
+  No Veer runtime, replication, validation, or active-retention role receives
+  `s3:BypassGovernanceRetention`, `s3:PutObjectRetention`, or
+  `s3:PutObjectLegalHold`. The only exception is the signed recovery-generation
+  cleanup role described below, which can bypass retention solely on a tagged,
+  non-authoritative candidate or retired bucket. S3 assumes a dedicated
+  replication role scoped to read the selected source versions and their
+  retention/legal-hold metadata, replicate only the archive prefix, and encrypt
+  writes with the recovery-region key. Restore never grants provider authority
+  until credentials and policy are revalidated. The bucket and role
+  prerequisites follow the [S3 replication requirements](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-requirements.html).
 - Third-party secrets that cannot be reissued are replicated by Secrets Manager
   into `us-west-2` under the recovery-region key and a separately scoped
   resource policy. Cloud credentials are never copied: restored workloads
@@ -167,7 +173,10 @@ an explicit quota response; they must not cause silent data loss.
 | Archive S3 tier-1 requests/month, both regions | 30,000 | 111,000 | 489,000 |
 | Archive KMS requests/month, both regions | 40,000 | 148,000 | 652,000 |
 | Normal archive cross-region transfer/month, GB | 0 | 16 | 80 |
-| Retained archive objects/region, maximum | local | 481,000 | 2,119,000 |
+| Retained current archive data versions/region, maximum | local | 481,000 | 2,119,000 |
+| Physical archive versions plus delete markers/region, maximum | local | 518,000 | 2,282,000 |
+| Retention-cleanup ListObjectVersions requests/month, both regions | 0 | 148,002 | 652,002 |
+| Delete-marker cleanup-overlap storage/region, GB-month | 0 | 0.02 | 0.09 |
 | Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,331,000 each |
 | Full-reseed KMS source-decrypt, destination-encrypt, and validation data-key/decrypt requests | 0 | 2,120,000 | 9,324,000 |
 | Full-reseed cross-region transfer, GB | 0 | 229 | 1,144 |
@@ -175,7 +184,7 @@ an explicit quota response; they must not cause silent data loss.
 | Full-reseed S3 Batch object operations | 0 | 530,000 | 2,331,000 |
 | Full-reseed generated-manifest source objects scanned | 0 | 481,000 | 2,119,000 |
 | Full-reseed transient manifest objects | 0 | 1 | 1 |
-| Full-reseed transient manifest storage, GB-month | 0 | 0.26 | 0.26 |
+| Full-reseed transient manifest storage, GB-month | 0 | 0.28 | 0.28 |
 | Full-reseed candidate overlap storage, GB-month | 0 | 7.39 | 36.91 |
 | Full-reseed destination GET validation attempts | 0 | 530,000 | 2,331,000 |
 | Full-reseed cleanup ListObjectVersions requests | 0 | 530,001 | 2,331,001 |
@@ -191,6 +200,10 @@ an explicit quota response; they must not cause silent data loss.
 | Secrets Manager API requests/month, recovery region | 0 | 5,000 | 50,000 |
 | Recovery-region secret replicas | 0 | 10 | 100 |
 | Recovery-region synthetic runs/month | 0 | 44,640 | 44,640 |
+| Recovery-region Scheduler/Lambda delivery attempts/month | 0 | 93,744 | 93,744 |
+| Recovery-region duplicate-delivery reserve/month | 0 | 44,640 | 44,640 |
+| Recovery-region shutdown-race delivery reserve/month | 0 | 4,464 | 4,464 |
+| Recovery-region Lambda duration/month, GB-seconds | 0 | 937,440 | 937,440 |
 | Retained recovery-probe identity claims, maximum | 0 | 46,080 | 46,080 |
 | Encoded recovery-probe identity claim, maximum | 0 | 256 bytes | 256 bytes |
 
@@ -405,9 +418,23 @@ target result cannot substitute for the small profile:
    replication configuration and role policy, and expire the transient manifest.
    Lifecycle expiry is defense in depth, not retry readiness. A retry always
    receives a new candidate bucket and never reuses a partially cleaned
-   generation. Public CI uses a deterministic S3 service fake. An opt-in live
-   fixture uses dedicated buckets, exact-prefix IAM, an exercise cost cap, and
-   verified teardown.
+   generation.
+
+   Also seed a complete boundary-concentrated accounting envelope at its
+   365-day expiry boundary in both active archive regions. Pause lifecycle only
+   for the bounded Batch window, re-enable the signed rules, and run the
+   retention sweeper. Verify exact-version deletion of every eligible
+   noncurrent version and delete marker, a final empty
+   `ListObjectVersions` result for the expired date prefix, preservation of
+   every unexpired version, original replica age and Object Lock metadata, the
+   518,000/2,282,000 physical entry caps, and the 148,002/652,002 two-region
+   LIST-request caps. Attempt exact-version deletion one second before
+   `RetainUntilDate` and require S3 to return `403`; repeat at or after expiry
+   and require cleanup to succeed without bypass permission. Drive the cleanup
+   counters through 80%, 90%, and 100% with synthetic accounting.
+   Public CI uses a deterministic S3 service fake. An opt-in live fixture uses
+   dedicated buckets, exact-prefix IAM, an exercise cost cap, and verified
+   teardown.
 9. In an isolated accounting test, drive each cross-AZ byte partition through
    its 80%, 90%, and 100% thresholds and verify alert, admission-control, and
    qualification-failure behavior without sending equivalent billable traffic.
@@ -458,16 +485,22 @@ target result cannot substitute for the small profile:
 16. Exercise the pinned recovery probe for a complete bounded window. Verify
    each admitted identity produces at most one full probe, one encrypted
    artifact-object version, and one non-retried `PutObject` attempt. Inject a
-   concurrent duplicate and confirm its idempotent write returns the original
-   receipt before the read, metric, or artifact path. Pre-create the deterministic
-   artifact key and verify the conditional PUT creates no new version. Inject an
-   identity older than 60 seconds and verify rejection before any API or artifact
-   call. Count
-   even a short duplicate invocation against the Lambda ledgers and fail the
-   profile if invocation or duration quantities exceed the worksheet. Drive
-   schedule, invocation, duration, log-byte, artifact-byte, and artifact-request
-   ledgers through 80%, 90%, and 100%, and verify no new schedule slot is enabled
-   at exhaustion. A runtime or schedule change must repeat this gate.
+   concurrent duplicate for every identity through synthetic accounting and
+   confirm each replay returns the original receipt before the read, result
+   metric, or artifact path. Then inject the non-borrowable 4,464-attempt
+   shutdown race. Pre-create the deterministic artifact key and verify the
+   conditional PUT creates no new version. Inject an identity older than 60
+   seconds and verify rejection before any API or artifact call. Count every
+   delivery, including a short duplicate, against the 93,744 invocation,
+   937,440 GB-second, and 14.0616 GB log ledgers. Fail the profile if any
+   quantity is exceeded. Drive intended, duplicate, shutdown, duration,
+   log-byte, artifact-byte, and artifact-request partitions through 80%, 90%,
+   and 100%; at duplicate-reserve exhaustion verify deletion of only the exact
+   schedule while the shutdown reserve absorbs in-flight deliveries. Inject the
+   documented 59-second Scheduler delay, prove each full invocation stops
+   within ten seconds, and prove the high-resolution alarm evaluates within ten
+   seconds and paging completes within forty more. A runtime, schedule, or
+   alarm change must repeat this gate.
 17. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
@@ -567,29 +600,53 @@ month is 44 minutes 38 seconds. Error-budget reporting uses raw probe intervals,
 not rounded incident duration.
 
 The production synthetic is a purpose-built Lambda probe in `us-west-2`, outside
-the primary failure boundary. EventBridge Scheduler emits one immutable
-schedule identity per minute with flexible windows disabled and target retries
-set to zero under the
+the primary failure boundary. EventBridge Scheduler creates one immutable
+schedule identity per minute with flexible windows disabled. Its documented
+[60-second invocation precision](https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html)
+means a minute's target call can occur at any second in that minute. Target
+retries are set to zero under the
 [`RetryPolicy` API](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_RetryPolicy.html),
 with `MaximumEventAgeInSeconds` set to 60, for 44,640 intended dispatches in a
 744-hour month; Lambda asynchronous retries are also zero under
 [`PutFunctionEventInvokeConfig`](https://docs.aws.amazon.com/lambda/latest/api/API_PutFunctionEventInvokeConfig.html).
-At function entry, the probe rejects a scheduled timestamp older than 60 seconds,
-then performs its authenticated idempotent no-op write with the schedule identity
-as the idempotency key. Probe identity claims are retained for the complete fixed
-31-day accounting window plus 24 hours. Only the newly committed claim continues
-to the read and result path; a replay returns the original receipt and exits.
-At most 46,080 claims of 256 encoded bytes coexist across a window boundary,
-using 11,796,480 bytes inside the existing relational and qualification-preload
-allocations. Each full run is limited to one Lambda invocation with 1 GB of
-memory and 20 seconds, 0.00015 GB of
-Embedded Metric Format logs, and one non-retried conditional `PutObject` attempt
-with `If-None-Match: *` to its deterministic key in a versioned result bucket.
+Because delivery is at least once, the budget separately reserves 44,640
+duplicate attempts—one for every intended identity—and a non-borrowable 4,464
+attempt shutdown race. Priced Scheduler target calls and Lambda invocations
+therefore each cap at 93,744.
+
+Every invocation emits one bounded attempt log before any API or artifact path
+and has a ten-second hard timeout with 1 GB of memory and at most 0.00015 GB of
+Embedded Metric Format logs. AWS/Lambda invocation usage and those logs are
+reconciled against the regional/profile/window attempt partitions. Invocation
+billing precedes function logic, which is why all 93,744 requests, 937,440
+GB-seconds, and 14.0616 GB of logs are priced. At 80% of the duplicate reserve
+Veer pages on cost pressure. At 100%, a separate circuit-breaker role with only
+`scheduler:DeleteSchedule` on the exact probe schedule deletes it; it cannot
+create, update, or target any other schedule. The remaining 4,464 attempts are
+reserved for usage-metric delay, already in-flight work, and control-plane
+propagation. Exhaustion makes every missing interval unavailable and requires
+declarative restoration in the next reconciled window; a vendor runaway beyond
+the shutdown reserve is an explicit residual cost risk rather than hidden
+headroom.
+
+The probe rejects a scheduled timestamp older than 60 seconds, then performs
+its authenticated idempotent no-op write with the schedule identity as the
+idempotency key. Probe identity claims are retained for the complete fixed
+31-day accounting window plus 24 hours. Only the newly committed claim
+continues to the read and result path; a replay returns the original receipt
+and exits. At most 46,080 claims of 256 encoded bytes coexist across a window
+boundary, using 11,796,480 bytes inside the existing relational and
+qualification-preload allocations. Each winning identity makes one
+non-retried conditional `PutObject` attempt with `If-None-Match: *` to its
+deterministic key in a versioned result bucket.
 The object contains at most 0.001 GB of encrypted result evidence retained for
 30 days. No alternate artifact path exists, so duplicate delivery cannot
 multiply artifact writes.
 The probe emits only `SuccessPercent`, `Duration`, and `Failed` from the bounded
-log event and has one missing-or-failed-run alarm.
+log event. Its one missing-or-failed-run alarm is high resolution: the second
+consecutive scheduled-minute failure emits the alarm signal, evaluation is
+bounded to ten seconds, and notification plus pager receipt is bounded to forty
+more.
 
 The Scheduler role may invoke only the probe function; the probe role can access
 only a dedicated fixture, emit its exact log group, and write its deterministic
@@ -599,9 +656,10 @@ credentials through workload identity and never records tokens or response
 bodies. Artifact SDK retries are disabled: a failed write makes the interval
 unavailable rather than creating another billable attempt. Its read and write
 calls count against the selected profile's API, load-balancer, and gross
-internet-egress budgets. The worksheet prices Scheduler dispatches, Lambda
-requests and duration, logs, one artifact write per admitted run, metrics, and
-the alarm without free allowances.
+internet-egress budgets. The worksheet prices intended, duplicate, and shutdown
+Scheduler/Lambda attempts, their full timeout and log envelopes, one artifact
+write per admitted identity, metrics, and the high-resolution alarm without
+free allowances.
 
 ### Correctness invariants
 
@@ -656,11 +714,14 @@ event when it identifies onset; otherwise it conservatively starts at the last
 successful one-minute external probe or integrity check before the first failed
 signal. Detection and declaration consume the same RTO. The external probe uses
 two consecutive failures; platform health signals must open an incident within
-the table's detection bound. A regional failure immediately after a successful
-probe yields failed results no later than 80 and 140 seconds after onset (one-
-minute cadence plus the 20-second timeout); alarm evaluation and paging have a
-further 60-second limit, keeping detection below four minutes. Missing the
-detection bound or the end-to-end RTO fails the objective.
+the table's detection bound. For a regional failure immediately after a
+successful probe, the next scheduled minutes begin within 60 and 120 seconds
+of onset. Scheduler can delay each target call by at most another 59 seconds,
+and the ten-second function timeout therefore yields the two failed results
+before 130 and 190 seconds. High-resolution alarm evaluation takes at most ten
+seconds and notification plus pager receipt at most forty, keeping incident
+opening below 240 seconds. Missing the detection bound or the end-to-end RTO
+fails the objective.
 
 The logical-corruption objective covers these alpha classes, each checked at
 least every 15 minutes: a workspace-scoped desired-state row updated or deleted
@@ -828,9 +889,43 @@ writer measures actual stored object bytes, including framing and encryption
 overhead. A 365-day retention interval can intersect 13 fixed 31-day accounting
 windows when writes are concentrated at their boundaries. Pricing all 13 full
 envelopes therefore caps each primary and recovery copy at 208 GB small and
-1,040 GB target without relying on smooth arrival times. Audit records are never
-sampled or dropped: exceeding the bound rejects or backpressures new work and
-surfaces a capacity condition.
+1,040 GB target without relying on smooth arrival times.
+
+Archive keys are immutable, contain a UTC creation-date partition, and are at
+most 512 encoded bytes. Both versioned archive buckets use the same signed
+lifecycle and Object Lock contract: every data version receives default
+365-day governance retention; current versions expire at 365 days,
+`NoncurrentVersionExpiration` permanently removes every resulting noncurrent
+version after one day, `ExpiredObjectDeleteMarker` removes the final marker, and
+incomplete multipart uploads abort after one day. AWS documents both the
+[versioned-bucket actions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/intro-lifecycle-rules.html)
+and that a
+[replica lifecycle honors the source object's original creation time](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-requirements.html);
+it also documents that
+[replication copies Object Lock metadata](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-managing.html).
+Batch Replication therefore resets neither Veer's retention age nor its
+storage-enforced deletion boundary. The archive writer's already-required S3
+checksum satisfies Object Lock's checksum-header upload prerequisite.
+
+Lifecycle is eventual, so it is defense in depth rather than the hard bound. An
+audited daily sweeper uses the signed date-partition retention ledger and exact
+version IDs to permanently delete eligible noncurrent versions and markers
+within 24 hours, then requires an empty `ListObjectVersions` response for that
+date prefix. A separate retention-sweeper role receives only
+`s3:ListBucketVersions`, `s3:GetObjectRetention`, and
+`s3:DeleteObjectVersion` on the one signed expired date prefix. It has no
+governance-bypass, retention-write, legal-hold, object-write, bucket-delete,
+replication, or IAM permission; S3 itself rejects deletion of an unexpired data
+version. One boundary-concentrated
+monthly envelope may be simultaneously noncurrent and covered by delete markers,
+so physical data versions plus markers cap at 518,000/2,282,000 per region.
+Marker-key storage rounds up to 0.02/0.09 GB-month per region. Conservatively
+allowing one LIST response per noncurrent version and marker plus a final empty
+proof costs 74,001/326,001 requests per region, or 148,002/652,002 across both.
+Each regional sweep commits one bounded signed summary audit event; it does not
+create per-version Veer records. Audit records are never sampled or dropped:
+exceeding the bound rejects or backpressures new work and surfaces a capacity
+condition.
 
 Each successful mutation adds one compact plan, authorization-decision, and
 operation record. Every accepted operation cancellation adds one authorization
@@ -902,7 +997,12 @@ one S3 Batch Replication job copies retained versions into a fresh versioned
 candidate bucket through a temporary exact-prefix replication rule. The
 generated list is exactly one transient manifest object in a source-region
 recovery-control prefix, is excluded from the job's own source filter, is capped
-at 8 GiB, and expires within 24 hours. Completion reporting is disabled; Veer
+at 8 GiB, and expires within 24 hours. The manifest filter admits only unexpired
+current data versions from the signed date partitions; delete-marker replication
+is disabled on the candidate rule, and noncurrent versions and markers are
+excluded. Lifecycle is paused on the source and candidate only for the
+maximum-24-hour Batch window, as AWS recommends for parity, then the signed
+rules and exact-version sweeper resume. Completion reporting is disabled; Veer
 records the job identifier and terminal status in relational audit state and
 independently authenticates every destination body as described above.
 
@@ -916,7 +1016,8 @@ Same-region validation reads at most the same 229/1,144 GB through an S3 gateway
 endpoint, so they add neither cross-region transfer nor NAT processing.
 Manifest generation scans
 481,000/2,119,000 source objects, one Batch Operations job is allowed, and its
-8 GiB 24-hour artifact rounds up to 0.26 GB-month plus one tier-one write. The
+8 GiB artifact is 8.589934592 decimal GB and, for 24 hours in a 31-day window,
+rounds up to 0.28 GB-month plus one tier-one write. The
 source and destination GETs use pinned Tier-2 rates; the destination PUT uses
 Tier-1. Candidate overlap is capped at the full retry-inclusive transfer
 envelope for 24 hours, or 7.39/36.91 GB-month. The active copy remains
@@ -937,8 +1038,9 @@ S3 replication configuration exposes one bucket-level
 [`Role`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ReplicationConfiguration.html)
 for all rules. That role is trusted only by `s3.amazonaws.com` and normally has
 only source version-for-replication reads, active-destination replication
-actions, and KMS decrypt/encrypt on the exact archive prefixes and keys. Before
-the temporary candidate rule is enabled, declarative infrastructure adds only
+actions, `s3:GetObjectRetention` and `s3:GetObjectLegalHold` on the source
+archive prefix, and KMS decrypt/encrypt on the exact archive prefixes and keys.
+Before the temporary candidate rule is enabled, declarative infrastructure adds only
 the candidate bucket/prefix and candidate-key statements. Abort removes those
 changes and verifies the prior signed baseline is restored. Promotion signs the
 candidate rule and statements as the new baseline before removing the former
@@ -948,14 +1050,16 @@ baseline. The Batch Operations role is separately trusted only by
 source archive versions, replication-configuration and inventory reads, plus
 `s3:GetObject`, `s3:GetObjectVersion`, and `s3:PutObject` only on the exact
 recovery-control manifest prefix. A separate validator role receives only
-`s3:GetObjectVersion` on the exact candidate prefix and `kms:GenerateDataKey`
-plus `kms:Decrypt` on the candidate key. A cleanup role receives
+`s3:GetObjectVersion` and `s3:GetObjectRetention` on the exact candidate prefix
+and `kms:GenerateDataKey` plus `kms:Decrypt` on the candidate key. A cleanup role receives
 `s3:ListBucketVersions` with the exact-prefix condition,
-`s3:DeleteObjectVersion` on that prefix, and `s3:DeleteBucket` only for the
-tagged candidate or retired bucket. Its session requires a signed state token
-showing either candidate abort or completed promotion; it cannot target the
-current active baseline. The job submitter can create only tagged recovery jobs
-and pass only the Batch role. Source and destination
+`s3:DeleteObjectVersion`, `s3:BypassGovernanceRetention` on that prefix, and
+`s3:DeleteBucket` only for the tagged candidate or retired bucket. Its session
+requires a signed state token showing either candidate abort or completed
+promotion, and every permanent delete explicitly supplies the governance-bypass
+header. Bucket policy denies that principal on the signed active-baseline bucket
+and prefix; it cannot alter retention or legal holds. The job submitter can
+create only tagged recovery jobs and pass only the Batch role. Source and destination
 versioning, ownership, replication status, and signed-digest verification are
 qualification gates. S3 Replication Time Control is not enabled or priced; the
 separate freshness oracle enforces Veer's accepted 30-minute bound. The workflow
@@ -1046,6 +1150,10 @@ the exercise continues.
   candidate-overlap storage, validation GET/KMS, cleanup LIST, byte, and request
   allowances are priced without free allowances. Replication lag, version
   mismatch, request volume, job status, and restore-time access are alarmed.
+- Archive retention prices the delete-marker overlap and conservative
+  exact-version LIST proof in both regions. Original replica age,
+  noncurrent-version expiry, marker removal, and the 24-hour sweeper are
+  qualification gates rather than assumptions about eventual lifecycle timing.
 - Backup storage includes the current copy and rolling 7/30/35-day changed-byte
   envelopes for recovery retention, transfer, and primary retention. The meter
   includes engine and maintenance amplification, not only accepted payloads.
@@ -1063,13 +1171,14 @@ the exercise continues.
 - Directional cross-AZ bytes are measured without netting against the
   200/2,000 GB monthly caps and their queue, database/service, and failure
   reserves. The 80% alert and 90% admission guard preserve recovery headroom.
-- The recovery-region synthetic's schedule claims, Lambda invocations and
-  duration, output bytes, single artifact attempt, and retention are hard
-  limits. Scheduler and Lambda retries are disabled; duplicate immutable
-  schedule identities exit after the idempotent write and before read, metric,
-  or artifact work. Missing runs page
-  operators and count as failed availability intervals so a broken monitor
-  cannot hide a regional outage.
+- The recovery-region synthetic's intended, duplicate, and shutdown delivery
+  partitions, Lambda invocations and duration, log/output bytes, single
+  artifact attempt, and retention are hard limits. Scheduler and Lambda retries
+  are disabled; duplicate immutable schedule identities exit after the
+  idempotent write and before read, result metric, or artifact work. Duplicate
+  exhaustion deletes only the exact schedule and reserves 10% for shutdown
+  races. Missing runs page operators and count as failed availability intervals
+  so a broken monitor cannot hide a regional outage.
 - A production profile uses one NAT path per active Availability Zone to avoid
   a cross-zone egress dependency. Developer deployments use no managed NAT.
 - Queue consumers use long polling and batching where correctness permits.
