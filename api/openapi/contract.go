@@ -19,8 +19,58 @@ const (
 	maxContractBytes = 1 << 20
 	maxJSONDepth     = 64
 	maxJSONNodes     = 50000
+	sunsetPattern    = `^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (0[1-9]|[12][0-9]|3[01]) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] GMT$`
 	timestampPattern = `^((\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|02-(0[1-9]|1\d|2[0-8])))|((\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$`
 )
+
+type operationContract struct {
+	location   string
+	writeClass string
+	parameters []string
+	responses  []string
+}
+
+var operationContracts = map[string]operationContract{
+	"listWorkspaces": {
+		location:   "GET /api/v1alpha1/workspaces",
+		parameters: []string{"VeerRequestId", "PageSize", "PageToken"},
+		responses:  []string{"200", "400", "401", "403", "429", "500", "503"},
+	},
+	"createWorkspace": {
+		location:   "POST /api/v1alpha1/workspaces",
+		writeClass: "spec",
+		parameters: []string{"VeerRequestId", "IdempotencyKey"},
+		responses:  []string{"202", "400", "401", "403", "409", "413", "415", "429", "500", "503"},
+	},
+	"getWorkspace": {
+		location:   "GET /api/v1alpha1/workspaces/{workspaceId}",
+		parameters: []string{"VeerRequestId", "WorkspaceId"},
+		responses:  []string{"200", "400", "401", "403", "404", "429", "500", "503"},
+	},
+	"replaceWorkspace": {
+		location:   "PUT /api/v1alpha1/workspaces/{workspaceId}",
+		writeClass: "spec",
+		parameters: []string{"VeerRequestId", "WorkspaceId", "IdempotencyKey", "IfMatch"},
+		responses:  []string{"202", "400", "401", "403", "404", "409", "412", "413", "415", "428", "429", "500", "503"},
+	},
+	"deleteWorkspace": {
+		location:   "DELETE /api/v1alpha1/workspaces/{workspaceId}",
+		writeClass: "delete",
+		parameters: []string{"VeerRequestId", "WorkspaceId", "IdempotencyKey", "IfMatch"},
+		responses:  []string{"202", "400", "401", "403", "404", "409", "412", "428", "429", "500", "503"},
+	},
+	"replaceWorkspaceStatus": {
+		location:   "PUT /api/v1alpha1/workspaces/{workspaceId}/status",
+		writeClass: "status",
+		parameters: []string{"VeerRequestId", "WorkspaceId", "IdempotencyKey", "IfMatch"},
+		responses:  []string{"200", "400", "401", "403", "404", "409", "412", "413", "415", "428", "429", "500", "503"},
+	},
+	"getOperation": {
+		location:   "GET /api/v1alpha1/operations/{operationId}",
+		parameters: []string{"VeerRequestId", "OperationId"},
+		responses:  []string{"200", "400", "401", "403", "404", "429", "500", "503"},
+	},
+}
 
 var httpMethods = map[string]bool{
 	"delete": true,
@@ -38,7 +88,7 @@ var pathItemMetadata = map[string]bool{
 }
 
 var (
-	lowerCamelCaseProperty = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
+	lowerCamelCaseProperty = regexp.MustCompile(`^[a-z][a-z0-9]*([A-Z][a-z0-9]+)*$`)
 	timestampValuePattern  = regexp.MustCompile(timestampPattern)
 )
 
@@ -499,7 +549,15 @@ func validateOperations(root map[string]any) error {
 			if previous, duplicate := operationIDs[operationID]; duplicate {
 				return fmt.Errorf("operationId %q duplicates %s", operationID, previous)
 			}
-			operationIDs[operationID] = strings.ToUpper(method) + " " + route
+			location := strings.ToUpper(method) + " " + route
+			expected, reviewed := operationContracts[operationID]
+			if !reviewed {
+				return fmt.Errorf("operationId %q has no reviewed contract", operationID)
+			}
+			if location != expected.location {
+				return fmt.Errorf("operationId %q must remain at %s, got %q", operationID, expected.location, location)
+			}
+			operationIDs[operationID] = location
 			for _, forbidden := range []string{"callbacks", "servers"} {
 				if _, exists := operation[forbidden]; exists {
 					return fmt.Errorf("%s %s must not define %s", strings.ToUpper(method), route, forbidden)
@@ -548,12 +606,18 @@ func validateOperations(root map[string]any) error {
 				if effectiveParameters["IdempotencyKey"] || effectiveParameters["IfMatch"] {
 					return fmt.Errorf("GET %s carries mutation headers", route)
 				}
+				if !boolKeySetEquals(effectiveParameters, expected.parameters) {
+					return fmt.Errorf("operationId %q parameter set drifted", operationID)
+				}
+				if err := validateResponseSet(operationID, responses, expected.responses); err != nil {
+					return err
+				}
 				continue
 			}
 
 			writeClass, ok := operation["x-veer-write-class"].(string)
-			if !ok || (writeClass != "spec" && writeClass != "status" && writeClass != "delete") {
-				return fmt.Errorf("%s %s has invalid write class", strings.ToUpper(method), route)
+			if !ok || writeClass != expected.writeClass {
+				return fmt.Errorf("operationId %q write class must be %q", operationID, expected.writeClass)
 			}
 			if !effectiveParameters["IdempotencyKey"] {
 				return fmt.Errorf("%s %s omits IdempotencyKey", strings.ToUpper(method), route)
@@ -586,20 +650,18 @@ func validateOperations(root map[string]any) error {
 					return fmt.Errorf("DELETE %s must not define a request body", route)
 				}
 			}
+			if !boolKeySetEquals(effectiveParameters, expected.parameters) {
+				return fmt.Errorf("operationId %q parameter set drifted", operationID)
+			}
+			if err := validateResponseSet(operationID, responses, expected.responses); err != nil {
+				return err
+			}
 		}
 	}
 
-	for operationID, wantLocation := range map[string]string{
-		"createWorkspace":        "POST /api/v1alpha1/workspaces",
-		"deleteWorkspace":        "DELETE /api/v1alpha1/workspaces/{workspaceId}",
-		"getOperation":           "GET /api/v1alpha1/operations/{operationId}",
-		"getWorkspace":           "GET /api/v1alpha1/workspaces/{workspaceId}",
-		"listWorkspaces":         "GET /api/v1alpha1/workspaces",
-		"replaceWorkspace":       "PUT /api/v1alpha1/workspaces/{workspaceId}",
-		"replaceWorkspaceStatus": "PUT /api/v1alpha1/workspaces/{workspaceId}/status",
-	} {
-		if gotLocation := operationIDs[operationID]; gotLocation != wantLocation {
-			return fmt.Errorf("operationId %q must remain at %s, got %q", operationID, wantLocation, gotLocation)
+	for operationID, expected := range operationContracts {
+		if gotLocation := operationIDs[operationID]; gotLocation != expected.location {
+			return fmt.Errorf("operationId %q must remain at %s, got %q", operationID, expected.location, gotLocation)
 		}
 	}
 
@@ -705,6 +767,18 @@ func validateResponseReferences(route, method string, responses map[string]any) 
 		if !ok || response["$ref"] != "#/components/responses/"+component {
 			return fmt.Errorf("%s %s response %s must reference %s", strings.ToUpper(method), route, status, component)
 		}
+	}
+	return nil
+}
+
+func validateResponseSet(operationID string, responses map[string]any, want []string) error {
+	for _, status := range want {
+		if _, exists := responses[status]; !exists {
+			return fmt.Errorf("operationId %q omits required response %s", operationID, status)
+		}
+	}
+	if len(responses) != len(want) {
+		return fmt.Errorf("operationId %q response set drifted", operationID)
 	}
 	return nil
 }
@@ -948,7 +1022,7 @@ func validateHeaders(headers map[string]any) error {
 			pattern: `^@[0-9]{10,12}$`,
 		},
 		"Sunset": {
-			pattern: `^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$`,
+			pattern: sunsetPattern,
 		},
 		"DeprecationLink": {
 			minimum: "1",
@@ -969,6 +1043,18 @@ func validateHeaders(headers map[string]any) error {
 			(want.maximum != "" && !numberEquals(schema["maxLength"], want.maximum)) {
 			return fmt.Errorf("%s header contract drifted", name)
 		}
+	}
+	sunset, err := mapField(headers, "Sunset")
+	if err != nil {
+		return err
+	}
+	sunsetSchema, err := mapField(sunset, "schema")
+	if err != nil {
+		return err
+	}
+	sunsetExample, exampleOK := sunsetSchema["example"].(string)
+	if sunsetSchema["x-veer-calendar-validation"] != "http-date" || !exampleOK || !validSunset(sunsetExample) {
+		return errors.New("sunset header calendar contract drifted")
 	}
 	return nil
 }
@@ -1227,8 +1313,47 @@ func validateSchemas(schemas map[string]any) error {
 			return fmt.Errorf("WorkspaceStatusWrite exposes %s", forbidden)
 		}
 	}
-	if _, exists := statusProperties["status"]; !exists {
-		return errors.New("WorkspaceStatusWrite omits status")
+	if !stringSetEquals(statusWrite["required"], []string{"apiVersion", "kind", "status"}) || len(statusProperties) != 3 {
+		return errors.New("WorkspaceStatusWrite shape drifted")
+	}
+	apiVersion, err := mapField(statusProperties, "apiVersion")
+	if err != nil {
+		return err
+	}
+	kind, err := mapField(statusProperties, "kind")
+	if err != nil {
+		return err
+	}
+	if apiVersion["type"] != "string" || apiVersion["const"] != "v1alpha1" ||
+		kind["type"] != "string" || kind["const"] != "Workspace" {
+		return errors.New("WorkspaceStatusWrite identity drifted")
+	}
+	if err := requireReference(statusProperties, "status", "#/components/schemas/WorkspaceStatus"); err != nil {
+		return fmt.Errorf("WorkspaceStatusWrite: %w", err)
+	}
+
+	labels, err := mapField(schemas, "Labels")
+	if err != nil {
+		return err
+	}
+	if labels["type"] != "object" || labels["x-veer-free-form-map"] != true ||
+		!numberEquals(labels["maxProperties"], "64") {
+		return errors.New("labels map bound drifted")
+	}
+	propertyNames, err := mapField(labels, "propertyNames")
+	if err != nil {
+		return err
+	}
+	if propertyNames["type"] != "string" || !numberEquals(propertyNames["minLength"], "1") ||
+		!numberEquals(propertyNames["maxLength"], "63") || propertyNames["pattern"] != "^[a-z][a-z0-9.-]*$" {
+		return errors.New("labels key contract drifted")
+	}
+	labelValues, err := mapField(labels, "additionalProperties")
+	if err != nil {
+		return err
+	}
+	if labelValues["type"] != "string" || !numberEquals(labelValues["maxLength"], "256") {
+		return errors.New("labels value contract drifted")
 	}
 
 	statusReceipt, err := mapField(schemas, "StatusReceipt")
@@ -1445,6 +1570,26 @@ func validTimestamp(value string) bool {
 	}
 	_, err := time.Parse("2006-01-02T15:04:05.000Z", value)
 	return err == nil
+}
+
+func validSunset(value string) bool {
+	parsed, err := time.Parse("Mon, 02 Jan 2006 15:04:05 GMT", value)
+	if err != nil {
+		return false
+	}
+	return parsed.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT") == value
+}
+
+func boolKeySetEquals(got map[string]bool, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for _, key := range want {
+		if !got[key] {
+			return false
+		}
+	}
+	return true
 }
 
 func mapField(parent map[string]any, name string) (map[string]any, error) {

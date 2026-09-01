@@ -201,6 +201,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "omits required response 400",
 		},
 		{
+			name: "point read omits not found response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get", "responses")
+				delete(responses, "404")
+			},
+			message: "operationId \"getWorkspace\" omits required response 404",
+		},
+		{
+			name: "operation read omits not found response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/operations/{operationId}", "get", "responses")
+				delete(responses, "404")
+			},
+			message: "operationId \"getOperation\" omits required response 404",
+		},
+		{
+			name: "addressed mutation omits not found response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "put", "responses")
+				delete(responses, "404")
+			},
+			message: "operationId \"replaceWorkspace\" omits required response 404",
+		},
+		{
 			name: "create omits request too large response",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "post", "responses")
@@ -243,6 +267,16 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "omits IfMatch",
 		},
 		{
+			name: "operation route omits path identifier",
+			mutate: func(root map[string]any) {
+				item := nestedMap(t, root, "paths", "/api/v1alpha1/operations/{operationId}")
+				item["parameters"] = []any{
+					map[string]any{"$ref": "#/components/parameters/VeerRequestId"},
+				}
+			},
+			message: "operationId \"getOperation\" parameter set drifted",
+		},
+		{
 			name: "missing stale precondition response",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "put", "responses")
@@ -264,7 +298,23 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				put := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put")
 				put["x-veer-write-class"] = "spec"
 			},
-			message: "status route is not classified",
+			message: "operationId \"replaceWorkspaceStatus\" write class must be \"status\"",
+		},
+		{
+			name: "spec replacement reclassified",
+			mutate: func(root map[string]any) {
+				put := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "put")
+				put["x-veer-write-class"] = "delete"
+			},
+			message: "operationId \"replaceWorkspace\" write class must be \"spec\"",
+		},
+		{
+			name: "delete reclassified",
+			mutate: func(root map[string]any) {
+				deleteOperation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "delete")
+				deleteOperation["x-veer-write-class"] = "status"
+			},
+			message: "operationId \"deleteWorkspace\" write class must be \"delete\"",
 		},
 		{
 			name: "status payload can mutate spec",
@@ -281,6 +331,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(statusWrite, "type")
 			},
 			message: "schema with properties must declare type object",
+		},
+		{
+			name: "status payload makes status optional",
+			mutate: func(root map[string]any) {
+				statusWrite := nestedMap(t, root, "components", "schemas", "WorkspaceStatusWrite")
+				statusWrite["required"] = []any{"apiVersion", "kind"}
+			},
+			message: "WorkspaceStatusWrite shape drifted",
+		},
+		{
+			name: "status payload changes status schema",
+			mutate: func(root map[string]any) {
+				status := nestedMap(t, root, "components", "schemas", "WorkspaceStatusWrite", "properties", "status")
+				status["$ref"] = "#/components/schemas/WorkspaceSpec"
+			},
+			message: "status must reference #/components/schemas/WorkspaceStatus",
+		},
+		{
+			name: "status payload changes identity",
+			mutate: func(root map[string]any) {
+				kind := nestedMap(t, root, "components", "schemas", "WorkspaceStatusWrite", "properties", "kind")
+				kind["const"] = "Operation"
+			},
+			message: "WorkspaceStatusWrite identity drifted",
 		},
 		{
 			name: "status route uses desired-state schema",
@@ -425,6 +499,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(schema, "pattern")
 			},
 			message: "Sunset header contract drifted",
+		},
+		{
+			name: "sunset header impossible example",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "Sunset", "schema")
+				schema["example"] = "Sun, 31 Feb 2026 99:99:99 GMT"
+			},
+			message: "sunset header calendar contract drifted",
 		},
 		{
 			name: "short operation Location ID",
@@ -579,12 +661,44 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: `schema property "resource_version" is not lowerCamelCase`,
 		},
 		{
+			name: "acronym run schema property",
+			mutate: func(root map[string]any) {
+				properties := nestedMap(t, root, "components", "schemas", "Operation", "properties")
+				properties["requestID"] = map[string]any{"type": "string"}
+			},
+			message: `schema property "requestID" is not lowerCamelCase`,
+		},
+		{
 			name: "map marker removed",
 			mutate: func(root map[string]any) {
 				labels := nestedMap(t, root, "components", "schemas", "Labels")
 				delete(labels, "x-veer-free-form-map")
 			},
 			message: "map schema lacks x-veer-free-form-map",
+		},
+		{
+			name: "labels property count bound removed",
+			mutate: func(root map[string]any) {
+				labels := nestedMap(t, root, "components", "schemas", "Labels")
+				delete(labels, "maxProperties")
+			},
+			message: "labels map bound drifted",
+		},
+		{
+			name: "labels key grammar relaxed",
+			mutate: func(root map[string]any) {
+				propertyNames := nestedMap(t, root, "components", "schemas", "Labels", "propertyNames")
+				delete(propertyNames, "pattern")
+			},
+			message: "labels key contract drifted",
+		},
+		{
+			name: "labels value bound relaxed",
+			mutate: func(root map[string]any) {
+				values := nestedMap(t, root, "components", "schemas", "Labels", "additionalProperties")
+				values["maxLength"] = json.Number("4096")
+			},
+			message: "labels value contract drifted",
 		},
 		{
 			name: "error media type",
@@ -645,6 +759,32 @@ func TestTimestampValues(t *testing.T) {
 			t.Parallel()
 			if got := validTimestamp(test.value); got != test.valid {
 				t.Fatalf("validTimestamp(%q) = %t, want %t", test.value, got, test.valid)
+			}
+		})
+	}
+}
+
+func TestSunsetValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "ordinary date", value: "Tue, 01 Sep 2026 21:00:00 GMT", valid: true},
+		{name: "leap day", value: "Sat, 29 Feb 2020 00:00:00 GMT", valid: true},
+		{name: "weekday mismatch", value: "Mon, 01 Sep 2026 21:00:00 GMT", valid: false},
+		{name: "impossible February date", value: "Tue, 31 Feb 2026 21:00:00 GMT", valid: false},
+		{name: "invalid day zero", value: "Sun, 00 Feb 2026 21:00:00 GMT", valid: false},
+		{name: "invalid clock", value: "Tue, 01 Sep 2026 99:99:99 GMT", valid: false},
+		{name: "obsolete HTTP date", value: "Tuesday, 01-Sep-26 21:00:00 GMT", valid: false},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := validSunset(test.value); got != test.valid {
+				t.Fatalf("validSunset(%q) = %t, want %t", test.value, got, test.valid)
 			}
 		})
 	}

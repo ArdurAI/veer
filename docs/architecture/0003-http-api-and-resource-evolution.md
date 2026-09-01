@@ -317,6 +317,11 @@ A deprecated operation or representation returns all of:
 - `Link` with `rel="deprecation"` to migration documentation and, when
   applicable, a sunset link.
 
+`Sunset` is emitted only as an IMF-fixdate in GMT. Implementations parse and
+round-trip the value before sending or accepting it so impossible calendar
+dates, invalid clock fields, and a weekday that disagrees with the date are
+rejected.
+
 The deprecation date is no later than the first production response carrying
 the deprecated behavior. Sunset is at least 90 days later. Removal cannot
 occur before that date, and a breaking replacement uses a new route version.
