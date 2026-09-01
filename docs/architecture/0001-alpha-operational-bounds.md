@@ -128,6 +128,8 @@ an explicit quota response; they must not cause silent data loss.
 | Accepted desired-state mutations/minute, steady | 6 | 30 | 150 |
 | Accepted desired-state mutations/minute, 15-minute peak | 12 | 120 | 600 |
 | New TLS connections/second | local | 20 | 100 |
+| Encoded server TLS handshake bytes/new connection, maximum | local | 8 KiB | 8 KiB |
+| Server TLS handshake bytes/month, GB | 0 | 14 | 70 |
 | Active TLS connections, one-minute sample | local | 2,500 | 12,000 |
 | Load-balancer processed bytes/hour, GB | local | 0.5 | 4 |
 | Billable load-balancer rule evaluations/second | local | 500 | 4,000 |
@@ -155,13 +157,13 @@ an explicit quota response; they must not cause silent data loss.
 | Billable database surplus CPU credits/month, vCPU-hours | 0 | 2,976 | 0 |
 | Audit events/month | 100,000 | 9,000,000 | 52,000,000 |
 | Archived audit and evidence bytes/31-day month, GB | 0.4 | 16 | 80 |
-| Archive objects written/month | 2,000 | 37,000 | 160,000 |
-| Archive S3 tier-1 requests/month, both regions | 6,000 | 111,000 | 480,000 |
-| Archive KMS requests/month, both regions | 8,000 | 148,000 | 640,000 |
+| Archive objects written/month | 2,000 | 37,000 | 163,000 |
+| Archive S3 tier-1 requests/month, both regions | 6,000 | 111,000 | 489,000 |
+| Archive KMS requests/month, both regions | 8,000 | 148,000 | 652,000 |
 | Normal archive cross-region transfer/month, GB | 0 | 16 | 80 |
-| Retained archive objects/region, maximum | local | 481,000 | 2,080,000 |
-| Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,288,000 each |
-| Full-reseed KMS decrypt plus encrypt requests | 0 | 1,060,000 | 4,576,000 |
+| Retained archive objects/region, maximum | local | 481,000 | 2,119,000 |
+| Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,331,000 each |
+| Full-reseed KMS decrypt plus encrypt requests | 0 | 1,060,000 | 4,662,000 |
 | Full-reseed cross-region transfer, GB | 0 | 229 | 1,144 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Database changed blocks/rolling 7 days, GiB | 1.17 | 11.67 | 116.67 |
@@ -282,9 +284,11 @@ target result cannot substitute for the small profile:
    decisions, audit records, integrity-anchor rows, tombstones, idempotency
    rows, and indexes across their full online-retention windows until relational
    occupancy is 40 GiB small or 400 GiB target (80% of provisioned storage).
-   Seed both the primary and recovery archives to 166.4 GB for small or 832 GB
-   for target. The timed run must remain below 90% relational occupancy, leaving
-   10% for maintenance and recovery work.
+   Seed both the primary and recovery archives to 166.4 GB and 384,800 retained
+   objects for small or 832 GB and 1,695,200 retained objects for target,
+   distributed across all 13 retention envelopes and every record stream. The
+   timed run must remain below 90% relational occupancy, leaving 10% for
+   maintenance and recovery work.
 2. Run that profile for 24 hours. In each hour, a 15-minute peak replaces steady
    traffic; the generator yields two calls per minute to the external synthetic.
    The deterministic provider fake completes operations within 30 seconds small
@@ -327,23 +331,34 @@ target result cannot substitute for the small profile:
    synthetic and acknowledged-record completeness oracle. End-to-end recovery
    must finish within four hours and the recovered cutoff must be no older than
    30 minutes.
-8. In an isolated accounting test, drive each cross-AZ byte partition through
+8. In an isolated archive-recovery exercise, remove the preloaded recovery
+   prefix and rebuild it from the primary archive. Traverse and validate every
+   preloaded manifest and object, including both byte and object cardinality;
+   inject bounded GET, PUT, and KMS retries; and verify the source-read,
+   destination-write, KMS, and transfer counters. Drive each counter through
+   80%, 90%, and 100% with synthetic accounting, verify that another attempt is
+   stopped at exhaustion, and prove that a failed partial prefix is removed
+   before retry.
+9. In an isolated accounting test, drive each cross-AZ byte partition through
    its 80%, 90%, and 100% thresholds and verify alert, admission-control, and
    qualification-failure behavior without sending equivalent billable traffic.
-9. In a separate backup-accounting test, include user writes, indexes, engine
+10. In a separate backup-accounting test, include user writes, indexes, engine
    logs, maintenance, and migration amplification. Place permitted bursts on
    both sides of a former calendar boundary, drive each rolling 7-, 30-, and
    35-day changed-block envelope through 80%, 90%, and 100%, and verify alert,
    admission fencing, maintenance deferral, exact reserve accounting, and hard-
    cap failure. Reset and re-seed after the test.
-10. Run three load-balancer windows: normal keep-alive reuse; connection churn at
-   20/100 new TLS connections per second; and an idle-connection soak at
-   2,500/12,000 active connections. Verify processed bytes, billable rule
-   evaluations, and every hourly LCU dimension remain inside 1/5 LCUs.
-11. Feed deterministic incompressible logs at the ingestion limits and verify
+11. Run three load-balancer windows: normal keep-alive reuse; connection churn
+    at 20/100 new TLS connections per second; and an idle-connection soak at
+    2,500/12,000 active connections. Verify every encoded server handshake is at
+    most 8 KiB and drive the 14/70 GB monthly handshake-byte counter through its
+    80%, 90%, and 100% paths with synthetic accounting. Verify connection
+    admission, processed bytes, billable rule evaluations, and every hourly LCU
+    dimension remain inside 1/5 LCUs.
+12. Feed deterministic incompressible logs at the ingestion limits and verify
     retained-byte accounting against two boundary-concentrated 31-day envelopes,
     14/30-day expiry, and the 14/135/1,343 GB storage caps.
-12. Report every SLI and bounded capacity/cost dimension for the entire run and
+13. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
 
@@ -393,11 +408,19 @@ steady traffic, the total API envelope is exactly 23,436,000 small and
 117,180,000 target requests. The synthetic supplies 89,280 calls, leaving
 23,346,720 and 117,090,720 generated calls for the fixed mix.
 At 70% read responses averaging 6.34 KiB, all other response bodies capped at 1
-KiB, and a conservative 1 KiB per-request header and TLS allowance, gross
-egress is 137.70 GB small and 688.52 GB target. Adding bounded outbound provider
-traffic yields 165.59/921.64 GB, fitting the worksheet's rounded 200/1,000 GB
-limits. Provider calls and cost-incurring cloud fixtures are capped and
-explicitly enabled; public CI uses deterministic fakes.
+KiB, and a maximum 1 KiB of response headers per request, HTTP response egress is
+137.70 GB small and 688.52 GB target. Each encoded server TLS handshake flight,
+including its certificate chain, is rejected at configuration time above 8 KiB.
+A durable edge meter reserves the encoded flight for each new connection and
+caps monthly server-to-client handshake bytes at 14/70 GB. Its 80% threshold
+alerts and forces aggressive keep-alive reuse; at 90%, edge admission preserves
+existing connections and rejects new handshakes before the server flight; 100%
+fails qualification. Instantaneous 20/100-per-second burst buckets remain
+separate. A selected ingress that cannot expose and enforce both counters cannot
+qualify. Adding handshake and bounded outbound provider traffic yields
+179.59/991.64 GB, fitting the worksheet's 200/1,000 GB limits. Provider calls
+and cost-incurring cloud fixtures are capped and explicitly enabled; public CI
+uses deterministic fakes.
 
 The reference Application Load Balancer terminates ECDSA P-256 or RSA-2048 TLS
 and uses container or IP targets without Target Optimizer. Under the
@@ -620,7 +643,7 @@ security audit event.
 Canonical audit events are at most 16 KiB before archive compression and must
 average no more than 1,000 bytes at the full event count. This allocates at most
 9 GB/month small and 52 GB/month target to audit records. After the compact
-non-audit records below, 3.26 GB and 9.27 GB remain inside the combined 16 GB and
+non-audit records below, 3.03 GB and 8.09 GB remain inside the combined 16 GB and
 80 GB archive-ingress caps for recovery evidence and framing. The archive
 writer measures actual stored object bytes, including framing and encryption
 overhead. A 365-day retention interval can intersect 13 fixed 31-day accounting
@@ -631,14 +654,17 @@ sampled or dropped: exceeding the bound rejects or backpressures new work and
 surfaces a capacity condition.
 
 Each successful mutation adds one compact plan, authorization-decision, and
-operation record; each accepted operation cancellation adds one authorization
-decision and one operation transition. That is 40 records per complete
-100-request cycle, or 9,338,680 small and 46,836,280 target non-audit records.
-Their
-canonical archive representation is capped at 4 KiB and must average at most
-400 bytes, consuming at most 3.74 GB and 18.73 GB inside the non-audit byte
-allocations. Larger evidence is chunked and every chunk counts as another
-record.
+operation record. Every accepted operation cancellation adds one authorization
+decision and at least one operation transition. The interruptible half moves
+directly to `canceled`; every non-interruptible cancellation is conservatively
+budgeted for both `cancel-pending` and terminal `canceled`, with the odd extra
+cancellation assigned to that half. The 1,167,335/5,854,535 monthly
+cancellations therefore add 583,668/2,927,268 transitions beyond the former
+40-record-per-cycle baseline, producing 9,922,348 small and 49,763,548 target
+non-audit records. Their canonical archive representation is capped at 4 KiB
+and must average at most 400 bytes, consuming at most 3.97 GB and 19.91 GB inside
+the non-audit byte allocations. Larger evidence is chunked and every chunk
+counts as another record.
 
 The archive writer fills an object until it contains 1,000 records, the next
 record would exceed the 8 MiB compressed-object limit, or the oldest buffered
@@ -653,18 +679,18 @@ with buffering, the archive path completes within 19 minutes, before the
 and fails qualification before the 30-minute hard bound.
 
 At 1,000 records per object plus no more than 4,464 timer flushes per stream,
-the fixed non-audit workload requires at most 13,803 and 51,301 objects. Audit
+the fixed non-audit workload requires at most 14,387 and 54,228 objects. Audit
 packing reserves 192 KiB of every 8 MiB object for framing, compression
 expansion, and encryption, so at most 500 maximum-size 16 KiB records share an
 object. Including timer flushes, audit requires at most 22,464 and 108,464
-objects. The combined worst cases are therefore 36,267 and 159,765, fitting
-monthly caps of 37,000 and 160,000. Each profile budgets three S3 tier-1 requests
+objects. The combined worst cases are therefore 36,851 and 162,692, fitting
+monthly caps of 37,000 and 163,000. Each profile budgets three S3 tier-1 requests
 and four KMS requests per monthly object across primary write, recovery
 replication, retries, manifest/list work, and validation.
 
-Thirteen retained envelopes contain at most 481,000/2,080,000 objects per
+Thirteen retained envelopes contain at most 481,000/2,119,000 objects per
 region. A full reseed reserves at least 10% retry headroom, rounding the small
-allowance up: 530,000/2,288,000 source GETs, the same number of destination PUTs,
+allowance up: 530,000/2,331,000 source GETs, the same number of destination PUTs,
 two KMS operations per attempt, and 229/1,144 GB cross-region transfer. The
 source GET uses the pinned Tier-2 rate; the destination PUT uses Tier-1. The
 primary copy remains authoritative while an empty recovery prefix is rebuilt;
@@ -688,9 +714,9 @@ resources, and `us-west-2` recovery storage.
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
 | Small production | USD 971.97 | USD 1,000.00 | USD 28.03 |
-| Target-scale qualification | USD 2,635.74 | USD 2,650.00 | USD 14.26 |
+| Target-scale qualification | USD 2,636.31 | USD 2,650.00 | USD 13.69 |
 
-The target reference consumes 99.46% of its ceiling after conservatively
+The target reference consumes 99.48% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional recurring target resource may be added without
 reducing another input or approving a replacement ADR.

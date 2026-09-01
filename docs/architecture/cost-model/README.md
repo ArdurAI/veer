@@ -54,6 +54,8 @@ does not contact AWS or read environment credentials.
 | Encoded queue message body hard limit | 2 KiB | 2 KiB |
 | Aggregate encoded queue body byte limit | 40 GB | 200 GB |
 | New TLS connections/second | 20 | 100 |
+| Encoded server TLS handshake bytes/new connection | 8 KiB | 8 KiB |
+| Server TLS handshake bytes/month | 14 GB | 70 GB |
 | Active TLS connections, one-minute sample | 2,500 | 12,000 |
 | ALB processed bytes/hour | 0.5 GB | 4 GB |
 | Billable rule evaluations/second | 500 | 4,000 |
@@ -62,7 +64,7 @@ does not contact AWS or read environment credentials.
 | Derived provider traffic through NAT | 111.54 GB | 932.51 GB |
 | Telemetry/queue/other AWS-service NAT wire caps | 81/80/20 GB | 806/400/100 GB |
 | Billable NAT processed data | 300 GB | 2,250 GB |
-| Derived client plus provider-request egress | 165.59 GB | 921.64 GB |
+| Derived client, handshake, and provider-request egress | 179.59 GB | 991.64 GB |
 | Billable internet egress with no free allowance | 200 GB | 1,000 GB |
 | Billable directional cross-AZ transfer | 200 GB | 2,000 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
@@ -70,15 +72,15 @@ does not contact AWS or read environment credentials.
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Stored archive ingress per 31-day month | 16 GB | 80 GB |
-| Archive objects written/month | 37,000 | 160,000 |
-| Normal S3 tier-1 archive requests, both regions | 111,000 | 480,000 |
-| Normal KMS archive requests, both regions | 148,000 | 640,000 |
+| Archive objects written/month | 37,000 | 163,000 |
+| Normal S3 tier-1 archive requests, both regions | 111,000 | 489,000 |
+| Normal KMS archive requests, both regions | 148,000 | 652,000 |
 | Encrypted primary archive/object storage | 208 GB | 1,040 GB |
 | Encrypted recovery archive/object storage | 208 GB | 1,040 GB |
 | Normal archive cross-region transfer | 16 GB | 80 GB |
-| Retained archive objects per region | 481,000 | 2,080,000 |
-| Full-reseed source GET/destination PUT attempts | 530,000 each | 2,288,000 each |
-| Full-reseed KMS decrypt/encrypt requests | 1,060,000 | 4,576,000 |
+| Retained archive objects per region | 481,000 | 2,119,000 |
+| Full-reseed source GET/destination PUT attempts | 530,000 each | 2,331,000 each |
+| Full-reseed KMS decrypt/encrypt requests | 1,060,000 | 4,662,000 |
 | Full-reseed cross-region transfer | 229 GB | 1,144 GB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
 | Secrets Manager API requests, recovery region | 5,000 | 50,000 |
@@ -157,13 +159,14 @@ GB in each region, because a 365-day retention interval can intersect 13 windows
 under boundary-concentrated traffic. The 9/52 million event limits include one
 record per provider mutation attempt. Worst-case audit packing uses 500 records
 per object to reserve 192 KiB for framing, compression expansion, and
-encryption. Audit and compact non-audit multiplicity yields monthly caps of
-37,000/160,000 objects, 111,000/480,000 normal S3 requests across both regions,
-and 148,000/640,000 normal KMS requests.
+encryption. Audit and compact non-audit multiplicity, including both transitions
+for every non-interruptible cancellation, yields monthly caps of 37,000/163,000
+objects, 111,000/489,000 normal S3 requests across both regions, and
+148,000/652,000 normal KMS requests.
 
-Thirteen retained envelopes cap each region at 481,000/2,080,000 objects. A
+Thirteen retained envelopes cap each region at 481,000/2,119,000 objects. A
 normal month prices 16/80 GB of replication transfer. A full recovery reseed
-separately prices 530,000/2,288,000 source GET attempts, the same number of
+separately prices 530,000/2,331,000 source GET attempts, the same number of
 destination PUT attempts, two KMS requests per attempt, and 229/1,144 GB
 transferred, all including at least 10% retry headroom and a rounded-up small
 allowance. This separation prevents normal monthly work from hiding recovery
@@ -173,10 +176,13 @@ operation reads Secrets Manager.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
-at no more than 1 KiB, and 1 KiB of header/TLS allowance for every request.
+at no more than 1 KiB, and 1 KiB of response-header allowance for every request.
 The 23,436,000/117,180,000 total API envelopes already contain the external
-synthetic. Adding bounded outbound provider traffic yields 165.59/921.64 GB;
-the worksheet prices 200/1,000 GB.
+synthetic. Response bodies and one KiB of response headers consume
+137.70/688.52 GB. The ingress enforces an eight KiB encoded server-handshake
+flight and reserves 14/70 GB of monthly handshake bytes while retaining the
+20/100-per-second burst limit. Adding bounded outbound provider traffic yields
+179.59/991.64 GB; the worksheet prices 200/1,000 GB.
 
 The one-minute recovery-region canary uses 44,640 runs in a 744-hour month. Its
 dependent Lambda, log, S3 artifact, three-metric, and one-alarm quantities use
