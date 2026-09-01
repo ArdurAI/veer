@@ -66,12 +66,12 @@ expect_rejection() {
 "$script_dir/verify.sh" >/dev/null
 
 new_fixture
-rewrite_threat_field TM-001 9 '-'
+rewrite_threat_field TM-001 12 '-'
 expect_rejection 'missing high-risk mitigation' \
   'critical/high threat requires a mitigation and linked follow-up'
 
 new_fixture
-rewrite_threat_field TM-001 10 'OWN-UNDECLARED'
+rewrite_threat_field TM-001 13 'OWN-UNDECLARED'
 expect_rejection 'undeclared control owner' 'undeclared owner OWN-UNDECLARED'
 
 new_fixture
@@ -92,22 +92,22 @@ expect_rejection 'missing required data class' \
   'missing required data class DC-PERSONAL'
 
 new_fixture
-rewrite_threat_field TM-001 14 'docs/security/model.md:9999'
+rewrite_threat_field TM-001 17 'docs/security/model.md:9999'
 expect_rejection 'stale source citation' \
   'citation range is outside the target: docs/security/model.md:9999'
 
 new_fixture
-rewrite_threat_field TM-001 14 'docs/security/model.md:1-9999'
+rewrite_threat_field TM-001 17 'docs/security/model.md:1-9999'
 expect_rejection 'stale source citation range endpoint' \
   'citation range is outside the target: docs/security/model.md:1-9999'
 
 new_fixture
-rewrite_threat_field TM-001 14 'docs/security/../security/model.md:1'
+rewrite_threat_field TM-001 17 'docs/security/../security/model.md:1'
 expect_rejection 'citation parent traversal' \
   'unsafe citation path: docs/security/../security/model.md:1'
 
 new_fixture
-rewrite_threat_field TM-001 14 'docs/security/does-not-exist.md'
+rewrite_threat_field TM-001 17 'docs/security/does-not-exist.md'
 expect_rejection 'incomplete citation syntax' \
   'evidence must contain only complete repository documentation citations'
 
@@ -199,6 +199,19 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  /^\| API and GitOps edge \|/ {
+      sub(/docs\/architecture\/overview[.]md:5-24/, "docs/architecture/overview.md:5-24%20bogus")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'documentation citation with a noncanonical suffix' \
+  'readable model contains malformed documentation citation'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / { next }
   { print }
 ' "$model" >"$rewritten_model"
@@ -276,13 +289,80 @@ expect_rejection 'readable and ledger mitigation mismatch' \
   'ledger mitigation does not match readable attacker story for TM-001'
 
 new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Forged, replayed, or misbound OIDC identity/, "Only correctly validated OIDC identity")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger scenario mismatch' \
+  'ledger scenario does not match readable attacker story for TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/ACT-NET gains a valid Veer principal or another audience.s authority[.]/, "ACT-NET gains no authority.")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger capability-gain mismatch' \
+  'ledger capability gain does not match readable attacker story for TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Public API and incorrect issuer, audience, signature, algorithm, expiry, JWKS, or replay handling/, "No attacker-controlled prerequisite")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger prerequisites mismatch' \
+  'ledger prerequisites do not match readable attacker story for TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Unauthorized workspace read or mutation/, "No security impact")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger impact mismatch' \
+  'ledger impact does not match readable attacker story for TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| Medium \| \*\*TM-017 / { next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+ledger="$test_root/docs/security/threats.tsv"
+rewritten="$test_root/threats.tsv"
+LC_ALL=C awk -F '\t' '$1 != "TM-017" { print }' "$ledger" >"$rewritten"
+mv "$rewritten" "$ledger"
+expect_rejection 'missing STRIDE denial-of-service coverage' \
+  'missing STRIDE category coverage: Denial of service'
+
+new_fixture
 rewrite_threat_field TM-014 6 'ACT-MEMBER'
 expect_rejection 'attacker story and ledger actor mismatch' \
   'ledger attackers do not match readable actor set for TM-014'
 
 new_fixture
-rewrite_threat_field TM-001 9 ' '
-expect_rejection 'whitespace-only high-risk mitigation' 'empty required field 9'
+rewrite_threat_field TM-001 12 ' '
+expect_rejection 'whitespace-only high-risk mitigation' 'empty required field 12'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -540,6 +620,17 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  /^\| Credential broker and provider adapters \|/ { next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'missing required architecture component' \
+  'missing canonical component Credential broker and provider adapters'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   $0 == "### Workspace isolation assumptions" { skip = 1; next }
   $0 == "### Provider credential flow and blast radius" { skip = 0 }
   !skip { print }
@@ -592,6 +683,26 @@ LC_ALL=C awk '
 mv "$rewritten_model" "$model"
 expect_rejection 'unknown issue reference in readable prose' \
   'unknown readable issue reference #9999'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  { sub(/Issue #13 controls bootstrap/, "Issue #0 controls bootstrap"); print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'zero issue reference in readable prose' \
+  'malformed readable issue reference #0'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  { sub(/Issue #13 controls bootstrap/, "Issue #01 controls bootstrap"); print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'leading-zero issue reference in readable prose' \
+  'malformed readable issue reference #01'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -671,12 +782,12 @@ expect_rejection 'undeclared trust-boundary verification owner' \
   'undeclared trust-boundary owner OWN-DOES-NOT-EXIST for TB-01'
 
 new_fixture
-rewrite_threat_field TM-001 11 'https://github.com/ArdurAI/veer/issues/0'
+rewrite_threat_field TM-001 14 'https://github.com/ArdurAI/veer/issues/0'
 expect_rejection 'zero issue target' \
   'follow_up must contain exact Veer issue URLs'
 
 new_fixture
-rewrite_threat_field TM-001 11 'https://github.com/ArdurAI/veer/issues/9999'
+rewrite_threat_field TM-001 14 'https://github.com/ArdurAI/veer/issues/9999'
 expect_rejection 'unknown issue target' \
   'follow_up must contain exact Veer issue URLs'
 
@@ -917,6 +1028,18 @@ printf '%s\n' \
   '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
 expect_rejection 'indented ATX duplicate canonical section' \
   'duplicate visible heading: ### Control owners'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  'Attack surface, mitigations, and attacker stories' \
+  '---' \
+  '| Priority | Conflicting story | Alternate evidence |' \
+  '| --- | --- | --- |' \
+  '| High | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'Setext duplicate canonical section' \
+  'duplicate visible heading: ## Attack surface, mitigations, and attacker stories'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"

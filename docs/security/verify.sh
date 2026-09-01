@@ -399,9 +399,45 @@ write_visible_markdown "$model_file" "$visible_model_file"
 write_visible_markdown "$summary_file" "$visible_summary_file"
 
 LC_ALL=C awk '
-  /^##+ / && seen[$0]++ {
-      print FILENAME ":" FNR ": duplicate visible heading: " $0 > "/dev/stderr"
-      failed = 1
+  function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+  }
+  function setext_level(line, stripped, leading_spaces) {
+      stripped = line
+      leading_spaces = 0
+      while (leading_spaces < 3 && substr(stripped, 1, 1) == " ") {
+          stripped = substr(stripped, 2)
+          leading_spaces++
+      }
+      if (substr(stripped, 1, 1) == " ") {
+          return 0
+      }
+      if (stripped ~ /^=+[[:space:]]*$/) {
+          return 1
+      }
+      if (stripped ~ /^-+[[:space:]]*$/) {
+          return 2
+      }
+      return 0
+  }
+  function record_heading(heading) {
+      if (seen[heading]++) {
+          print FILENAME ":" FNR ": duplicate visible heading: " heading > "/dev/stderr"
+          failed = 1
+      }
+  }
+  {
+      if ($0 ~ /^##+ /) {
+          record_heading($0)
+      }
+      level = setext_level($0)
+      setext_text = trim(previous_line)
+      if (level && setext_text != "") {
+          record_heading((level == 1 ? "# " : "## ") setext_text)
+      }
+      previous_line = $0
   }
   END { exit failed ? 1 : 0 }
 ' "$visible_model_file" || fail 'readable model contains duplicate canonical sections'
@@ -427,6 +463,15 @@ LC_ALL=C awk -v issue_inventory="$issue_inventory_file" '
       close(issue_inventory)
   }
   {
+      issue_token_remaining = $0
+      while (match(issue_token_remaining, /#[0-9][A-Za-z0-9_-]*/)) {
+          issue_token = substr(issue_token_remaining, RSTART, RLENGTH)
+          if (issue_token !~ /^#[1-9][0-9]*$/) {
+              print FILENAME ":" FNR ": malformed readable issue reference " issue_token > "/dev/stderr"
+              failed = 1
+          }
+          issue_token_remaining = substr(issue_token_remaining, RSTART + RLENGTH)
+      }
       remaining = $0
       while (match(remaining, /#[1-9][0-9]* through #[1-9][0-9]*/)) {
           range = substr(remaining, RSTART, RLENGTH)
@@ -699,6 +744,18 @@ BEGIN {
         known_issue_count++
     }
     close(issue_inventory)
+    required_component["API and GitOps edge"] = 1
+    required_component["Identity and policy"] = 1
+    required_component["PostgreSQL state store"] = 1
+    required_component["Reconciliation queue and worker"] = 1
+    required_component["Credential broker and provider adapters"] = 1
+    required_component["Audit, telemetry, and archive"] = 1
+    required_component["Migration, backup, and recovery tooling"] = 1
+    required_component["Build and release path"] = 1
+    required_component_count = 8
+    for (required_threat_index = 1; required_threat_index <= 21; required_threat_index++) {
+        required_threat[sprintf("TM-%03d", required_threat_index)] = 1
+    }
 }
 FNR == NR {
     if ($0 ~ /^##+ /) {
@@ -827,6 +884,13 @@ FNR == NR {
             error("invalid required cells in canonical components row")
             next
         }
+        component_name = trim(cells[2])
+        if (!(component_name in required_component)) {
+            error("unexpected canonical component " component_name)
+        }
+        if (components[component_name]++) {
+            error("duplicate canonical component " component_name)
+        }
         component_rows++
         if (!has_complete_citation(trim(cells[4]))) {
             error("component row lacks a complete source citation")
@@ -917,6 +981,25 @@ FNR == NR {
             error("duplicate readable attacker-story row " threat_id)
         }
         model_risk[threat_id] = tolower(trim(cells[2]))
+        story_contract = trim(cells[3])
+        story_prefix = "**" threat_id " — "
+        if (substr(story_contract, 1, length(story_prefix)) != story_prefix) {
+            error("invalid readable scenario prefix for " threat_id)
+        } else {
+            story_contract = substr(story_contract, length(story_prefix) + 1)
+            story_close_position = index(story_contract, ".** ")
+            if (!story_close_position) {
+                error("invalid readable scenario boundary for " threat_id)
+            } else {
+                model_scenario[threat_id] = substr(story_contract, 1, story_close_position - 1)
+                model_capability_gain[threat_id] = substr(story_contract, story_close_position + 4)
+                if (model_scenario[threat_id] == "" || model_capability_gain[threat_id] == "") {
+                    error("empty readable scenario contract for " threat_id)
+                }
+            }
+        }
+        model_prerequisites[threat_id] = trim(cells[4])
+        model_impact[threat_id] = trim(cells[5])
         model_existing_controls[threat_id] = trim(cells[6])
         model_mitigation[threat_id] = trim(cells[7])
         if (!record_readable_attackers(trim(cells[3]), threat_id)) {
@@ -948,7 +1031,7 @@ FNR == 1 {
             used_owners[boundary_owner[boundary_id]] = 1
         }
     }
-    expected = "id\tstride\trisk\tassets\tboundary\tattackers\tscenario\texisting_controls\tmitigation\towner\tfollow_up\tverification\tresidual_risk\tevidence"
+    expected = "id\tstride\trisk\tassets\tboundary\tattackers\tscenario\tcapability_gain\tprerequisites\timpact\texisting_controls\tmitigation\towner\tfollow_up\tverification\tresidual_risk\tevidence"
     if ($0 != expected) {
         error("unexpected threat ledger header")
     }
@@ -964,8 +1047,8 @@ FNR == 1 {
     risks["low"] = 1
     next
 }
-NF != 14 {
-    error("expected 14 tab-separated threat fields")
+NF != 17 {
+    error("expected 17 tab-separated threat fields")
     next
 }
 {
@@ -981,6 +1064,8 @@ NF != 14 {
     }
     if (!($2 in stride)) {
         error("invalid STRIDE category " $2)
+    } else {
+        used_stride[$2] = 1
     }
     if (!($3 in risks)) {
         error("invalid risk " $3)
@@ -988,10 +1073,22 @@ NF != 14 {
     if (($1 in model_threat) && $3 != model_risk[$1]) {
         error("ledger risk does not match readable priority for " $1)
     }
-    if (($1 in model_threat) && $8 != model_existing_controls[$1]) {
+    if (($1 in model_threat) && $7 != model_scenario[$1]) {
+        error("ledger scenario does not match readable attacker story for " $1)
+    }
+    if (($1 in model_threat) && $8 != model_capability_gain[$1]) {
+        error("ledger capability gain does not match readable attacker story for " $1)
+    }
+    if (($1 in model_threat) && $9 != model_prerequisites[$1]) {
+        error("ledger prerequisites do not match readable attacker story for " $1)
+    }
+    if (($1 in model_threat) && $10 != model_impact[$1]) {
+        error("ledger impact does not match readable attacker story for " $1)
+    }
+    if (($1 in model_threat) && $11 != model_existing_controls[$1]) {
         error("ledger existing controls do not match readable attacker story for " $1)
     }
-    if (($1 in model_threat) && $9 != model_mitigation[$1]) {
+    if (($1 in model_threat) && $12 != model_mitigation[$1]) {
         error("ledger mitigation does not match readable attacker story for " $1)
     }
     if (trim($4) == "") {
@@ -1049,19 +1146,19 @@ NF != 14 {
     if (attacker_mismatch) {
         error("ledger attackers do not match readable actor set for " $1)
     }
-    for (field_index = 7; field_index <= 14; field_index++) {
+    for (field_index = 7; field_index <= 17; field_index++) {
         if (trim($field_index) == "" || trim($field_index) == "-") {
             error("empty required field " field_index)
         }
     }
-    if (!($10 in owners)) {
-        error("undeclared owner " $10)
+    if (!($13 in owners)) {
+        error("undeclared owner " $13)
     }
-    used_owners[$10] = 1
-    if (!valid_links($11, $1)) {
+    used_owners[$13] = 1
+    if (!valid_links($14, $1)) {
         error("follow_up must contain exact Veer issue URLs")
     }
-    if (!valid_links($12, $1)) {
+    if (!valid_links($15, $1)) {
         error("verification must contain exact Veer issue URLs")
     }
     issue_mismatch = 0
@@ -1075,10 +1172,10 @@ NF != 14 {
         error("ledger issue references do not match readable evidence for " $1)
     }
     if (($3 == "critical" || $3 == "high") &&
-        (trim($9) == "-" || trim($11) == "-")) {
+        (trim($12) == "-" || trim($14) == "-")) {
         error("critical/high threat requires a mitigation and linked follow-up")
     }
-    if (!valid_evidence($14)) {
+    if (!valid_evidence($17)) {
         error("evidence must contain only complete repository documentation citations")
     }
 }
@@ -1088,6 +1185,24 @@ END {
     }
     if (component_rows == 0) {
         error("readable model has no canonical component rows")
+    }
+    if (component_rows != required_component_count) {
+        error("readable model must contain exactly " required_component_count " canonical components")
+    }
+    for (component_name in required_component) {
+        if (!(component_name in components)) {
+            error("missing canonical component " component_name)
+        }
+    }
+    for (required_threat_id in required_threat) {
+        if (!(required_threat_id in seen)) {
+            error("missing required threat " required_threat_id)
+        }
+    }
+    for (stride_category in stride) {
+        if (!(stride_category in used_stride)) {
+            error("missing STRIDE category coverage: " stride_category)
+        }
     }
     for (asset in assets) {
         if (!(asset in used_assets)) {
@@ -1484,6 +1599,12 @@ function error(column) {
 function token_character(character) {
     return character ~ /[A-Za-z0-9_.\/:\-]/
 }
+function citation_delimiter(character) {
+    return character == "" || character ~ /^[[:space:]]$/ ||
+        character == "`" || character == ")" || character == "]" ||
+        character == "}" || character == ";" || character == "," ||
+        character == "." || character == "!"
+}
 function external_url_docs_occurrence(line, docs_start, prefix) {
     prefix = substr(line, 1, docs_start - 1)
     return prefix ~ /(^|[^A-Za-z0-9+.-])[Hh][Tt][Tt][Pp][Ss]?:\/\/[^[:space:]<>()]*\/$/
@@ -1525,7 +1646,7 @@ function external_url_docs_occurrence(line, docs_start, prefix) {
         matched_length = RLENGTH
         citation = substr(candidate, RSTART, matched_length)
         following = substr(candidate, matched_length + 1, 1)
-        if (following != "" && token_character(following)) {
+        if (!citation_delimiter(following)) {
             error(citation_start)
             search_from = citation_start + matched_length
             continue
@@ -1548,7 +1669,7 @@ END {
 cp "$model_citations_file" "$all_citations_file"
 LC_ALL=C awk -F '\t' '
   FNR > 1 {
-      citation_count = split($14, citations, ";")
+      citation_count = split($17, citations, ";")
       for (citation_index = 1; citation_index <= citation_count; citation_index++) {
           print citations[citation_index]
       }
