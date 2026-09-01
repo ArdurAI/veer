@@ -9,9 +9,13 @@ model_inventory_file="$script_dir/model-inventory.tsv"
 threat_file="$script_dir/threats.tsv"
 class_file="$script_dir/data-classes.tsv"
 summary_file="$script_dir/model.md"
+summary_invariants_file="$script_dir/summary-invariants.tsv"
 issue_inventory_file="$script_dir/issue-inventory.txt"
 max_verified_file_bytes=262144
 max_verified_line_bytes=4096
+max_citation_target_bytes=1048576
+max_unique_citations=1024
+max_citation_targets=128
 
 fail() {
   printf '%s\n' "security threat-model verification failed: $*" >&2
@@ -142,7 +146,8 @@ write_visible_markdown() {
                 }
                 continue
             }
-            if (substr(line, character_index, 4) == "<!--") {
+            if (substr(line, character_index, 4) == "<!--" &&
+                !is_escaped(line, character_index)) {
                 visible = visible "    "
                 in_comment = 1
                 character_index += 4
@@ -176,6 +181,11 @@ write_visible_markdown() {
     }
     function has_entity_reference(line) {
         return line ~ /&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/
+    }
+    function has_heading_inline_markup(line) {
+        return index(line, "*") || index(line, "_") || index(line, "~") ||
+            index(line, "[") || index(line, "]") || index(line, "`") ||
+            index(line, "\\")
     }
     function has_list_contained_heading(line, candidate, list_seen, matched_length) {
         candidate = line
@@ -237,6 +247,11 @@ write_visible_markdown() {
             next
         }
         line = rendered_contract_text(line)
+        if (inline_tick_count) {
+            print FILENAME ":" FNR ": multiline inline code spans are forbidden in verified Markdown" > "/dev/stderr"
+            failed = 1
+            inline_tick_count = 0
+        }
         if (line ~ /^[[:space:]]*>/) {
             print FILENAME ":" FNR ": rendered blockquotes are forbidden in verified Markdown" > "/dev/stderr"
             failed = 1
@@ -259,6 +274,11 @@ write_visible_markdown() {
         if (normalized ~ /^#+([[:space:]]|$)/ &&
             normalized ~ /[^[:print:][:space:]]/) {
             print FILENAME ":" FNR ": non-ASCII bytes are forbidden in verified Markdown headings" > "/dev/stderr"
+            failed = 1
+        }
+        if (normalized ~ /^#+([[:space:]]|$)/ &&
+            has_heading_inline_markup(normalized)) {
+            print FILENAME ":" FNR ": inline formatting is forbidden in verified Markdown headings" > "/dev/stderr"
             failed = 1
         }
         print normalized
@@ -401,6 +421,7 @@ for checked_file in \
   "$threat_file" \
   "$class_file" \
   "$summary_file" \
+  "$summary_invariants_file" \
   "$issue_inventory_file"; do
   validate_regular_file "$checked_file"
 done
@@ -486,6 +507,12 @@ LC_ALL=C awk '
   function record_heading(heading) {
       if (heading ~ /[^[:print:][:space:]]/) {
           print FILENAME ":" FNR ": non-ASCII bytes are forbidden in verified Markdown headings" > "/dev/stderr"
+          failed = 1
+      }
+      if (index(heading, "*") || index(heading, "_") || index(heading, "~") ||
+          index(heading, "[") || index(heading, "]") || index(heading, "`") ||
+          index(heading, "\\")) {
+          print FILENAME ":" FNR ": inline formatting is forbidden in verified Markdown headings" > "/dev/stderr"
           failed = 1
       }
       if (seen[heading]++) {
@@ -621,6 +648,16 @@ require_markdown_link \
   "$summary_file" \
   "$visible_summary_file"
 require_markdown_link \
+  'summary-invariants.tsv' \
+  'summary-invariants.tsv' \
+  "$summary_file" \
+  "$visible_summary_file"
+require_markdown_link \
+  'summary-invariants.tsv' \
+  'summary-invariants.tsv' \
+  "$model_file" \
+  "$visible_model_file"
+require_markdown_link \
   'model-inventory.tsv' \
   'model-inventory.tsv' \
   "$model_file" \
@@ -640,6 +677,85 @@ require_markdown_link \
   'issue-inventory.txt' \
   "$model_file" \
   "$visible_model_file"
+
+LC_ALL=C awk -F '\t' '
+function error(message) {
+    print FILENAME ":" FNR ": " message > "/dev/stderr"
+    failed = 1
+}
+function has_inline_markup(value) {
+    return index(value, "*") || index(value, "_") || index(value, "~") ||
+        index(value, "[") || index(value, "]") || index(value, "`") ||
+        index(value, "\\")
+}
+FNR == NR {
+    if (FNR == 1) {
+        if ($0 != "id\ttext") {
+            error("unexpected security summary invariant header")
+        }
+        next
+    }
+    if (NF != 2) {
+        error("expected 2 tab-separated security summary invariant fields")
+        next
+    }
+    if ($1 !~ /^[1-8]$/) {
+        error("unexpected security summary invariant ID " $1)
+    }
+    if (ledger_seen[$1]++) {
+        error("duplicate security summary invariant ID " $1)
+    }
+    if ($2 == "" || $2 == "-" || has_inline_markup($2)) {
+        error("invalid canonical security summary invariant " $1)
+    }
+    canonical[$1] = $2
+    ledger_rows++
+    next
+}
+$0 == "## Security invariants" {
+    in_invariants = 1
+    next
+}
+in_invariants && /^##+ / {
+    in_invariants = 0
+}
+in_invariants && /^[1-9][0-9]*[.] / {
+    invariant_id = $0
+    sub(/[.].*$/, "", invariant_id)
+    invariant_text = $0
+    sub(/^[1-9][0-9]*[.] /, "", invariant_text)
+    if (!(invariant_id in canonical)) {
+        error("unexpected readable security summary invariant " invariant_id)
+    }
+    if (readable_seen[invariant_id]++) {
+        error("duplicate readable security summary invariant " invariant_id)
+    }
+    if ((invariant_id in canonical) && invariant_text != canonical[invariant_id]) {
+        error("security summary invariant does not match canonical ledger: " invariant_id)
+    }
+    readable_rows++
+}
+END {
+    for (required_id = 1; required_id <= 8; required_id++) {
+        if (!(required_id in ledger_seen)) {
+            error("missing canonical security summary invariant " required_id)
+        }
+        if (!(required_id in readable_seen)) {
+            error("missing readable security summary invariant " required_id)
+        }
+    }
+    if (ledger_rows != 8) {
+        error("expected exactly eight canonical security summary invariants")
+    }
+    if (readable_rows != 8) {
+        error("expected exactly eight readable security summary invariants")
+    }
+    if (failed) {
+        exit 1
+    }
+}
+' "$summary_invariants_file" "$visible_summary_file" ||
+  fail 'security summary invariant contract is invalid'
 
 LC_ALL=C awk -F '\t' -v issue_inventory="$issue_inventory_file" \
   -v model_inventory="$model_inventory_file" '
@@ -805,6 +921,10 @@ function valid_evidence(value, values, count, citation_index) {
     return 1
 }
 function valid_readable_row(line, expected_columns, cells, count, cell_index, value) {
+    if (index(line, "~~")) {
+        error("strikethrough formatting is forbidden in canonical contract rows")
+        return 0
+    }
     count = split(line, cells, "|")
     if (count != expected_columns + 2 || trim(cells[1]) != "" || trim(cells[count]) != "") {
         return 0
@@ -2051,6 +2171,8 @@ END {
 model_citations_file="$verification_tmp/model-citations.txt"
 all_citations_file="$verification_tmp/all-citations.txt"
 unique_citations_file="$verification_tmp/unique-citations.txt"
+citation_targets_file="$verification_tmp/citation-targets.tsv"
+citation_line_counts_file="$verification_tmp/citation-line-counts.tsv"
 
 LC_ALL=C awk '
 function error(column) {
@@ -2138,30 +2260,38 @@ LC_ALL=C awk -F '\t' '
 ' "$threat_file" >>"$all_citations_file"
 LC_ALL=C sort -u "$all_citations_file" >"$unique_citations_file"
 
-while IFS= read -r citation; do
-  citation_path=${citation%:*}
-  citation_location=${citation##*:}
-  case "$citation_location" in
-    *-*)
-      citation_start=${citation_location%-*}
-      citation_end=${citation_location#*-}
-      ;;
-    *)
-      citation_start=$citation_location
-      citation_end=$citation_location
-      ;;
-  esac
+unique_citation_count=$(wc -l <"$unique_citations_file" | LC_ALL=C awk '{ print $1 }')
+[ "$unique_citation_count" -le "$max_unique_citations" ] ||
+  fail "documentation evidence exceeds ${max_unique_citations} unique citation limit"
+
+LC_ALL=C awk '
+{
+    citation_path = $0
+    sub(/:[1-9][0-9]*(-[1-9][0-9]*)?$/, "", citation_path)
+    if (!seen[citation_path]++) {
+        print citation_path "\t" $0
+    }
+}
+' "$unique_citations_file" >"$citation_targets_file"
+citation_target_count=$(wc -l <"$citation_targets_file" | LC_ALL=C awk '{ print $1 }')
+[ "$citation_target_count" -le "$max_citation_targets" ] ||
+  fail "documentation evidence exceeds ${max_citation_targets} citation target limit"
+
+: >"$citation_line_counts_file"
+citation_tab=$(printf '\t')
+while IFS="$citation_tab" read -r citation_path representative_citation; do
   case "$citation_path" in
     docs/*)
       case "/$citation_path/" in
-        */../* | */./* | *//*) fail "unsafe citation path: $citation" ;;
+        */../* | */./* | *//*) fail "unsafe citation path: $representative_citation" ;;
       esac
       ;;
-    *) fail "unsafe citation path: $citation" ;;
+    *) fail "unsafe citation path: $representative_citation" ;;
   esac
   citation_file="$repo_root/$citation_path"
-  [ -f "$citation_file" ] || fail "citation target does not exist: $citation"
-  [ ! -L "$citation_file" ] || fail "citation target must not be a symbolic link: $citation"
+  [ -f "$citation_file" ] || fail "citation target does not exist: $representative_citation"
+  [ ! -L "$citation_file" ] ||
+    fail "citation target must not be a symbolic link: $representative_citation"
   citation_cursor=$repo_root
   citation_remaining=$citation_path
   while [ -n "$citation_remaining" ]; do
@@ -2177,18 +2307,51 @@ while IFS= read -r citation; do
     esac
     citation_cursor="$citation_cursor/$citation_component"
     [ ! -L "$citation_cursor" ] ||
-      fail "citation path contains a symbolic link: $citation"
+      fail "citation path contains a symbolic link: $representative_citation"
   done
   citation_dir=$(CDPATH='' cd -- "$(dirname -- "$citation_file")" && pwd -P)
   case "$citation_dir/" in
     "$docs_root"/*) ;;
-    *) fail "citation target resolves outside docs: $citation" ;;
+    *) fail "citation target resolves outside docs: $representative_citation" ;;
   esac
+  citation_target_bytes=$(wc -c <"$citation_file" | LC_ALL=C awk '{ print $1 }')
+  [ "$citation_target_bytes" -le "$max_citation_target_bytes" ] ||
+    fail "citation target exceeds ${max_citation_target_bytes}-byte file limit: $citation_path"
   line_count=$(wc -l <"$citation_file" | LC_ALL=C awk '{ print $1 }')
-  [ "$citation_start" -ge 1 ] &&
-    [ "$citation_end" -ge "$citation_start" ] &&
-    [ "$citation_end" -le "$line_count" ] ||
-    fail "citation range is outside the target: $citation"
-done <"$unique_citations_file"
+  printf '%s\t%s\n' "$citation_path" "$line_count" >>"$citation_line_counts_file"
+done <"$citation_targets_file"
+
+LC_ALL=C awk -F '\t' '
+function error(message) {
+    print message > "/dev/stderr"
+    failed = 1
+}
+FNR == NR {
+    target_lines[$1] = $2
+    next
+}
+{
+    citation = $0
+    citation_path = citation
+    sub(/:[1-9][0-9]*(-[1-9][0-9]*)?$/, "", citation_path)
+    citation_location = citation
+    sub(/^.*:/, "", citation_location)
+    location_count = split(citation_location, locations, "-")
+    citation_start = locations[1] + 0
+    citation_end = location_count == 2 ? locations[2] + 0 : citation_start
+    if (!(citation_path in target_lines)) {
+        error("citation target is absent from line-count cache: " citation)
+    } else if (citation_start < 1 || citation_end < citation_start ||
+               citation_end > target_lines[citation_path]) {
+        error("citation range is outside the target: " citation)
+    }
+}
+END {
+    if (failed) {
+        exit 1
+    }
+}
+' "$citation_line_counts_file" "$unique_citations_file" ||
+  fail 'documentation citation ranges are invalid'
 
 printf '%s\n' 'security threat-model verification passed'

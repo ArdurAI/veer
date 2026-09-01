@@ -1214,7 +1214,7 @@ printf '%s\n' \
   '| --- | --- | --- |' \
   '| OWN-FAKE | Conflicting contract | Issue #9999 |' >>"$model"
 expect_rejection 'fence marker inside multiline inline code cannot hide a canonical section' \
-  'duplicate visible heading: ### Control owners'
+  'multiline inline code spans are forbidden in verified Markdown'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -1226,7 +1226,7 @@ LC_ALL=C awk '
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'canonical section wrapped in multiline inline code' \
-  'is missing visible heading: ### Control owners'
+  'multiline inline code spans are forbidden in verified Markdown'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -1342,11 +1342,11 @@ rewritten="$test_root/threats.tsv"
 LC_ALL=C awk -F '\t' -v OFS='\t' '
   NR == 1 { print; next }
   {
-      count = split($4, values, ",")
+      count = split($4, values, "[|]")
       replacement = ""
       for (value_index = 1; value_index <= count; value_index++) {
           if (values[value_index] == "A-01") continue
-          replacement = replacement (replacement == "" ? "" : ",") values[value_index]
+          replacement = replacement (replacement == "" ? "" : "|") values[value_index]
       }
       $4 = replacement
       print
@@ -1478,6 +1478,118 @@ LC_ALL=C awk 'BEGIN {
 }' >>"$model"
 expect_rejection 'verified file beyond the work bound' \
   'exceeds 262144-byte file limit'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  "\`" \
+  '' \
+  '### Control owners' \
+  '| ID | Accountable surface | Live verification work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' \
+  '' \
+  "\`" >>"$model"
+expect_rejection 'inline code delimiter across a Markdown block boundary' \
+  'multiline inline code spans are forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '### Control *owners*' \
+  '| ID | Accountable surface | Live verification work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'inline formatting in a canonical heading' \
+  'inline formatting is forbidden in verified Markdown headings'
+
+new_fixture
+summary="$test_root/docs/security/model.md"
+rewritten_summary="$test_root/model.md"
+LC_ALL=C awk '
+  $0 == "3. Keep provider credentials outside API resources, plans, logs, and events." {
+      print "3. Persist provider credentials in API resources, plans, logs, and events."
+      next
+  }
+  { print }
+' "$summary" >"$rewritten_summary"
+mv "$rewritten_summary" "$summary"
+expect_rejection 'security summary invariant drift' \
+  'security summary invariant does not match canonical ledger: 3'
+
+new_fixture
+summary="$test_root/docs/security/model.md"
+rewritten_summary="$test_root/model.md"
+LC_ALL=C awk \
+  '$0 != "3. Keep provider credentials outside API resources, plans, logs, and events."' \
+  "$summary" >"$rewritten_summary"
+mv "$rewritten_summary" "$summary"
+expect_rejection 'missing security summary invariant' \
+  'missing readable security summary invariant 3'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '\<!--' \
+  '' \
+  '### Control owners' \
+  '| ID | Accountable surface | Live verification work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' \
+  '' \
+  '\-->' >>"$model"
+expect_rejection 'escaped HTML comment opener' \
+  'duplicate visible heading: ### Control owners'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+oversized_target="$test_root/docs/oversized-evidence.md"
+LC_ALL=C awk 'BEGIN {
+  for (row_index = 1; row_index <= 263; row_index++) {
+      for (byte_index = 1; byte_index <= 4000; byte_index++) {
+          printf "x"
+      }
+      print ""
+  }
+}' >"$oversized_target"
+printf '%s\n' '' 'Evidence: docs/oversized-evidence.md:1' >>"$model"
+expect_rejection 'oversized citation target' \
+  'citation target exceeds 1048576-byte file limit: docs/oversized-evidence.md'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+many_target="$test_root/docs/many-citations.md"
+LC_ALL=C awk 'BEGIN {
+  for (line_number = 1; line_number <= 1025; line_number++) {
+      print "evidence"
+  }
+}' >"$many_target"
+LC_ALL=C awk 'BEGIN {
+  print ""
+  for (line_number = 1; line_number <= 1025; line_number++) {
+      print "docs/many-citations.md:" line_number
+  }
+}' >>"$model"
+expect_rejection 'unique citation work amplification' \
+  'exceeds 1024 unique citation limit'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Strict issuer\/audience\/algorithm\/signature\/time\/JWKS validation, human\/workload separation, raw-token canaries, and negative corpus/, "~~Strict issuer/audience/algorithm/signature/time/JWKS validation, human/workload separation, raw-token canaries, and negative corpus~~")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+rewrite_threat_field TM-001 12 \
+  '~~Strict issuer/audience/algorithm/signature/time/JWKS validation, human/workload separation, raw-token canaries, and negative corpus~~'
+expect_rejection 'struck-through canonical mitigation' \
+  'strikethrough formatting is forbidden in canonical contract rows'
 
 new_fixture
 inventory="$test_root/docs/security/issue-inventory.txt"

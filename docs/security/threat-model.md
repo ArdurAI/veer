@@ -17,8 +17,10 @@ on realistic capability gain, impact, reachability, and remaining controls.
 The architecture input was resolved from `main` at
 `108f8e846710f19e156797346fe4a16db6331c34`. This document becomes authoritative
 at its own merge commit. The machine-readable canonical inventory, scenario,
-and handling contracts are [model-inventory.tsv](model-inventory.tsv),
-[threats.tsv](threats.tsv), and [data-classes.tsv](data-classes.tsv);
+summary-invariant, and handling contracts are
+[model-inventory.tsv](model-inventory.tsv),
+[summary-invariants.tsv](summary-invariants.tsv), [threats.tsv](threats.tsv),
+and [data-classes.tsv](data-classes.tsv);
 [`verify.sh`](verify.sh) fails when their required coverage, semantics,
 ownership, or links drift. The inventory binds each readable component, asset,
 attacker, trust-boundary, and control-owner field to one compact review surface.
