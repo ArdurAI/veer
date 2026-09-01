@@ -56,7 +56,7 @@ does not contact AWS or read environment credentials.
 | Billable rule evaluations/second | 500 | 4,000 |
 | Billable ALB capacity | 1 LCU | 5 LCU |
 | Derived provider traffic through NAT | 87.77 GB | 877.66 GB |
-| Telemetry/queue/other AWS-service NAT wire caps | 75/80/20 GB | 750/400/100 GB |
+| Telemetry/queue/other AWS-service NAT wire caps | 81/80/20 GB | 806/400/100 GB |
 | Billable NAT processed data | 300 GB | 2,250 GB |
 | Derived client plus provider-request egress | 159.64 GB | 907.93 GB |
 | Billable internet egress with no free allowance | 200 GB | 1,000 GB |
@@ -68,8 +68,8 @@ does not contact AWS or read environment credentials.
 | Archive objects written | 33,000 | 157,000 |
 | S3 tier-1 archive requests, primary plus recovery | 99,000 | 471,000 |
 | KMS archive requests, primary plus recovery | 132,000 | 628,000 |
-| Encrypted primary archive/object storage | 200 GiB | 1,000 GiB |
-| Encrypted recovery archive/object storage | 200 GiB | 1,000 GiB |
+| Encrypted primary archive/object storage | 208 GB | 1,040 GB |
+| Encrypted recovery archive/object storage | 208 GB | 1,040 GB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
 | Secrets Manager API requests, recovery region | 5,000 | 50,000 |
 | Recovery-region secret replicas | 10 | 100 |
@@ -80,9 +80,10 @@ does not contact AWS or read environment credentials.
 The database and queue rows are price proxies so issue #12 can compare
 alternatives on equal assumptions. They do not select the final implementation.
 RDS Multi-AZ rates include the standby instance. Database storage uses the
-Multi-AZ gp3 rate. Recovery storage and transfer model one provisioned database
-copy plus one archive copy, each with one full-size equivalent of monthly
-changed data; incremental copies may cost less.
+Multi-AZ gp3 rate. Database recovery storage and transfer model one provisioned
+copy plus one full-dataset equivalent of monthly changed data. Archive rows
+retain 13 ingress envelopes in each region and price one full retained-archive
+reseed; incremental replication may cost less.
 
 The small CPU-credit quantity is the physical 31-day maximum for both
 db.t4g.medium Multi-AZ copies: `2 vCPU * 2 copies * 744 hours = 2,976`
@@ -107,7 +108,7 @@ requests, responses, pagination, observations, and retries. The continuous
 120/1,200 unit-per-minute limits derive 21.94/219.42 GB internet egress and
 87.77/877.66 GB combined NAT processing per 744-hour month. Adding bounded
 telemetry, queue-service, and other AWS-service wire traffic produces
-262.77/2,127.66 GB; the worksheet rounds those quantities to 300/2,250 GB and
+268.77/2,183.66 GB; the worksheet rounds those quantities to 300/2,250 GB and
 does not subtract free allowances.
 
 ALB limits use the maximum of the four AWS LCU dimensions. Small remains below
@@ -122,11 +123,12 @@ dataset-equivalent of changed blocks per 30 days, primary storage is
 up to two decimals. Cross-region transfer retains the one-dataset monthly change
 assumption.
 
-The archive quantities hold 365 days at the ADR's measured 16 GB and 80 GB
-31-day ingress caps. The 7/50 million event limits include one record per
-provider mutation attempt. Worst-case audit packing uses 500 records per object
-to reserve 192 KiB for framing, compression expansion, and encryption. Audit
-and compact non-audit record multiplicity derives the object/request quantities.
+The archive quantities price 13 complete 31-day ingress envelopes, or 208/1,040
+GB in each region, because a 365-day retention interval can intersect 13 windows
+under boundary-concentrated traffic. The 7/50 million event limits include one
+record per provider mutation attempt. Worst-case audit packing uses 500 records
+per object to reserve 192 KiB for framing, compression expansion, and encryption.
+Audit and compact non-audit record multiplicity derives the object/request quantities.
 Secret values use a version-aware, single-flight cache; the request rows are
 hard monthly budgets rather than an assumption that every provider operation
 reads Secrets Manager.

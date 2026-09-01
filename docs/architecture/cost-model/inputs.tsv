@@ -13,7 +13,7 @@ small	queue_requests	queue	20	million-64-KiB-request-units	0.40	aws-sqs	Covers 1
 small	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
 small	load_balancer_capacity	network	744	LCU-hour	0.008	aws-elb	One LCU bounded across new active byte and rule dimensions
 small	nat_gateways	network	1488	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of two active zones for seven hundred forty-four hours
-small	nat_processing	network	300	GB	0.045	aws-ec2-nat	Rounded above 87.77 provider plus 75 telemetry plus 80 queue plus 20 other service GB
+small	nat_processing	network	300	GB	0.045	aws-ec2-nat	Rounded above 87.77 provider plus 81 telemetry plus 80 queue plus 20 other service GB
 small	public_ipv4	network	2976	address-hour	0.005	aws-vpc-ipv4	Two NAT and two load-balancer addresses for seven hundred forty-four hours
 small	internet_egress	network	200	GB	0.09	aws-data-transfer	Rounded above 137.70 GB client responses plus 21.94 GB provider requests
 small	cross_az_transfer	network	200	directional-GB	0.01	aws-data-transfer	Hard cap: 40 queue body, 140 database and service, and 20 failover and retry
@@ -30,9 +30,9 @@ small	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-r
 small	external_synthetic_alarm	monitoring	1	alarm-month	0.10	aws-cloudwatch-recovery	One standard-resolution missing-or-failed-run alarm
 small	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
 small	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
-small	object_archive	storage	200	GB-month	0.023	aws-s3	Plans audit exports and recovery evidence retained for 365 days
-small	recovery_object_archive	recovery	200	GB-month	0.023	aws-s3-recovery	Replicated archive and recovery objects in us-west-2
-small	recovery_object_transfer	recovery	200	GB	0.02	aws-cross-region-transfer	One full-archive equivalent of monthly changed data
+small	object_archive	storage	208	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
+small	recovery_object_archive	recovery	208	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
+small	recovery_object_transfer	recovery	208	GB	0.02	aws-cross-region-transfer	One full retained-archive reseed allowance
 small	primary_archive_requests	storage	49500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of thirty-three thousand archive objects
 small	recovery_archive_requests	recovery	49500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of thirty-three thousand archive objects
 small	encryption_keys	security	3	key-month	1.00	aws-kms	Primary data audit and recovery-region keys
@@ -53,7 +53,7 @@ target	queue_requests	queue	100	million-64-KiB-request-units	0.40	aws-sqs	Covers
 target	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
 target	load_balancer_capacity	network	3720	LCU-hour	0.008	aws-elb	Five LCUs bounded across new active byte and rule dimensions
 target	nat_gateways	network	2232	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of three active zones for seven hundred forty-four hours
-target	nat_processing	network	2250	GB	0.045	aws-ec2-nat	Rounded above 877.66 provider plus 750 telemetry plus 400 queue plus 100 other service GB
+target	nat_processing	network	2250	GB	0.045	aws-ec2-nat	Rounded above 877.66 provider plus 806 telemetry plus 400 queue plus 100 other service GB
 target	public_ipv4	network	4464	address-hour	0.005	aws-vpc-ipv4	Three NAT and three load-balancer addresses for seven hundred forty-four hours
 target	internet_egress	network	1000	GB	0.09	aws-data-transfer	Rounded above 688.52 GB client responses plus 219.42 GB provider requests
 target	cross_az_transfer	network	2000	directional-GB	0.01	aws-data-transfer	Hard cap: 200 queue body, 1600 database and service, and 200 failover and retry
@@ -70,9 +70,9 @@ target	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-
 target	external_synthetic_alarm	monitoring	1	alarm-month	0.10	aws-cloudwatch-recovery	One standard-resolution missing-or-failed-run alarm
 target	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
 target	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
-target	object_archive	storage	1000	GB-month	0.023	aws-s3	Plans audit exports and recovery evidence
-target	recovery_object_archive	recovery	1000	GB-month	0.023	aws-s3-recovery	Replicated archive and recovery objects in us-west-2
-target	recovery_object_transfer	recovery	1000	GB	0.02	aws-cross-region-transfer	One full-archive equivalent of monthly changed data
+target	object_archive	storage	1040	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
+target	recovery_object_archive	recovery	1040	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
+target	recovery_object_transfer	recovery	1040	GB	0.02	aws-cross-region-transfer	One full retained-archive reseed allowance
 target	primary_archive_requests	storage	235500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of one hundred fifty-seven thousand archive objects
 target	recovery_archive_requests	recovery	235500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of one hundred fifty-seven thousand archive objects
 target	encryption_keys	security	6	key-month	1.00	aws-kms	Separated primary recovery and rotation key set

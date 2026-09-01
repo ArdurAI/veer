@@ -145,7 +145,7 @@ an explicit quota response; they must not cause silent data loss.
 | Provider observation units/minute, reserved | 2 | 40 | 400 |
 | Resources per provider observation page, maximum | 50 | 50 | 50 |
 | Provider mutation transfer units/minute, all attempts | 10 | 60 | 600 |
-| Telemetry upload wire bytes/month, GB | 0 | 75 | 750 |
+| Telemetry upload wire bytes/month, GB | 0 | 81 | 806 |
 | Queue service wire bytes/month, GB | 0 | 80 | 400 |
 | Other private-node AWS-service wire bytes/month, GB | 0 | 20 | 100 |
 | NAT processed data/month, GB | 0 | 300 | 2,250 |
@@ -228,15 +228,15 @@ mutation attempts, including retries, is capped at 60/600; because every raw
 attempt costs at least one unit, its raw attempt count cannot exceed that cap.
 At a continuous 744-hour maximum, outbound volume is 21.94/219.42 GB, inbound
 volume is 65.82/658.24 GB, and combined provider NAT processing is 87.77/877.66
-GB. Telemetry upload wire bytes are capped at 75/750 GB, including 25% protocol
-and TLS allowance above accepted log and trace bytes. Queue-service wire bytes
-are capped at 80/400 GB, and other private-node AWS-service traffic—including
-secret, registry, and control API calls—is capped at 20/100 GB. Together these
-fit hard NAT-processing caps of 300/2,250 GB. S3 archive and artifact traffic
-uses a gateway endpoint and is excluded from NAT; any interface endpoint must
-replace the worksheet with its hourly and data-processing cost before use.
-Adapters must paginate, stream, or reject before crossing the selected profile's
-unit budget.
+GB. The accepted 60/600 GiB of logs and traces convert to 64.43/644.25 decimal
+GB. Adding 25% for protocol and TLS overhead and rounding up sets telemetry wire
+caps of 81/806 GB. Queue-service wire bytes are capped at 80/400 GB, and other
+private-node AWS-service traffic—including secret, registry, and control API
+calls—is capped at 20/100 GB. Together these fit hard NAT-processing caps of
+300/2,250 GB. S3 archive and artifact traffic uses a gateway endpoint and is
+excluded from NAT; any interface endpoint must replace the worksheet with its
+hourly and data-processing cost before use. Adapters must paginate, stream, or
+reject before crossing the selected profile's unit budget.
 
 The qualification observation set is the profile's Component count. One page
 contains resources from only one ProviderConnection and at most 50 compact
@@ -265,7 +265,7 @@ target result cannot substitute for the small profile:
    decisions, audit records, tombstones, idempotency rows, and indexes across
    their full online-retention windows until relational occupancy is 40 GiB
    small or 400 GiB target (80% of provisioned storage). Seed both the primary
-   and recovery archives to 160 GiB for small or 800 GiB for target. The timed
+   and recovery archives to 166.4 GB for small or 832 GB for target. The timed
    run must remain below 90% relational occupancy, leaving 10% for maintenance
    and recovery work.
 2. Run that profile for 24 hours. In each hour, a 15-minute peak replaces steady
@@ -280,21 +280,33 @@ target result cannot substitute for the small profile:
 4. Inject one process failure, one worker lease expiry, one queue redelivery,
    and one database failover. Run an isolated Availability Zone loss window for
    every active zone, resetting and re-seeding between windows.
-5. Inject every enumerated logical-corruption class in an isolated reset and
+5. Deploy a signed bad-release fixture that writes an added optional persisted
+   field and then fails the external synthetic after activation. From rollout
+   onset, verify detection within five minutes, rollback within 30 minutes, and
+   that the prior binary reads and processes every acknowledged record written
+   by the failed release. The zero-RPO completeness oracle must pass.
+6. Inject every enumerated logical-corruption class in an isolated reset and
    verify its integrity check, 15-minute detection, two-hour RTO, and five-
    minute RPO. Pause the deterministic recovery feed through its 20-, 25-, and
    30-minute thresholds and verify warning, critical, and
    qualification-failure behavior.
-6. Restore the latest simulated regional checkpoint and apply the acknowledged-
-   record completeness oracle defined under recovery objectives.
-7. In an isolated accounting test, drive each cross-AZ byte partition through
+7. In an isolated regional-loss exercise, make the primary endpoint and data
+   plane unavailable at a recorded onset. Verify two failed external probes and
+   paging within four minutes; deploy the exact control-plane release from
+   immutable configuration in `us-west-2`; restore and integrity-check the
+   newest common database, outbox, audit-manifest, and object checkpoint;
+   revalidate replicated secret versions and policies; issue new short-lived
+   workload authority; switch the endpoint; and pass both the synthetic and
+   acknowledged-record completeness oracle. End-to-end recovery must finish
+   within four hours and the recovered cutoff must be no older than 30 minutes.
+8. In an isolated accounting test, drive each cross-AZ byte partition through
    its 80%, 90%, and 100% thresholds and verify alert, admission-control, and
    qualification-failure behavior without sending equivalent billable traffic.
-8. Run three load-balancer windows: normal keep-alive reuse; connection churn at
+9. Run three load-balancer windows: normal keep-alive reuse; connection churn at
    20/100 new TLS connections per second; and an idle-connection soak at
    2,500/12,000 active connections. Verify processed bytes, billable rule
    evaluations, and every hourly LCU dimension remain inside 1/5 LCUs.
-9. Report every SLI and bounded capacity/cost dimension for the entire run and
+10. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
 
@@ -542,11 +554,12 @@ average no more than 1,000 bytes at the full event count. This allocates at most
 non-audit records below, 5.26 GB and 11.27 GB remain inside the combined 16 GB
 and 80 GB archive-ingress caps for recovery evidence and framing. The archive
 writer measures actual stored object bytes, including framing and encryption
-overhead. Over 365 days, the combined cap consumes at most 188.39 GB small and
-941.94 GB target, fitting the
-worksheet's 200 GB and 1,000 GB primary and recovery copies. Audit records are
-never sampled or dropped: exceeding the bound rejects or backpressures new work
-and surfaces a capacity condition.
+overhead. A 365-day retention interval can intersect 13 fixed 31-day accounting
+windows when writes are concentrated at their boundaries. Pricing all 13 full
+envelopes therefore caps each primary and recovery copy at 208 GB small and
+1,040 GB target without relying on smooth arrival times. Audit records are never
+sampled or dropped: exceeding the bound rejects or backpressures new work and
+surfaces a capacity condition.
 
 Each successful mutation adds one compact plan, authorization-decision, and
 operation record; each accepted operation cancellation adds one authorization
@@ -595,10 +608,10 @@ resources, and `us-west-2` recovery storage.
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 960.80 | USD 1,000.00 | USD 39.20 |
-| Target-scale qualification | USD 2,565.96 | USD 2,600.00 | USD 34.04 |
+| Small production | USD 961.33 | USD 1,000.00 | USD 38.67 |
+| Target-scale qualification | USD 2,568.60 | USD 2,600.00 | USD 31.40 |
 
-The target reference consumes 98.69% of its ceiling after conservatively
+The target reference consumes 98.79% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional recurring target resource may be added without
 reducing another input or approving a replacement ADR.
