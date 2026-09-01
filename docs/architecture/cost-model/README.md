@@ -46,7 +46,7 @@ does not contact AWS or read environment credentials.
 | Database changed blocks per 30 days | 50 GiB | 500 GiB |
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
 | Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
-| Modeled queue requests with no free allowance | 5 million | 50 million |
+| Modeled 64 KiB queue request units with no free allowance | 5 million | 50 million |
 | Average ALB capacity | 1 LCU | 5 LCU |
 | NAT processed data | 100 GiB | 1,000 GiB |
 | Total internet egress | 150 GiB | 600 GiB |
@@ -55,13 +55,17 @@ does not contact AWS or read environment credentials.
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Stored archive ingress per 30-day month | 8 GB | 80 GB |
-| Archive objects written | 2,000 | 20,000 |
-| S3 tier-1 archive requests, primary plus recovery | 6,000 | 60,000 |
-| KMS archive requests, primary plus recovery | 8,000 | 80,000 |
+| Archive objects written | 8,000 | 80,000 |
+| S3 tier-1 archive requests, primary plus recovery | 24,000 | 240,000 |
+| KMS archive requests, primary plus recovery | 32,000 | 320,000 |
 | Encrypted primary archive/object storage | 100 GiB | 1,000 GiB |
 | Encrypted recovery archive/object storage | 100 GiB | 1,000 GiB |
-| Secrets Manager API requests | 50,000 | 500,000 |
+| Secrets Manager API requests, primary region | 45,000 | 450,000 |
+| Secrets Manager API requests, recovery region | 5,000 | 50,000 |
 | Recovery-region secret replicas | 10 | 100 |
+| Recovery-region Synthetics canary runs | 43,800 | 43,800 |
+| Canary Lambda duration | 876,000 GB-seconds | 876,000 GB-seconds |
+| Canary logs/artifacts retained 30 days | 6.57/43.8 GB | 6.57/43.8 GB |
 
 The database and queue rows are price proxies so issue #12 can compare
 alternatives on equal assumptions. They do not select the final implementation.
@@ -81,6 +85,12 @@ monthly ingress caps. Secret values use a version-aware, single-flight cache;
 the request rows are hard monthly budgets rather than an assumption that every
 provider operation reads Secrets Manager.
 
+The one-minute recovery-region canary uses 43,800 runs in a 730-hour month. Its
+dependent Lambda, log, S3 artifact, three-metric, and one-alarm quantities use
+the bounded assumptions from the
+[AWS CloudWatch pricing example](https://aws.amazon.com/cloudwatch/pricing/).
+Free service allowances are not subtracted.
+
 ## Immutable rate evidence
 
 Every billable worksheet row points to a versioned AWS Offers file. The
@@ -99,6 +109,8 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | Public IPv4 | [AmazonVPC 20260831092232](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/20260831092232/us-east-1/index.json) | `4GQUNXTFWVSGPUZK` at USD 0.005/address-hour |
 | Data transfer | [AWSDataTransfer 20260831121448](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/20260831121448/us-east-1/index.json) | `HQEH3ZWJVT46JHRG` at USD 0.09/GB internet egress; `PNUBVW4CPC8XA46W` at USD 0.01/directional-GB cross-AZ; `XGXYRYWGNXSSEUVT` at USD 0.02/GB cross-region |
 | Telemetry | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | `S8QGXX5R2BKKMDSJ` at USD 0.50/GB log ingest; `GF9Q9S5QWW3RHMGQ` at USD 0.50/GB OTEL ingest; `6K9ADYQAHV5KX9KZ` at USD 0.03/GB-month; `KG586CTNGQ4VRZKZ` at USD 0.30/metric-month |
+| Recovery monitoring | [AmazonCloudWatch 20260831092148 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-west-2/index.json) | Synthetics `96EA6YQSXFE9MUK5` at USD 0.0012/run; logs `CWY7X4MZ4F3MP5SD` at USD 0.50/GB and `MN45SJANDTCPR9QA` at USD 0.03/GB-month; metrics `CN6TP6ZEVS58RK7M` at USD 0.30/month; alarm `SJTFAZNHSW2WVZB2` at USD 0.10/month |
+| Recovery canary compute | [AWSLambda 20260831092318 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/20260831092318/us-west-2/index.json) | Request `ZWHFK83WS2P4WZR6` at USD 0.0000002/request; tier-one duration `XCU6U9G4FCKZQWG9` at USD 0.0000166667/GB-second |
 | Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one request `E9YHNFENF4XQBZR6` at USD 0.000005/request |
 | Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month; tier-one request `D4PMUVH6F64HK2D6` at USD 0.000005/request |
 | Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month; request SKUs `MFEBZPX8NHM5FY7Z` and `SE9KXT6M6JTP7E4W` at USD 0.000003/request |

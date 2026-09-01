@@ -40,14 +40,16 @@ file == "sources.tsv" {
     if ($1 in sources) {
         fail("duplicate source_id " $1)
     }
-    if ($2 !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/) {
+    if ($2 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) {
         fail("pricing_date must use YYYY-MM-DD")
     }
     if ($4 !~ /^https:\/\//) {
         fail("source URL must use HTTPS")
     }
     immutable_offer = "^https://pricing[.]us-east-1[.]amazonaws[.]com/" \
-        "offers/v1[.]0/aws/[A-Za-z0-9]+/[0-9]{14}" \
+        "offers/v1[.]0/aws/[A-Za-z0-9]+/" \
+        "[0-9][0-9][0-9][0-9][0-9][0-9][0-9]" \
+        "[0-9][0-9][0-9][0-9][0-9][0-9][0-9]" \
         "(/[a-z0-9-]+)?/index[.]json$"
     if ($1 != "internal-local" && $4 !~ immutable_offer) {
         fail("billable source URL must pin an immutable AWS Offers version")

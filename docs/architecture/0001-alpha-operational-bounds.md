@@ -79,9 +79,11 @@ flowchart TB
 
     subgraph RECOVERY["Recovery region: us-west-2"]
         BACKUP[(Encrypted replicated backups)]
+        PROBE[External API synthetic]
     end
 
     OBJECTS -->|asynchronous replication| BACKUP
+    PROBE -->|one-minute authenticated probe| EDGE
 ```
 
 - API and worker processes are stateless and replaceable. At least two
@@ -128,15 +130,17 @@ an explicit quota response; they must not cause silent data loss.
 | Provider mutations/minute, aggregate | 10 | 60 | 600 |
 | Audit events/month | 100,000 | 2,000,000 | 20,000,000 |
 | Archived audit and evidence bytes/30-day month, GB | 0.4 | 8 | 80 |
-| Archive objects written/month | 100 | 2,000 | 20,000 |
-| Archive S3 tier-1 requests/month, both regions | 300 | 6,000 | 60,000 |
-| Archive KMS requests/month, both regions | 400 | 8,000 | 80,000 |
+| Archive objects written/month | 2,000 | 8,000 | 80,000 |
+| Archive S3 tier-1 requests/month, both regions | 6,000 | 24,000 | 240,000 |
+| Archive KMS requests/month, both regions | 8,000 | 32,000 | 320,000 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Database changed blocks/month, GiB | 5 | 50 | 500 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
 | Accepted trace data/month, GiB | 1 | 10 | 100 |
-| Secrets Manager API requests/month | 0 | 50,000 | 500,000 |
+| Secrets Manager API requests/month, primary region | 0 | 45,000 | 450,000 |
+| Secrets Manager API requests/month, recovery region | 0 | 5,000 | 50,000 |
 | Recovery-region secret replicas | 0 | 10 | 100 |
+| Recovery-region synthetic runs/month | 0 | 43,800 | 43,800 |
 
 The developer profile is a single-machine functional environment. It has no
 availability commitment and must not be used to claim HA or disaster-recovery
@@ -155,12 +159,16 @@ in throttling until each threshold is crossed and verifies this response.
 ### Load qualification
 
 Qualification uses generated resources with provider adapters operating in a
-deterministic test mode, followed by bounded live-provider smoke tests:
+deterministic test mode, followed by bounded live-provider smoke tests. Small
+production and target scale run as independent qualifications against their
+exact two-zone/two-node and three-zone/six-node topologies respectively; a
+target result cannot substitute for the small profile:
 
-1. Load the full target object counts before timing begins.
-2. Run target steady traffic for 24 hours, including the stated provider
-   mutation rate and audit volume.
-3. Run the 15-minute peak at 100 API requests/second once per hour.
+1. Load the selected profile's full object counts before timing begins.
+2. Run that profile's steady traffic for 24 hours, including its stated
+   provider mutation rate and one-thirtieth of its monthly audit volume,
+   rounded up: 66,667 events small or 666,667 target.
+3. Run the selected profile's 15-minute peak once per hour.
 4. Inject one process failure, one worker lease expiry, one queue redelivery,
    one database failover, and one simulated Availability Zone loss.
 5. Report every SLI below for the entire run and for each failure window.
@@ -179,10 +187,16 @@ The steady mix therefore produces the stated 30 and 150 accepted mutations per
 minute for the small and target profiles; conflict and replay traffic cannot be
 reclassified as cheap reads.
 
-Payloads use a 16 KiB median and 256 KiB p99 serialized resource size. Requests
-over the API limit selected later must fail before persistence with a stable
-client error. Provider calls and cost-incurring cloud fixtures are capped and
-explicitly enabled; public CI uses deterministic fakes.
+The checked-in seed assigns every generated resource representation and every
+applicable request body or response page to fixed serialized-size buckets: 40%
+at 4 KiB, 49% at 16 KiB, 9% at 64 KiB, and 2% at 256 KiB. Operations without a
+body use zero bytes and are reported separately; deterministic non-secret
+padding fills the selected bucket. The maximum accepted request body, resource,
+or response page is 256 KiB, and larger input fails before persistence with a
+stable client error. The harness reports bucket counts by operation class so
+two runs cannot satisfy the same percentiles with different byte workloads.
+Provider calls and cost-incurring cloud fixtures are capped and explicitly
+enabled; public CI uses deterministic fakes.
 
 ## Service indicators and objectives
 
@@ -191,7 +205,7 @@ environments have measurement coverage but no SLO.
 
 | Boundary | Alpha objective | Measurement |
 | --- | --- | --- |
-| API availability | 99.9% per calendar month | A 30-second external synthetic probe performs authenticated read and no-op write transactions. All server errors, timeouts, and planned maintenance count as unavailable. |
+| API availability | 99.9% per calendar month | A one-minute recovery-region synthetic performs authenticated read and idempotent no-op write transactions. Missing results, server errors, timeouts, and planned maintenance count as unavailable. |
 | API read latency | p95 <= 300 ms; p99 <= 750 ms | Server-side duration from accepted request to complete response under the profile's steady load, excluding client network time. |
 | API write acceptance latency | p95 <= 500 ms; p99 <= 1 s | Server-side duration through durable desired-state, outbox, and required audit commit. Provider execution is asynchronous and excluded. |
 | Invalid or unauthenticated rejection latency | p99 <= 250 ms | Server receipt of a complete, size-bounded request through the final documented response; no durable write is permitted. |
@@ -206,6 +220,18 @@ environments have measurement coverage but no SLO.
 At 99.9% monthly API availability, the maximum unavailable time in a 730-hour
 month is 43 minutes 48 seconds. Error-budget reporting uses raw probe intervals,
 not rounded incident duration.
+
+The production synthetic is a CloudWatch Synthetics API canary in `us-west-2`,
+outside the primary failure boundary, and runs 43,800 times per 730-hour month.
+Each run is limited to 1 GB of Lambda memory and 20 seconds, 0.00015 GB of logs,
+and 0.001 GB of encrypted S3 artifacts retained for 30 days. It publishes only
+the three default metrics and one alarm. The least-privilege probe principal
+can access only a dedicated fixture, obtains short-lived credentials through
+workload identity, and never records tokens, response bodies, or screenshots.
+Its read and write calls count against the selected profile's API, load
+balancer, and gross internet-egress budgets.
+The worksheet prices runs, Lambda requests and duration, logs, artifacts,
+metrics, and the alarm without free allowances.
 
 ### Correctness invariants
 
@@ -245,7 +271,7 @@ error budget:
 
 | Failure | RTO | RPO | Maximum detection time inside RTO | Required mechanism and evidence |
 | --- | ---: | ---: | ---: | --- |
-| API or worker process loss | 5 min | 0 | 1 min | Replica replacement, readiness gating, durable state, and expired-lease takeover |
+| API or worker process loss | 5 min | 0 | 2 min | Replica replacement, readiness gating, durable state, and expired-lease takeover |
 | Compute node loss | 10 min | 0 | 2 min | Rescheduling onto another node and zone, with no duplicate provider resource |
 | Single Availability Zone loss | 15 min | 0 for acknowledged state | 2 min | Multi-AZ database and queue failover plus endpoint health routing |
 | Bad application release | 30 min | 0 for committed data | 5 min | Version rollback with backward-compatible persisted formats |
@@ -255,8 +281,8 @@ error budget:
 RTO starts at failure onset, not incident declaration. Fault-injection evidence
 uses the injection timestamp. Production evidence uses a provider or deployment
 event when it identifies onset; otherwise it conservatively starts at the last
-successful 30-second external probe or integrity check before the first failed
-signal. Detection and declaration consume the same RTO. External probing uses
+successful one-minute external probe or integrity check before the first failed
+signal. Detection and declaration consume the same RTO. The external probe uses
 two consecutive failures; platform health signals must open an incident within
 the table's detection bound. Supported logical-corruption classes are checked
 at least every 15 minutes. Missing the detection bound or the end-to-end RTO
@@ -297,12 +323,20 @@ the worksheet's 100 GB and 1,000 GB primary and recovery copies. Audit records
 are never sampled or dropped: exceeding the bound rejects or backpressures new
 work and surfaces a capacity condition.
 
-The archive writer batches at least 1,000 audit records per object except for a
-final or five-minute flush, and caps compressed objects at 8 MiB. All archived
-data, including non-audit evidence, must remain within 2,000 objects/month small
-and 20,000 target. Each profile budgets three S3 tier-1 requests and four KMS
-requests per object across primary write, recovery replication, retries,
-manifest/list work, and validation. Exceeding the object or request budget uses
+The archive writer fills an object until it contains 1,000 records, the next
+record would exceed the 8 MiB compressed-object limit, or the oldest buffered
+record reaches 30 minutes; one final accounting-window flush is also allowed.
+Process shutdown transfers the durable buffer and does not create an extra
+partial object. The timer is shared across record types rather than creating
+one partial object per stream.
+Audit objects have a 6,000/month small and 60,000/month target sublimit;
+non-audit evidence has 2,000 and 20,000, for total limits of 8,000 and 80,000.
+Even ignoring the stricter 3,000-byte average, packing every audit record at the
+16 KiB maximum requires at most 3,907 and 39,063 objects; no more than 1,440
+timer flushes occur in a 30-day month, so full in-profile audit volume fits its
+sublimit. Each profile budgets three S3 tier-1 requests and four KMS requests
+per object across primary write, recovery replication, retries, manifest/list
+work, and validation. Exceeding an object, request, or record-type sublimit uses
 the same non-dropping backpressure path as the byte cap.
 
 Issue [#14](https://github.com/ArdurAI/veer/issues/14) owns data classification
@@ -319,11 +353,12 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 626.66 | USD 750.00 | USD 123.34 |
-| Target-scale qualification | USD 2,350.77 | USD 2,500.00 | USD 149.23 |
+| Small production | USD 699.70 | USD 750.00 | USD 50.30 |
+| Target-scale qualification | USD 2,425.27 | USD 2,500.00 | USD 74.73 |
 
-The target reference consumes 94.03% of its ceiling after conservatively
-pricing all retained backup data and request allowances. No additional
+The target reference consumes 97.01% of its ceiling after conservatively
+pricing all retained backup data, the external synthetic, and request
+allowances. No additional
 recurring target resource may be added without reducing another input or
 approving a replacement ADR.
 
@@ -356,8 +391,9 @@ the exercise continues.
   ceilings. Dropped spans and projected month-end volume are observable.
 - Secret values are fetched through a single-flight, version-aware in-memory
   cache and never once per provider operation. Cache invalidation follows
-  rotation events and expiry; requests are capped at 50,000/month small and
-  500,000/month target, with cache hits, misses, and projected usage observable.
+  rotation events and expiry; primary/recovery request caps are 45,000/5,000
+  per month small and 450,000/50,000 target, with cache hits, misses, and
+  projected usage observable.
 - Recovery-region secret replicas, archive tier-1 requests, and KMS envelope
   operations are priced without free request allowances. Replication lag,
   version mismatch, request volume, and restore-time access are alarmed.
@@ -366,6 +402,13 @@ the exercise continues.
 - High-cardinality identifiers are logs or traces, never metric dimensions.
 - Nodes stay private. S3 gateway endpoints avoid NAT processing for backup and
   artifact traffic; interface endpoints require a before/after cost comparison.
+- Queue messages carry identifiers and generations, not resource bodies, and
+  are capped at 64 KiB. The 5/50 million monthly limits count billable 64 KiB
+  request units after sends, receives, deletes, retries, batching, and empty
+  long polls rather than counting only logical messages.
+- The recovery-region synthetic's run count, Lambda duration, output bytes, and
+  retention are hard limits. Missing runs page operators and count as failed
+  availability intervals so a broken monitor cannot hide a regional outage.
 - A production profile uses one NAT path per active Availability Zone to avoid
   a cross-zone egress dependency. Developer deployments use no managed NAT.
 - Queue consumers use long polling and batching where correctness permits.
