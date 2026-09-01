@@ -594,7 +594,7 @@ prepare_offline_environment() {
   GOWORK=off
   GOPROXY=off
   GOSUMDB=off
-  GOVCS=off
+  GOVCS='*:off'
   GOFLAGS=-mod=readonly
   CGO_ENABLED=0
   export PATH GOROOT GOCACHE GOLANGCI_LINT_CACHE GOPATH GOMODCACHE \

@@ -99,7 +99,7 @@ variables or credentials.
   runner is bounded to 15 minutes and has no service containers, cloud login,
   or paid third-party API calls.
 - Fast gates use repository-local Go, golangci-lint, and XDG caches but run
-  with `GOENV=off`, `GOWORK=off`, `GOPROXY=off`, `GOVCS=off`, and
+  with `GOENV=off`, `GOWORK=off`, `GOPROXY=off`, `GOVCS=*:off`, and
   `GOTOOLCHAIN=local`.
 - Bootstrap clears `TAR_OPTIONS` and `GZIP`; lint clears `SHELLCHECK_OPTS` and
   passes `--norc`. Archive behavior and ShellCheck policy therefore do not
