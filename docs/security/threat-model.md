@@ -380,9 +380,8 @@ The review must:
    ledger;
 4. link each high/critical scenario to an owned mitigation and live verification;
 5. update data handling for every derived copy, export, backup, log, and error;
-6. run `./hack/dev docs`, including
-   `./docs/security/verify_test.sh`, and the implementation tests owned by each
-   follow-up; and
+6. run `./hack/dev docs`, including its threat-model negative fixtures and the
+   implementation tests owned by each follow-up; and
 7. record unresolved prerequisites as assumptions, not passing controls.
 
 ## Severity calibration

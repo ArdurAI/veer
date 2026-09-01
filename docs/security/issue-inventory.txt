@@ -1,3 +1,4 @@
+https://github.com/ArdurAI/veer/issues/14
 https://github.com/ArdurAI/veer/issues/15
 https://github.com/ArdurAI/veer/issues/20
 https://github.com/ArdurAI/veer/issues/22
@@ -22,10 +23,19 @@ https://github.com/ArdurAI/veer/issues/40
 https://github.com/ArdurAI/veer/issues/41
 https://github.com/ArdurAI/veer/issues/42
 https://github.com/ArdurAI/veer/issues/43
+https://github.com/ArdurAI/veer/issues/44
 https://github.com/ArdurAI/veer/issues/45
+https://github.com/ArdurAI/veer/issues/46
+https://github.com/ArdurAI/veer/issues/47
+https://github.com/ArdurAI/veer/issues/48
 https://github.com/ArdurAI/veer/issues/49
 https://github.com/ArdurAI/veer/issues/50
+https://github.com/ArdurAI/veer/issues/51
 https://github.com/ArdurAI/veer/issues/52
+https://github.com/ArdurAI/veer/issues/53
+https://github.com/ArdurAI/veer/issues/54
+https://github.com/ArdurAI/veer/issues/55
+https://github.com/ArdurAI/veer/issues/56
 https://github.com/ArdurAI/veer/issues/57
 https://github.com/ArdurAI/veer/issues/61
 https://github.com/ArdurAI/veer/issues/63

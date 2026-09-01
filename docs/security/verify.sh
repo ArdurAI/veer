@@ -325,6 +325,7 @@ for required_source in \
   'https://datatracker.ietf.org/doc/html/rfc9700' \
   'https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html' \
   'https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html' \
+  'https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html' \
   'https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-security-best-practices.html' \
   'https://kubernetes.io/docs/concepts/security/multi-tenancy/' \
   'https://kubernetes.io/docs/concepts/security/service-accounts/' \
@@ -369,6 +370,45 @@ function valid_links(value, values, count, link_index) {
             !(values[link_index] in known_issue)) {
             return 0
         }
+    }
+    return 1
+}
+function valid_issue_work(value, work, range_values, range_count, range_start, range_end,
+                          issue_number, remaining, issue_url) {
+    work = trim(value)
+    if (work !~ /^[Ii]ssues? /) {
+        return 0
+    }
+    sub(/^[Ii]ssues? /, "", work)
+    if (work ~ /^#[1-9][0-9]* through #[1-9][0-9]*$/) {
+        range_count = split(work, range_values, " through ")
+        if (range_count != 2) {
+            return 0
+        }
+        range_start = substr(range_values[1], 2) + 0
+        range_end = substr(range_values[2], 2) + 0
+        if (range_start > range_end) {
+            return 0
+        }
+        for (issue_number = range_start; issue_number <= range_end; issue_number++) {
+            issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
+            if (!(issue_url in known_issue)) {
+                return 0
+            }
+        }
+        return 1
+    }
+    if (work !~ /^#[1-9][0-9]*(, #[1-9][0-9]*)*(,? and #[1-9][0-9]*)?$/) {
+        return 0
+    }
+    remaining = work
+    while (match(remaining, /#[1-9][0-9]*/)) {
+        issue_number = substr(remaining, RSTART + 1, RLENGTH - 1)
+        issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
+        if (!(issue_url in known_issue)) {
+            return 0
+        }
+        remaining = substr(remaining, RSTART + RLENGTH)
     }
     return 1
 }
@@ -486,7 +526,8 @@ FNR == NR {
         }
         next
     }
-    if (table == "attackers" && $0 ~ /^\| ACT-[A-Z0-9-][A-Z0-9-]* \|/) {
+    if (table == "attackers" &&
+        $0 ~ /^\| ACT-[A-Z0-9]+(-[A-Z0-9]+)* \|/) {
         if (!table_delimiter_seen) {
             error("canonical attackers row appears before a valid delimiter")
             next
@@ -517,7 +558,7 @@ FNR == NR {
         boundary_owner[boundary_id] = trim(cells[5])
         next
     }
-    if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
+    if (table == "owners" && $0 ~ /^\| OWN-[A-Z]+(-[A-Z]+)* \|/) {
         if (!table_delimiter_seen) {
             error("canonical owners row appears before a valid delimiter")
             next
@@ -529,6 +570,9 @@ FNR == NR {
         owner_id = trim(cells[2])
         if (owners[owner_id]++) {
             error("duplicate control-owner row " owner_id)
+        }
+        if (!valid_issue_work(trim(cells[4]))) {
+            error("invalid live verification work for control owner " owner_id)
         }
         next
     }
@@ -707,6 +751,45 @@ function valid_links(value, values, count, link_index) {
     }
     return 1
 }
+function valid_issue_work(value, work, range_values, range_count, range_start, range_end,
+                          issue_number, remaining, issue_url) {
+    work = trim(value)
+    if (work !~ /^[Ii]ssues? /) {
+        return 0
+    }
+    sub(/^[Ii]ssues? /, "", work)
+    if (work ~ /^#[1-9][0-9]* through #[1-9][0-9]*$/) {
+        range_count = split(work, range_values, " through ")
+        if (range_count != 2) {
+            return 0
+        }
+        range_start = substr(range_values[1], 2) + 0
+        range_end = substr(range_values[2], 2) + 0
+        if (range_start > range_end) {
+            return 0
+        }
+        for (issue_number = range_start; issue_number <= range_end; issue_number++) {
+            issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
+            if (!(issue_url in known_issue)) {
+                return 0
+            }
+        }
+        return 1
+    }
+    if (work !~ /^#[1-9][0-9]*(, #[1-9][0-9]*)*(,? and #[1-9][0-9]*)?$/) {
+        return 0
+    }
+    remaining = work
+    while (match(remaining, /#[1-9][0-9]*/)) {
+        issue_number = substr(remaining, RSTART + 1, RLENGTH - 1)
+        issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
+        if (!(issue_url in known_issue)) {
+            return 0
+        }
+        remaining = substr(remaining, RSTART + RLENGTH)
+    }
+    return 1
+}
 function valid_readable_row(line, expected_columns, cells, count, cell_index, value) {
     count = split(line, cells, "|")
     if (count != expected_columns + 2 || trim(cells[1]) != "" || trim(cells[count]) != "") {
@@ -773,7 +856,7 @@ FNR == NR {
         table_delimiter_seen = 1
         next
     }
-    if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
+    if (table == "owners" && $0 ~ /^\| OWN-[A-Z]+(-[A-Z]+)* \|/) {
         if (!table_delimiter_seen) {
             error("canonical owners row appears before a valid delimiter")
             next
@@ -785,6 +868,9 @@ FNR == NR {
         owner_id = trim(cells[2])
         if (owners[owner_id]++) {
             error("duplicate control-owner row " owner_id)
+        }
+        if (!valid_issue_work(trim(cells[4]))) {
+            error("invalid live verification work for control owner " owner_id)
         }
         next
     }
@@ -802,10 +888,21 @@ FNR == NR {
             error("duplicate readable data-class row " class_id)
         }
         model_class[class_id] = trim(cells[3])
-        if (!match(cells[6], /OWN-[A-Z-][A-Z-]*/)) {
-            error("readable data class lacks a control owner: " class_id)
+        owner_and_work = trim(cells[6])
+        owner_separator = index(owner_and_work, "; ")
+        if (!owner_separator) {
+            error("readable data class has invalid owner and verification: " class_id)
         } else {
-            model_class_owner[class_id] = substr(cells[6], RSTART, RLENGTH)
+            owner_id = substr(owner_and_work, 1, owner_separator - 1)
+            owner_work = substr(owner_and_work, owner_separator + 2)
+            if (owner_id !~ /^OWN-[A-Z]+(-[A-Z]+)*$/) {
+                error("readable data class has invalid control owner: " class_id)
+            } else {
+                model_class_owner[class_id] = owner_id
+            }
+            if (!valid_issue_work(owner_work)) {
+                error("readable data class has invalid verification work: " class_id)
+            }
         }
         next
     }
@@ -905,28 +1002,33 @@ function token_character(character) {
             break
         }
         citation_start = search_from + relative_start - 1
+        if (citation_start > 2 && substr($0, citation_start - 2, 2) == "./") {
+            citation_start -= 2
+        }
         preceding = citation_start > 1 ? substr($0, citation_start - 1, 1) : ""
         if (preceding != "" && token_character(preceding)) {
             search_from = citation_start + 5
             continue
         }
         candidate = substr($0, citation_start)
-        if (!match(candidate, /^docs\/[A-Za-z0-9_.\/-]+:[1-9][0-9]*(-[1-9][0-9]*)?/)) {
+        if (!match(candidate, /^(\.\/)?docs\/[A-Za-z0-9_.\/-]+:[1-9][0-9]*(-[1-9][0-9]*)?/)) {
             error(citation_start)
             search_from = citation_start + 5
             continue
         }
-        citation = substr(candidate, RSTART, RLENGTH)
-        following = substr(candidate, RLENGTH + 1, 1)
+        matched_length = RLENGTH
+        citation = substr(candidate, RSTART, matched_length)
+        following = substr(candidate, matched_length + 1, 1)
         if (following != "" && token_character(following)) {
             error(citation_start)
-            search_from = citation_start + RLENGTH
+            search_from = citation_start + matched_length
             continue
         }
+        sub(/^\.\//, "", citation)
         if (!seen[citation]++) {
             print citation
         }
-        search_from = citation_start + RLENGTH
+        search_from = citation_start + matched_length
     }
 }
 END {

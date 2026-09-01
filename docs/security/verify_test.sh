@@ -129,6 +129,20 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  !changed && index($0, "docs/architecture/overview.md:99-117") {
+      sub(/docs\/architecture\/overview[.]md:99-117/, "./docs/security/model.md:1-99999")
+      changed = 1
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'prefixed readable source citation with stale range' \
+  'citation range is outside the target: docs/security/model.md:1-99999'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / { next }
   { print }
 ' "$model" >"$rewritten_model"
@@ -177,6 +191,19 @@ printf '%s\n' \
 mv "$rewritten_model" "$model"
 expect_rejection 'owner outside control-owner table' \
   'undeclared owner OWN-SECURITY'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| OWN-SECURITY \|/ {
+      sub(/Issues #14 and #28 \|$/, "Issue #9999 |")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'control owner with unknown verification work' \
+  'invalid live verification work for control owner OWN-SECURITY'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -323,6 +350,18 @@ expect_rejection 'required source hidden in a comment' \
 new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
+required_source='https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html'
+LC_ALL=C awk -v source="$required_source" '
+  index($0, source) { next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'missing AWS source-identity reference' \
+  'is missing exact primary reference destination: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
 required_source='https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
 LC_ALL=C awk -v source="$required_source" '
   { sub(source, source "-broken"); print }
@@ -408,6 +447,24 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  /^\| ACT-NET \|/ { sub(/ACT-NET/, "ACT--") }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+ledger="$test_root/docs/security/threats.tsv"
+rewritten="$test_root/threats.tsv"
+LC_ALL=C awk -F '\t' -v OFS='\t' '
+  $6 == "ACT-NET" { $6 = "ACT--" }
+  { print }
+' "$ledger" >"$rewritten"
+mv "$rewritten" "$ledger"
+expect_rejection 'malformed canonical attacker identifier' \
+  'undeclared attacker ACT--'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| TB-01 \|/ { print "| TB-01 | | | |"; next }
   { print }
 ' "$model" >"$rewritten_model"
@@ -450,6 +507,19 @@ LC_ALL=C awk '
 mv "$rewritten_model" "$model"
 expect_rejection 'empty data-class cells' \
   'invalid required cells in canonical classes row'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| DC-PERSONAL \|/ {
+      sub(/OWN-IDENTITY;/, "OWN-IDENTITY and OWN-NONEXISTENT;")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'data class with an additional undeclared owner' \
+  'readable data class has invalid control owner: DC-PERSONAL'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"
