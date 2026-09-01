@@ -59,6 +59,26 @@ write_visible_markdown() {
         }
         return 0
     }
+    function html_tag_end(line, character_index, character, quote) {
+        quote = ""
+        for (character_index = 1; character_index <= length(line); character_index++) {
+            character = substr(line, character_index, 1)
+            if (quote != "") {
+                if (character == quote) {
+                    quote = ""
+                }
+                continue
+            }
+            if (character == "\"" || character == single_quote) {
+                quote = character
+                continue
+            }
+            if (character == ">") {
+                return character_index
+            }
+        }
+        return 0
+    }
     function complete_html_tag(line, character_index, character, quote, masked, tail) {
         if (substr(line, 1, 1) != "<") {
             return 0
@@ -130,7 +150,8 @@ write_visible_markdown() {
             sub(/^</, "", tag)
             sub(/[[:space:]>].*$/, "", tag)
             html_close = "</" tag ">"
-            if (!index(lower, html_close)) {
+            opening_end = html_tag_end(stripped)
+            if (!opening_end || !index(substr(lower, opening_end + 1), html_close)) {
                 in_html_literal = 1
             }
             return 1
@@ -338,16 +359,75 @@ visible_summary_file="$verification_tmp/model.visible.md"
 write_visible_markdown "$model_file" "$visible_model_file"
 write_visible_markdown "$summary_file" "$visible_summary_file"
 
+LC_ALL=C awk '
+  /^##+ / && seen[$0]++ {
+      print FILENAME ":" FNR ": duplicate visible heading: " $0 > "/dev/stderr"
+      failed = 1
+  }
+  END { exit failed ? 1 : 0 }
+' "$visible_model_file" || fail 'readable model contains duplicate canonical sections'
+
+LC_ALL=C awk -v issue_inventory="$issue_inventory_file" '
+  function validate_issue(number, issue_url) {
+      issue_url = "https://github.com/ArdurAI/veer/issues/" number
+      if (!(issue_url in known_issue)) {
+          print FILENAME ":" FNR ": unknown readable issue reference #" number > "/dev/stderr"
+          failed = 1
+      }
+  }
+  BEGIN {
+      while ((getline inventory_entry < issue_inventory) > 0) {
+          known_issue[inventory_entry] = 1
+      }
+      close(issue_inventory)
+  }
+  {
+      remaining = $0
+      while (match(remaining, /#[1-9][0-9]* through #[1-9][0-9]*/)) {
+          range = substr(remaining, RSTART, RLENGTH)
+          split(range, endpoints, " through ")
+          range_start = substr(endpoints[1], 2) + 0
+          range_end = substr(endpoints[2], 2) + 0
+          if (range_start > range_end) {
+              print FILENAME ":" FNR ": invalid readable issue range " range > "/dev/stderr"
+              failed = 1
+          } else {
+              for (issue_number = range_start; issue_number <= range_end; issue_number++) {
+                  validate_issue(issue_number)
+              }
+          }
+          remaining = substr(remaining, RSTART + RLENGTH)
+      }
+      remaining = $0
+      while (match(remaining, /#[1-9][0-9]*/)) {
+          issue_number = substr(remaining, RSTART + 1, RLENGTH - 1)
+          validate_issue(issue_number)
+          remaining = substr(remaining, RSTART + RLENGTH)
+      }
+  }
+  END { exit failed ? 1 : 0 }
+' "$visible_model_file" || fail 'readable model references issues outside the offline inventory'
+
 for required_heading in \
   '## Overview' \
+  '### Components and source evidence' \
+  '### Effective resources and capabilities' \
   '## Threat model, trust boundaries, and assumptions' \
+  '### Protected assets' \
+  '### Security objectives' \
+  '### Actors and realistic starting capabilities' \
+  '### Trust boundaries' \
+  '### Control owners' \
   '### Workspace isolation assumptions' \
   '### Provider credential flow and blast radius' \
   '### Data classification' \
   '### Unsupported deployment modes' \
+  '### Assumptions and unresolved evidence' \
   '## Attack surface, mitigations, and attacker stories' \
+  '### Residual risk that cannot be relabeled as mitigation' \
   '### Review and maintenance' \
-  '## Severity calibration'; do
+  '## Severity calibration' \
+  '### Primary references'; do
   require_visible_section "$required_heading" "$model_file" "$visible_model_file"
 done
 
@@ -483,6 +563,9 @@ function record_readable_attackers(value, threat_id, remaining, relative_start, 
     }
     return found
 }
+function has_complete_citation(value) {
+    return value ~ /(^|[^A-Za-z0-9_.\/:\-])(\.\/)?docs\/[A-Za-z0-9_.\/-]+:[1-9][0-9]*(-[1-9][0-9]*)?([^A-Za-z0-9_.\/:\-]|$)/
+}
 function valid_evidence(value, values, count, citation_index) {
     count = split(value, values, ";")
     if (count < 1) {
@@ -540,6 +623,13 @@ FNR == NR {
         finish_table()
         section = $0
     }
+    if (section == "### Components and source evidence" &&
+        $0 == "| Component | Security-relevant responsibility | Source evidence |") {
+        table = "components"
+        table_columns = 3
+        table_delimiter_seen = 0
+        next
+    }
     if (section == "### Protected assets" &&
         $0 == "| ID | Asset | Required property | Evidence |") {
         table = "assets"
@@ -587,6 +677,21 @@ FNR == NR {
         table_delimiter_seen = 1
         next
     }
+    if (table == "components" && $0 ~ /^\|/) {
+        if (!table_delimiter_seen) {
+            error("canonical components row appears before a valid delimiter")
+            next
+        }
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical components row")
+            next
+        }
+        component_rows++
+        if (!has_complete_citation(trim(cells[4]))) {
+            error("component row lacks a complete source citation")
+        }
+        next
+    }
     if (table == "assets" && $0 ~ /^\| A-[0-9][0-9] \|/) {
         if (!table_delimiter_seen) {
             error("canonical assets row appears before a valid delimiter")
@@ -599,6 +704,9 @@ FNR == NR {
         asset_id = trim(cells[2])
         if (assets[asset_id]++) {
             error("duplicate protected-asset row " asset_id)
+        }
+        if (!has_complete_citation(trim(cells[5]))) {
+            error("protected asset lacks a complete source citation: " asset_id)
         }
         next
     }
@@ -668,6 +776,8 @@ FNR == NR {
             error("duplicate readable attacker-story row " threat_id)
         }
         model_risk[threat_id] = tolower(trim(cells[2]))
+        model_existing_controls[threat_id] = trim(cells[6])
+        model_mitigation[threat_id] = trim(cells[7])
         if (!record_readable_attackers(trim(cells[3]), threat_id)) {
             error("invalid or undeclared actor set in readable attacker story " threat_id)
         }
@@ -733,6 +843,12 @@ NF != 14 {
     }
     if (($1 in model_threat) && $3 != model_risk[$1]) {
         error("ledger risk does not match readable priority for " $1)
+    }
+    if (($1 in model_threat) && $8 != model_existing_controls[$1]) {
+        error("ledger existing controls do not match readable attacker story for " $1)
+    }
+    if (($1 in model_threat) && $9 != model_mitigation[$1]) {
+        error("ledger mitigation does not match readable attacker story for " $1)
     }
     if (trim($4) == "") {
         error("threat requires at least one asset")
@@ -825,6 +941,9 @@ NF != 14 {
 END {
     if (rows == 0) {
         error("threat ledger has no rows")
+    }
+    if (component_rows == 0) {
+        error("readable model has no canonical component rows")
     }
     for (asset in assets) {
         if (!(asset in used_assets)) {

@@ -220,7 +220,7 @@ LC_ALL=C awk '
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'attacker story with unknown evidence work' \
-  'invalid evidence work for readable attacker story TM-001'
+  'unknown readable issue reference #9999'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -234,6 +234,32 @@ LC_ALL=C awk '
 mv "$rewritten_model" "$model"
 expect_rejection 'attacker story and ledger evidence mismatch' \
   'ledger issue references do not match readable evidence for TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/OIDC, short lifetime, and token exclusion are accepted requirements only/, "Accept unsigned tokens and emit raw credentials")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger existing-controls mismatch' \
+  'ledger existing controls do not match readable attacker story for TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Strict issuer\/audience\/algorithm\/signature\/time\/JWKS validation, human\/workload separation, raw-token canaries, and negative corpus/, "Accept unsigned tokens and emit raw credentials")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger mitigation mismatch' \
+  'ledger mitigation does not match readable attacker story for TM-001'
 
 new_fixture
 rewrite_threat_field TM-014 6 'ACT-MEMBER'
@@ -286,7 +312,7 @@ LC_ALL=C awk '
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'control owner with unknown verification work' \
-  'invalid live verification work for control owner OWN-SECURITY'
+  'unknown readable issue reference #9999'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -358,6 +384,23 @@ LC_ALL=C awk '
   !skip { print }
 ' "$model" >"$rewritten_model"
 printf '%s\n' \
+  '<pre title="</pre>">' \
+  '### Workspace isolation assumptions' \
+  'This heading remains inside the raw preformatted HTML element.' \
+  '</pre>' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'quoted raw-HTML close tag cannot expose a heading' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
   '   ```text' \
   '### Workspace isolation assumptions' \
   '   ```' >>"$rewritten_model"
@@ -405,6 +448,32 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  /^\| A-01 \|/ {
+      sub(/`docs\/architecture\/overview[.]md:26-45`/, "No source evidence retained")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'protected asset without source citation' \
+  'protected asset lacks a complete source citation: A-01'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| API and GitOps edge \|/ {
+      sub(/`docs\/architecture\/overview[.]md:5-24`; `docs\/architecture\/0002-alpha-implementation-stack[.]md:72-87`/, "No source evidence retained")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'component without source citation' \
+  'component row lacks a complete source citation'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   $0 == "### Workspace isolation assumptions" { skip = 1; next }
   $0 == "### Provider credential flow and blast radius" { skip = 0 }
   !skip { print }
@@ -447,6 +516,16 @@ printf '%s\n' "<!-- $required_source -->" >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'required source hidden in a comment' \
   'is missing exact primary reference destination: https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  { sub(/Issue #13 controls bootstrap/, "Issue #9999 controls bootstrap"); print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'unknown issue reference in readable prose' \
+  'unknown readable issue reference #9999'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -648,6 +727,29 @@ LC_ALL=C awk '
 mv "$rewritten_model" "$model"
 expect_rejection 'attacker-story table with renamed columns' \
   'unexpected canonical threats table header'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Assumptions and unresolved evidence" { skip = 1; next }
+  $0 == "## Attack surface, mitigations, and attacker stories" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'missing assumptions and unresolved evidence section' \
+  'is missing visible heading: ### Assumptions and unresolved evidence'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '### Control owners' \
+  '| ID | Conflicting responsibility | Alternate work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'duplicate canonical control-owner section' \
+  'duplicate visible heading: ### Control owners'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"
