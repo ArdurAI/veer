@@ -42,6 +42,7 @@ does not contact AWS or read environment credentials.
 | m7g.xlarge on-demand node count | 2 | 6 |
 | gp3 root storage per node | 30 GiB | 30 GiB |
 | Multi-AZ database proxy | db.t4g.medium | db.r7g.large |
+| Billable T4g surplus CPU credits | 100 vCPU-hours | 0 |
 | Database gp3 storage | 50 GiB | 500 GiB |
 | Database changed blocks per 30 days | 50 GiB | 500 GiB |
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
@@ -50,15 +51,15 @@ does not contact AWS or read environment credentials.
 | Average ALB capacity | 1 LCU | 5 LCU |
 | Derived provider traffic through NAT | 86.12 GB | 861.15 GB |
 | Billable NAT processed data | 100 GB | 1,000 GB |
-| Derived response egress | 135.11 GB | 675.56 GB |
-| Billable internet egress with no free allowance | 150 GB | 800 GB |
+| Derived client plus provider-request egress | 156.64 GB | 890.85 GB |
+| Billable internet egress with no free allowance | 200 GB | 1,000 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Stored archive ingress per 30-day month | 16 GB | 80 GB |
-| Archive objects written | 22,000 | 110,000 |
-| S3 tier-1 archive requests, primary plus recovery | 66,000 | 330,000 |
-| KMS archive requests, primary plus recovery | 88,000 | 440,000 |
+| Archive objects written | 28,000 | 110,000 |
+| S3 tier-1 archive requests, primary plus recovery | 84,000 | 330,000 |
+| KMS archive requests, primary plus recovery | 112,000 | 440,000 |
 | Encrypted primary archive/object storage | 200 GiB | 1,000 GiB |
 | Encrypted recovery archive/object storage | 200 GiB | 1,000 GiB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
@@ -80,10 +81,11 @@ monthly request schedule. One send, receive, and delete consumes 10.35 million
 units small and 51.74 million target; the rounded limits reserve the balance for
 retries, empty long polls, and recovery traffic.
 
-Provider traffic is metered in 16 KiB units across requests, responses,
-pagination, observations, and retries. The continuous 120/1,200 unit-per-minute
-limits derive 86.12/861.15 GB per 730-hour month; the worksheet rounds those
-quantities up and does not subtract free allowances.
+Provider traffic units allow at most 4 KiB outbound and 12 KiB inbound across
+requests, responses, pagination, observations, and retries. The continuous
+120/1,200 unit-per-minute limits derive 21.53/215.29 GB internet egress and
+86.12/861.15 GB combined NAT processing per 730-hour month; the worksheet
+rounds those quantities up and does not subtract free allowances.
 
 Backup storage conservatively applies no included allocation. At one
 dataset-equivalent of changed blocks per 30 days, primary storage is
@@ -99,9 +101,10 @@ every provider operation reads Secrets Manager.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
-at no more than 1 KiB, and 1 KiB of header/TLS allowance for every request. The
-rounded worksheet quantities also contain the external synthetic's two calls
-per minute.
+at no more than 1 KiB, and 1 KiB of header/TLS allowance for every request.
+Adding bounded outbound provider traffic yields 156.64/890.85 GB; the rounded
+worksheet quantities also contain the external synthetic's two calls per
+minute.
 
 The one-minute recovery-region canary uses 43,800 runs in a 730-hour month. Its
 dependent Lambda, log, S3 artifact, three-metric, and one-alarm quantities use
@@ -118,7 +121,7 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | --- | --- | --- |
 | EKS | [AmazonEKS 20260831092157](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEKS/20260831092157/us-east-1/index.json) | `ZYWMR684YSMFHWEU` at USD 0.10/cluster-hour; extended-support surcharge `M7977BSVFGDUJZ67` at USD 0.50/cluster-hour |
 | EC2 compute and root storage | [AmazonEC2 20260831181331](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/20260831181331/us-east-1/index.json) | `Y7X6HJY9G859NU23` at USD 0.1632/m7g.xlarge-hour; `JG3KUJMBRGHV3N8G` at USD 0.08/gp3 GB-month |
-| RDS compute | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `SCBZU9XX357QUA4D` at USD 0.129/db.t4g.medium Multi-AZ-hour; `QPKXCKEKNV5DW3QA` at USD 0.478/db.r7g.large Multi-AZ-hour |
+| RDS compute | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `SCBZU9XX357QUA4D` at USD 0.129/db.t4g.medium Multi-AZ-hour; `QPKXCKEKNV5DW3QA` at USD 0.478/db.r7g.large Multi-AZ-hour; PostgreSQL T4g credit `DXW9ERDR4STYT9D7` at USD 0.075/vCPU-hour |
 | RDS primary storage and backup | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `J7S7KD4WFDNQWKNX` at USD 0.23/GB-month Multi-AZ gp3; charged PostgreSQL backup `6W8ECRFVDATCER7J` at USD 0.095/GB-month |
 | RDS recovery storage | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-west-2/index.json) | `PAHDKG6EF4XSHYXC` at USD 0.095/GB-month |
 | Queue | [AWSQueueService 20250828200713](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSQueueService/20250828200713/us-east-1/index.json) | `8RN6B8U4MERHRXP3` at USD 0.40/million standard requests |

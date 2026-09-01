@@ -120,6 +120,8 @@ an explicit quota response; they must not cause silent data loss.
 | Environments | 5 | 100 | 1,000 |
 | Applications | 20 | 1,000 | 10,000 |
 | Components | 100 | 5,000 | 50,000 |
+| Policies | 10 | 250 | 2,500 |
+| Provider connections | 2 | 50 | 500 |
 | API requests/second, steady | 1 | 5 | 25 |
 | API requests/second, 15-minute peak | 2 | 20 | 100 |
 | Accepted desired-state mutations/minute, steady | 6 | 30 | 150 |
@@ -128,13 +130,14 @@ an explicit quota response; they must not cause silent data loss.
 | Pending reconciliation items | 100 | 10,000 | 100,000 |
 | Oldest ready-item admission threshold | 30 min | 15 min | 15 min |
 | Durable queue 64 KiB request units/month | 0 | 20,000,000 | 100,000,000 |
-| Provider 16 KiB transfer units/minute, all attempts | 20 | 120 | 1,200 |
+| Provider 4 KiB outbound/12 KiB inbound units/minute, all attempts | 20 | 120 | 1,200 |
 | Provider mutations/minute, aggregate | 10 | 60 | 600 |
+| Billable database surplus CPU credits/month, vCPU-hours | 0 | 100 | 0 |
 | Audit events/month | 100,000 | 4,000,000 | 20,000,000 |
 | Archived audit and evidence bytes/30-day month, GB | 0.4 | 16 | 80 |
-| Archive objects written/month | 2,000 | 22,000 | 110,000 |
-| Archive S3 tier-1 requests/month, both regions | 6,000 | 66,000 | 330,000 |
-| Archive KMS requests/month, both regions | 8,000 | 88,000 | 440,000 |
+| Archive objects written/month | 2,000 | 28,000 | 110,000 |
+| Archive S3 tier-1 requests/month, both regions | 6,000 | 84,000 | 330,000 |
+| Archive KMS requests/month, both regions | 8,000 | 112,000 | 440,000 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Database changed blocks/month, GiB | 5 | 50 | 500 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
@@ -166,13 +169,14 @@ the remaining units for those paths; batching does not reduce billable message
 units.
 
 Every provider request, response page, observation, retry, and error response
-consumes `ceil(combined request and response wire bytes / 16 KiB)` transfer
-units, including protocol and TLS overhead; zero-byte responses still consume
-one. The 120/1,200 per-minute limits include all attempts, while the 60/600
-mutation limits are a subset. At a continuous monthly maximum, transfer volume
-is 86.12 GB small and 861.15 GB target, fitting the worksheet's rounded 100 GB
-and 1,000 GB NAT-processing quantities. Adapters must paginate, stream, or
-reject before crossing the selected profile's unit budget.
+consumes `max(ceil(outbound wire bytes / 4 KiB), ceil(inbound wire bytes / 12
+KiB), 1)` transfer units, including protocol and TLS overhead. The 120/1,200
+per-minute limits include all attempts, while the 60/600 mutation limits are a
+subset. At a continuous monthly maximum, outbound volume is 21.53/215.29 GB,
+inbound volume is 64.59/645.86 GB, and combined NAT processing is 86.12/861.15
+GB. Those quantities fit the worksheet's rounded egress and 100/1,000 GB NAT
+limits. Adapters must paginate, stream, or reject before crossing the selected
+profile's unit budget.
 
 ### Load qualification
 
@@ -182,7 +186,14 @@ production and target scale run as independent qualifications against their
 exact two-zone/two-node and three-zone/six-node topologies respectively; a
 target result cannot substitute for the small profile:
 
-1. Load the selected profile's full object counts before timing begins.
+1. Load the selected profile's full object counts, including its Policy and
+   ProviderConnection counts. Seed age-distributed operations, plans, policy
+   decisions, audit records, tombstones, idempotency rows, and indexes across
+   their full online-retention windows until relational occupancy is 40 GiB
+   small or 400 GiB target (80% of provisioned storage). Seed both the primary
+   and recovery archives to 160 GiB for small or 800 GiB for target. The timed
+   run must remain below 90% relational occupancy, leaving 10% for maintenance
+   and recovery work.
 2. Run that profile's steady traffic for 24 hours, including its stated
    provider mutation rate and one-thirtieth of its monthly audit volume,
    rounded up: 133,334 events small or 666,667 target.
@@ -190,8 +201,11 @@ target result cannot substitute for the small profile:
 4. Inject one process failure, one worker lease expiry, one queue redelivery,
    and one database failover. Run an isolated Availability Zone loss window for
    every active zone, resetting and re-seeding between windows.
-5. Pause the deterministic recovery feed through its 15-, 25-, and 30-minute
-   thresholds and verify warning, critical, and qualification-failure behavior.
+5. Inject every enumerated logical-corruption class in an isolated reset and
+   verify its integrity check, 15-minute detection, two-hour RTO, and five-
+   minute RPO. Pause the deterministic recovery feed through its 20-, 25-, and
+   30-minute thresholds and verify warning, critical, and
+   qualification-failure behavior.
 6. Restore the latest simulated regional checkpoint and apply the acknowledged-
    record completeness oracle defined under recovery objectives.
 7. Report every SLI below for the entire run and for each failure window.
@@ -252,7 +266,7 @@ environments have measurement coverage but no SLO.
 | Client-cancellation cleanup | p99 <= 100 ms | Time from server observation of request-context cancellation to handler termination, with no partial uncommitted state retained. |
 | Planning start delay | 99% <= 30 s; 99.9% <= 2 min | Time from successful write commit to a worker acquiring the current generation. |
 | Observation freshness | 95% <= 5 min; 99% <= 15 min | Age of the newest successful provider observation for every non-deleted resource that requires observation. Rate-limited and terminally failed resources remain in the denominator; a resource with no successful observation is aged from activation. |
-| Recovery-copy freshness | <= 30 min hard bound; warn at 15 min; critical at 25 min | Source-commit age of the newest common database, outbox, audit-manifest, and object checkpoint verified as restorable in `us-west-2`. Missing or unverifiable checkpoints have infinite age. |
+| Recovery-copy freshness | <= 30 min hard bound; warn at 20 min; critical at 25 min | Source-commit age of the newest common database, outbox, audit-manifest, and object checkpoint verified as restorable in `us-west-2`. Missing or unverifiable checkpoints have infinite age. |
 | Audit publication delay | 99.9% <= 60 s | Time from security-relevant commit to availability in the append-only audit query/export path. Missing required audit events are a correctness failure, not error-budget consumption. |
 | Worker recovery | 99% of abandoned leases reacquired <= 2 min | Time from lease expiry or process loss to fenced ownership by a replacement worker. |
 | Cancellation acknowledgment | 99% <= 30 s | Time from accepted cancellation request to a persisted canceled or cancel-pending condition. Provider operations that cannot be interrupted must be identified explicitly. |
@@ -315,7 +329,7 @@ error budget:
 | Compute node loss | 10 min | 0 | 2 min | Rescheduling onto another node and zone, with no duplicate provider resource |
 | Single Availability Zone loss | 15 min | 0 for acknowledged state | 2 min | Multi-AZ database and queue failover plus endpoint health routing |
 | Bad application release | 30 min | 0 for committed data | 5 min | Version rollback with backward-compatible persisted formats |
-| Logical database corruption or operator error | 2 hr | 5 min | 15 min | Relationship and audit-integrity checks plus in-region point-in-time restore into an isolated validation target before cutover |
+| Enumerated logical corruption or operator error | 2 hr | 5 min | 15 min | Named integrity checks plus in-region point-in-time restore into an isolated validation target before cutover |
 | Primary-region loss | 4 hr | 30 min | 4 min | Independent regional probes, freshness alarms, encrypted cross-region restore, control-plane deployment, authority revalidation, and endpoint switch |
 
 RTO starts at failure onset, not incident declaration. Fault-injection evidence
@@ -327,13 +341,24 @@ two consecutive failures; platform health signals must open an incident within
 the table's detection bound. A regional failure immediately after a successful
 probe yields failed results no later than 80 and 140 seconds after onset (one-
 minute cadence plus the 20-second timeout); alarm evaluation and paging have a
-further 60-second limit, keeping detection below four minutes. Supported
-logical-corruption classes are checked at least every 15 minutes. Missing the
+further 60-second limit, keeping detection below four minutes. Missing the
 detection bound or the end-to-end RTO fails the objective.
+
+The logical-corruption objective covers these alpha classes, each checked at
+least every 15 minutes: unintended workspace-scoped desired-state update or
+delete (audit-ledger/state comparison); missing, duplicate, or out-of-order
+generation and outbox rows (foreign-key, uniqueness, monotonic-generation, and
+state/outbox checksum checks); cross-workspace references (workspace-closure
+and ownership checks); missing or modified required audit records (hash-chain
+and archive-manifest checks); partially applied or mismatched schema migration
+(migration journal, schema version, and checksum); and accidental required
+table or index removal (catalog manifest). Other logical defects are detected
+best-effort and do not inherit the two-hour/five-minute alpha claim until a
+replacement ADR adds a concrete oracle and drill.
 
 Recovery freshness compares a primary commit watermark with the newest common
 checkpoint whose database backup, outbox, audit manifest, and required objects
-have all passed integrity verification in `us-west-2`. At 15 minutes an alert
+have all passed integrity verification in `us-west-2`. At 20 minutes an alert
 warns operators; at 25 minutes it pages as critical. Reaching 30 minutes fails
 qualification, suspends the production regional-RPO claim, and blocks planned
 cutover. An emergency restore may still proceed but records an RPO breach.
@@ -404,17 +429,22 @@ record.
 
 The archive writer fills an object until it contains 1,000 records, the next
 record would exceed the 8 MiB compressed-object limit, or the oldest buffered
-record reaches 30 minutes; one final accounting-window flush is also allowed.
+record reaches 10 minutes; one final accounting-window flush is also allowed.
 Process shutdown transfers the durable buffer and does not create an extra
 partial object. The timer path, including the final accounting-window flush,
-emits no more than 1,440 partial objects per stream in a 30-day window.
+emits no more than 4,320 partial objects per stream in a 30-day window. From the
+oldest record, primary write and manifest commit are bounded to two minutes,
+cross-region copy to five, and recovery integrity verification to two. Together
+with buffering, the archive path completes within 19 minutes, before the
+20-minute freshness warning. Missing any stage budget backpressures new work
+and fails qualification before the 30-minute hard bound.
 
-At 1,000 records per object plus no more than 1,440 timer flushes per stream,
-the fixed non-audit workload requires at most 10,638 and 47,430 objects. Even
+At 1,000 records per object plus no more than 4,320 timer flushes per stream,
+the fixed non-audit workload requires at most 13,518 and 50,310 objects. Even
 ignoring the stricter 3,000-byte average, packing every audit record at the 16
-KiB maximum plus its timer flushes requires at most 9,253 and 40,503 objects.
-The combined worst cases are therefore 19,891 and 87,933, fitting total caps of
-22,000 and 110,000. Each profile budgets three S3 tier-1 requests and four KMS
+KiB maximum plus its timer flushes requires at most 12,133 and 43,383 objects.
+The combined worst cases are therefore 25,651 and 93,693, fitting total caps of
+28,000 and 110,000. Each profile budgets three S3 tier-1 requests and four KMS
 requests per object across primary write, recovery replication, retries,
 manifest/list work, and validation. Exceeding the object or request cap uses the
 same non-dropping backpressure path as the byte cap.
@@ -433,10 +463,10 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 712.68 | USD 750.00 | USD 37.32 |
-| Target-scale qualification | USD 2,464.08 | USD 2,500.00 | USD 35.92 |
+| Small production | USD 724.84 | USD 750.00 | USD 25.16 |
+| Target-scale qualification | USD 2,482.08 | USD 2,500.00 | USD 17.92 |
 
-The target reference consumes 98.56% of its ceiling after conservatively
+The target reference consumes 99.28% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional
 recurring target resource may be added without reducing another input or
@@ -461,9 +491,11 @@ the exercise continues.
 - The Kubernetes version is upgraded before extended support. At current EKS
   rates, allowing one cluster to enter extended support adds USD 365 per
   730-hour month; an alert fires 60 days before the transition.
-- Burstable database CPU-credit balance and surplus-credit charges are
-  monitored. Sustained credit use triggers a capacity change rather than an
-  unbounded charge.
+- The small database prices at most 100 surplus vCPU-hours (USD 7.50) per month.
+  Alerts fire at 50, 75, and 90 vCPU-hours; at 90, non-reserved write admission
+  is fenced so in-flight and recovery work cannot exceed 100. Reopening requires
+  a non-burstable capacity change and replacement cost review. The target
+  database is non-burstable.
 - Compute, worker concurrency, provider request rates, queue depth, logs, traces,
   metric cardinality, backup retention, and object storage all have explicit
   upper bounds.
