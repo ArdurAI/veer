@@ -59,6 +59,37 @@ write_visible_markdown() {
         }
         return 0
     }
+    function complete_html_tag(line, character_index, character, quote, masked, tail) {
+        if (substr(line, 1, 1) != "<") {
+            return 0
+        }
+        quote = ""
+        masked = ""
+        for (character_index = 1; character_index <= length(line); character_index++) {
+            character = substr(line, character_index, 1)
+            if (quote != "") {
+                if (character == quote) {
+                    quote = ""
+                    masked = masked character
+                } else {
+                    masked = masked "_"
+                }
+                continue
+            }
+            if (character == "\"" || character == single_quote) {
+                quote = character
+                masked = masked character
+                continue
+            }
+            masked = masked character
+            if (character == ">") {
+                tail = substr(line, character_index + 1)
+                return tail ~ /^[[:space:]]*$/ &&
+                    masked ~ /^<\/?[A-Za-z][A-Za-z0-9-]*([[:space:]][^<>]*)?\/?>$/
+            }
+        }
+        return 0
+    }
     function html_transition(line, stripped, lower, tag) {
         stripped = line
         sub(/^[ ]?[ ]?[ ]?/, "", stripped)
@@ -127,8 +158,7 @@ write_visible_markdown() {
             sub(/^<\//, "", tag)
             sub(/^</, "", tag)
             sub(/[[:space:]\/>].*$/, "", tag)
-            if (tag in block_tag ||
-                lower ~ /^<\/?[a-z][a-z0-9-]*([[:space:]][^>]*)?\/?>[[:space:]]*$/) {
+            if (tag in block_tag || complete_html_tag(stripped)) {
                 in_html_until_blank = 1
                 return 1
             }
@@ -136,6 +166,7 @@ write_visible_markdown() {
         return 0
     }
     BEGIN {
+        single_quote = sprintf("%c", 39)
         tags = "address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option p param search section summary table tbody td tfoot th thead title tr track ul"
         tag_count = split(tags, tag_values, " ")
         for (tag_index = 1; tag_index <= tag_count; tag_index++) {
@@ -360,7 +391,7 @@ function error(message) {
     print FILENAME ":" FNR ": " message > "/dev/stderr"
     failed = 1
 }
-function valid_links(value, values, count, link_index) {
+function valid_links(value, record_id, values, count, link_index, issue_key) {
     count = split(value, values, ",")
     if (count < 1) {
         return 0
@@ -370,11 +401,24 @@ function valid_links(value, values, count, link_index) {
             !(values[link_index] in known_issue)) {
             return 0
         }
+        issue_key = record_id SUBSEP values[link_index]
+        ledger_issue[issue_key] = 1
     }
     return 1
 }
-function valid_issue_work(value, work, range_values, range_count, range_start, range_end,
-                          issue_number, remaining, issue_url) {
+function record_model_issue(record_id, issue_url, issue_key) {
+    if (record_id == "") {
+        return 1
+    }
+    issue_key = record_id SUBSEP issue_url
+    if (issue_key in model_issue) {
+        return 0
+    }
+    model_issue[issue_key] = 1
+    return 1
+}
+function valid_issue_work(value, record_id, work, range_values, range_count,
+                          range_start, range_end, issue_number, remaining, issue_url) {
     work = trim(value)
     if (work !~ /^[Ii]ssues? /) {
         return 0
@@ -392,7 +436,7 @@ function valid_issue_work(value, work, range_values, range_count, range_start, r
         }
         for (issue_number = range_start; issue_number <= range_end; issue_number++) {
             issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
-            if (!(issue_url in known_issue)) {
+            if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url)) {
                 return 0
             }
         }
@@ -405,12 +449,39 @@ function valid_issue_work(value, work, range_values, range_count, range_start, r
     while (match(remaining, /#[1-9][0-9]*/)) {
         issue_number = substr(remaining, RSTART + 1, RLENGTH - 1)
         issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
-        if (!(issue_url in known_issue)) {
+        if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url)) {
             return 0
         }
         remaining = substr(remaining, RSTART + RLENGTH)
     }
     return 1
+}
+function record_readable_attackers(value, threat_id, remaining, relative_start, prefix,
+                                   preceding, candidate, attacker_id, matched_length,
+                                   following, attacker_key, found) {
+    remaining = value
+    while ((relative_start = index(remaining, "ACT-")) > 0) {
+        prefix = substr(remaining, 1, relative_start - 1)
+        preceding = length(prefix) > 0 ? substr(prefix, length(prefix), 1) : ""
+        if (preceding ~ /[A-Za-z0-9_-]/) {
+            return 0
+        }
+        candidate = substr(remaining, relative_start)
+        if (!match(candidate, /^ACT-[A-Z0-9]+(-[A-Z0-9]+)*/)) {
+            return 0
+        }
+        attacker_id = substr(candidate, RSTART, RLENGTH)
+        matched_length = RLENGTH
+        following = substr(candidate, matched_length + 1, 1)
+        if (following ~ /[A-Za-z0-9_-]/ || !(attacker_id in attackers)) {
+            return 0
+        }
+        attacker_key = threat_id SUBSEP attacker_id
+        model_attacker[attacker_key] = 1
+        found = 1
+        remaining = substr(candidate, matched_length + 1)
+    }
+    return found
 }
 function valid_evidence(value, values, count, citation_index) {
     count = split(value, values, ";")
@@ -571,7 +642,7 @@ FNR == NR {
         if (owners[owner_id]++) {
             error("duplicate control-owner row " owner_id)
         }
-        if (!valid_issue_work(trim(cells[4]))) {
+        if (!valid_issue_work(trim(cells[4]), "")) {
             error("invalid live verification work for control owner " owner_id)
         }
         next
@@ -592,6 +663,12 @@ FNR == NR {
             error("duplicate readable attacker-story row " threat_id)
         }
         model_risk[threat_id] = tolower(trim(cells[2]))
+        if (!record_readable_attackers(trim(cells[3]), threat_id)) {
+            error("invalid or undeclared actor set in readable attacker story " threat_id)
+        }
+        if (!valid_issue_work(trim(cells[8]), threat_id)) {
+            error("invalid evidence work for readable attacker story " threat_id)
+        }
         next
     }
     if (table != "" && $0 ~ /^\|/) {
@@ -612,7 +689,7 @@ FNR == 1 {
             used_owners[boundary_owner[boundary_id]] = 1
         }
     }
-    expected = "id\tstride\trisk\tassets\tboundary\tattacker\tscenario\texisting_controls\tmitigation\towner\tfollow_up\tverification\tresidual_risk\tevidence"
+    expected = "id\tstride\trisk\tassets\tboundary\tattackers\tscenario\texisting_controls\tmitigation\towner\tfollow_up\tverification\tresidual_risk\tevidence"
     if ($0 != expected) {
         error("unexpected threat ledger header")
     }
@@ -666,10 +743,31 @@ NF != 14 {
         }
         used_boundaries[boundary_refs[boundary_index]] = 1
     }
-    if (!($6 in attackers)) {
-        error("undeclared attacker " $6)
+    attacker_count = split($6, attacker_refs, "|")
+    for (attacker_index = 1; attacker_index <= attacker_count; attacker_index++) {
+        attacker_id = attacker_refs[attacker_index]
+        attacker_key = $1 SUBSEP attacker_id
+        if (attacker_id !~ /^ACT-[A-Z0-9]+(-[A-Z0-9]+)*$/) {
+            error("invalid attacker " attacker_id)
+        }
+        if (!(attacker_id in attackers)) {
+            error("undeclared attacker " attacker_id)
+        }
+        if (ledger_attacker[attacker_key]++) {
+            error("duplicate attacker " attacker_id " for " $1)
+        }
+        used_attackers[attacker_id] = 1
     }
-    used_attackers[$6] = 1
+    attacker_mismatch = 0
+    for (attacker_id in attackers) {
+        attacker_key = $1 SUBSEP attacker_id
+        if ((attacker_key in model_attacker) != (attacker_key in ledger_attacker)) {
+            attacker_mismatch = 1
+        }
+    }
+    if (attacker_mismatch) {
+        error("ledger attackers do not match readable actor set for " $1)
+    }
     for (field_index = 7; field_index <= 14; field_index++) {
         if (trim($field_index) == "" || trim($field_index) == "-") {
             error("empty required field " field_index)
@@ -679,11 +777,21 @@ NF != 14 {
         error("undeclared owner " $10)
     }
     used_owners[$10] = 1
-    if (!valid_links($11)) {
+    if (!valid_links($11, $1)) {
         error("follow_up must contain exact Veer issue URLs")
     }
-    if (!valid_links($12)) {
+    if (!valid_links($12, $1)) {
         error("verification must contain exact Veer issue URLs")
+    }
+    issue_mismatch = 0
+    for (issue_url in known_issue) {
+        issue_key = $1 SUBSEP issue_url
+        if ((issue_key in model_issue) != (issue_key in ledger_issue)) {
+            issue_mismatch = 1
+        }
+    }
+    if (issue_mismatch) {
+        error("ledger issue references do not match readable evidence for " $1)
     }
     if (($3 == "critical" || $3 == "high") &&
         (trim($9) == "-" || trim($11) == "-")) {
@@ -993,6 +1101,10 @@ function error(column) {
 function token_character(character) {
     return character ~ /[A-Za-z0-9_.\/:\-]/
 }
+function external_url_docs_occurrence(line, docs_start, prefix) {
+    prefix = substr(line, 1, docs_start - 1)
+    return prefix ~ /(^|[^A-Za-z0-9+.-])[Hh][Tt][Tt][Pp][Ss]?:\/\/[^[:space:]<>()]*\/$/
+}
 {
     search_from = 1
     while (search_from <= length($0)) {
@@ -1001,13 +1113,19 @@ function token_character(character) {
         if (!relative_start) {
             break
         }
-        citation_start = search_from + relative_start - 1
+        docs_start = search_from + relative_start - 1
+        if (external_url_docs_occurrence($0, docs_start)) {
+            search_from = docs_start + 5
+            continue
+        }
+        citation_start = docs_start
         if (citation_start > 2 && substr($0, citation_start - 2, 2) == "./") {
             citation_start -= 2
         }
         preceding = citation_start > 1 ? substr($0, citation_start - 1, 1) : ""
         if (preceding != "" && token_character(preceding)) {
-            search_from = citation_start + 5
+            error(citation_start)
+            search_from = docs_start + 5
             continue
         }
         candidate = substr($0, citation_start)

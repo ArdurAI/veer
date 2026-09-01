@@ -143,6 +143,34 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  !changed && index($0, "docs/architecture/overview.md:99-117") {
+      sub(/docs\/architecture\/overview[.]md:99-117/, "../docs/architecture/overview.md:99999")
+      changed = 1
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'parent-prefixed readable source citation' \
+  'readable model contains malformed documentation citation'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  !changed && index($0, "docs/architecture/overview.md:99-117") {
+      sub(/docs\/architecture\/overview[.]md:99-117/, "xdocs/architecture/overview.md:99999")
+      changed = 1
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'token-prefixed readable source citation' \
+  'readable model contains malformed documentation citation'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / { next }
   { print }
 ' "$model" >"$rewritten_model"
@@ -156,6 +184,37 @@ new_fixture
 rewrite_threat_field TM-001 3 'medium'
 expect_rejection 'readable and ledger risk mismatch' \
   'ledger risk does not match readable priority for TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Issues #22 and #28 \|$/, "Issue #9999 |")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'attacker story with unknown evidence work' \
+  'invalid evidence work for readable attacker story TM-001'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Issues #22 and #28 \|$/, "Issues #15, #22, and #28 |")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'attacker story and ledger evidence mismatch' \
+  'ledger issue references do not match readable evidence for TM-001'
+
+new_fixture
+rewrite_threat_field TM-014 6 'ACT-MEMBER'
+expect_rejection 'attacker story and ledger actor mismatch' \
+  'ledger attackers do not match readable actor set for TM-014'
 
 new_fixture
 rewrite_threat_field TM-001 9 ' '
@@ -246,6 +305,24 @@ printf '%s\n' \
   '</pre>' >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'required heading hidden in a raw HTML block' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '<custom-element title=">">' \
+  '### Workspace isolation assumptions' \
+  'This heading is raw HTML content, not Markdown structure.' \
+  '</custom-element>' \
+  '' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'required heading hidden by quoted HTML attribute' \
   'is missing visible heading: ### Workspace isolation assumptions'
 
 new_fixture
