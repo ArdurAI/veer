@@ -267,7 +267,7 @@ model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / {
-      sub(/Issues #22 and #28 \|$/, "Issue #9999 |")
+      sub(/verification: Issues #22 and #28 \|$/, "verification: Issue #9999 |")
   }
   { print }
 ' "$model" >"$rewritten_model"
@@ -280,13 +280,13 @@ model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / {
-      sub(/Issues #22 and #28 \|$/, "Issues #15, #22, and #28 |")
+      sub(/Follow-up: Issue #22;/, "Follow-up: Issues #15 and #22;")
   }
   { print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
-expect_rejection 'attacker story and ledger evidence mismatch' \
-  'ledger issue references do not match readable evidence for TM-001'
+expect_rejection 'attacker story and ledger follow-up mismatch' \
+  'ledger follow-up references do not match readable follow-up work for TM-001'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -960,7 +960,7 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  $0 == "| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Evidence |" {
+  $0 == "| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Follow-up and verification |" {
       print "| Priority | Scenario and capability gain | Preconditions | Impact | Existing controls | Mitigation | Proof |"
       next
   }
@@ -1090,7 +1090,7 @@ printf '%s\n' \
   '| --- | --- | --- |' \
   '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
 expect_rejection 'entity-obfuscated canonical heading' \
-  'entity references are forbidden in verified headings'
+  'entity references are forbidden in verified Markdown'
 
 new_fixture
 summary="$test_root/docs/security/model.md"
@@ -1160,6 +1160,79 @@ LC_ALL=C awk '
 mv "$rewritten_model" "$model"
 expect_rejection 'inline comment cannot erase visible issue work' \
   'unknown readable issue reference #9999'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  "\`<!-- marker\` Issue #9999 is visible work." >>"$model"
+expect_rejection 'comment marker inside inline code cannot hide visible issue work' \
+  'unknown readable issue reference #9999'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  "\`inline code begins" \
+  "\`\`\`" \
+  "\`" \
+  '### Control owners' \
+  '| ID | Conflicting responsibility | Alternate work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #9999 |' >>"$model"
+expect_rejection 'fence marker inside multiline inline code cannot hide a canonical section' \
+  'duplicate visible heading: ### Control owners'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  'Issue &#35;9999 is visible work.' >>"$model"
+expect_rejection 'entity-encoded issue marker' \
+  'entity references are forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '> ### Control owners' \
+  '> | ID | Conflicting responsibility | Alternate work |' \
+  '> | --- | --- | --- |' \
+  '> | OWN-FAKE | Conflicting contract | Issue #9999 |' >>"$model"
+expect_rejection 'blockquote-contained canonical section' \
+  'rendered blockquotes are forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '$0 !~ /^\| A-01 \|/' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+ledger="$test_root/docs/security/threats.tsv"
+rewritten="$test_root/threats.tsv"
+LC_ALL=C awk -F '\t' -v OFS='\t' '
+  NR == 1 { print; next }
+  {
+      count = split($4, values, ",")
+      replacement = ""
+      for (value_index = 1; value_index <= count; value_index++) {
+          if (values[value_index] == "A-01") continue
+          replacement = replacement (replacement == "" ? "" : ",") values[value_index]
+      }
+      $4 = replacement
+      print
+  }
+' "$ledger" >"$rewritten"
+mv "$rewritten" "$ledger"
+expect_rejection 'contracted protected-asset inventory' \
+  'missing canonical asset A-01'
+
+new_fixture
+rewrite_threat_field TM-006 14 \
+  'https://github.com/ArdurAI/veer/issues/25,https://github.com/ArdurAI/veer/issues/43,https://github.com/ArdurAI/veer/issues/45,https://github.com/ArdurAI/veer/issues/50,https://github.com/ArdurAI/veer/issues/52,https://github.com/ArdurAI/veer/issues/57'
+rewrite_threat_field TM-006 15 \
+  'https://github.com/ArdurAI/veer/issues/25'
+expect_rejection 'follow-up and verification role shift' \
+  'ledger follow-up references do not match readable follow-up work for TM-006'
 
 new_fixture
 inventory="$test_root/docs/security/issue-inventory.txt"

@@ -59,33 +59,58 @@ write_visible_markdown() {
         }
         return 0
     }
-    function strip_comments(line, remaining, marker, visible) {
-        remaining = line
+    function is_escaped(line, position, slash_count) {
+        slash_count = 0
+        position--
+        while (position > 0 && substr(line, position, 1) == "\\") {
+            slash_count++
+            position--
+        }
+        return slash_count % 2 == 1
+    }
+    function strip_comments(line, character_index, marker, visible, character, run_length) {
         visible = ""
-        while (1) {
+        character_index = 1
+        while (character_index <= length(line)) {
             if (in_comment) {
-                marker = index(remaining, "-->")
+                marker = index(substr(line, character_index), "-->")
                 if (!marker) {
                     return visible
                 }
-                remaining = substr(remaining, marker + 3)
+                character_index += marker + 2
                 in_comment = 0
                 continue
             }
-            marker = index(remaining, "<!--")
-            if (!marker) {
-                return visible remaining
+            if (!inline_tick_count && substr(line, character_index, 4) == "<!--") {
+                in_comment = 1
+                character_index += 4
+                continue
             }
-            visible = visible substr(remaining, 1, marker - 1)
-            remaining = substr(remaining, marker + 4)
-            in_comment = 1
+            character = substr(line, character_index, 1)
+            if (character == "`" && !is_escaped(line, character_index)) {
+                run_length = 1
+                while (substr(line, character_index + run_length, 1) == "`") {
+                    run_length++
+                }
+                visible = visible substr(line, character_index, run_length)
+                if (!inline_tick_count) {
+                    inline_tick_count = run_length
+                } else if (run_length == inline_tick_count) {
+                    inline_tick_count = 0
+                }
+                character_index += run_length
+                continue
+            }
+            visible = visible character
+            character_index++
         }
+        return visible
     }
     function has_rendered_raw_html(line) {
         return line ~ /<\/?[A-Za-z][A-Za-z0-9-]*([[:space:]\/>]|$)/ ||
             line ~ /<!\[CDATA\[|<\?|<![A-Z]/
     }
-    function has_heading_entity(line) {
+    function has_entity_reference(line) {
         return line ~ /&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/
     }
     function normalize_atx_heading(line, normalized, leading_spaces, hashes, content) {
@@ -123,10 +148,20 @@ write_visible_markdown() {
             print ""
             next
         }
-        line = strip_comments(line)
-        if (fence_transition(line)) {
+        if (!in_comment && !inline_tick_count && fence_transition(line)) {
             print ""
             next
+        }
+        inline_was_open = inline_tick_count
+        line = strip_comments(line)
+        if (!inline_tick_count && fence_transition(line)) {
+            inline_tick_count = 0
+            print ""
+            next
+        }
+        if (!inline_was_open && line ~ /^[[:space:]]*>/) {
+            print FILENAME ":" FNR ": rendered blockquotes are forbidden in verified Markdown" > "/dev/stderr"
+            failed = 1
         }
         if (has_rendered_raw_html(line)) {
             print FILENAME ":" FNR ": rendered raw HTML is forbidden in verified Markdown" > "/dev/stderr"
@@ -134,14 +169,20 @@ write_visible_markdown() {
             print ""
             next
         }
-        normalized = normalize_atx_heading(line)
-        if (normalized ~ /^#+( |$)/ && has_heading_entity(normalized)) {
-            print FILENAME ":" FNR ": entity references are forbidden in verified headings" > "/dev/stderr"
+        if (has_entity_reference(line)) {
+            print FILENAME ":" FNR ": entity references are forbidden in verified Markdown" > "/dev/stderr"
             failed = 1
         }
+        normalized = normalize_atx_heading(line)
         print normalized
     }
-    END { exit failed ? 1 : 0 }
+    END {
+        if (inline_tick_count) {
+            print FILENAME ": unterminated inline code span in verified Markdown" > "/dev/stderr"
+            failed = 1
+        }
+        exit failed ? 1 : 0
+    }
   ' "$source_file" >"$destination_file"
 }
 
@@ -355,10 +396,6 @@ LC_ALL=C awk '
       return 0
   }
   function record_heading(heading) {
-      if (heading ~ /&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/) {
-          print FILENAME ":" FNR ": entity references are forbidden in verified headings" > "/dev/stderr"
-          failed = 1
-      }
       if (seen[heading]++) {
           print FILENAME ":" FNR ": duplicate visible heading: " heading > "/dev/stderr"
           failed = 1
@@ -517,7 +554,7 @@ function error(message) {
     print FILENAME ":" FNR ": " message > "/dev/stderr"
     failed = 1
 }
-function valid_links(value, record_id, values, count, link_index, issue_key) {
+function valid_links(value, record_id, role, values, count, link_index, issue_key) {
     count = split(value, values, ",")
     if (count < 1) {
         return 0
@@ -528,22 +565,38 @@ function valid_links(value, record_id, values, count, link_index, issue_key) {
             return 0
         }
         issue_key = record_id SUBSEP values[link_index]
-        ledger_issue[issue_key] = 1
+        if (role == "follow_up") {
+            ledger_follow_up[issue_key] = 1
+        } else if (role == "verification") {
+            ledger_verification[issue_key] = 1
+        } else {
+            return 0
+        }
     }
     return 1
 }
-function record_model_issue(record_id, issue_url, issue_key) {
+function record_model_issue(record_id, issue_url, role, issue_key) {
     if (record_id == "") {
         return 1
     }
     issue_key = record_id SUBSEP issue_url
-    if (issue_key in model_issue) {
-        return 0
+    if (role == "follow_up") {
+        if (issue_key in model_follow_up) {
+            return 0
+        }
+        model_follow_up[issue_key] = 1
+        return 1
     }
-    model_issue[issue_key] = 1
-    return 1
+    if (role == "verification") {
+        if (issue_key in model_verification) {
+            return 0
+        }
+        model_verification[issue_key] = 1
+        return 1
+    }
+    return 0
 }
-function valid_issue_work(value, record_id, work, range_values, range_count,
+function valid_issue_work(value, record_id, role, work, range_values, range_count,
                           range_start_text, range_end_text, range_start, range_end,
                           issue_number, remaining, issue_url) {
     work = trim(value)
@@ -570,7 +623,7 @@ function valid_issue_work(value, record_id, work, range_values, range_count,
         }
         for (issue_number = range_start; issue_number <= range_end; issue_number++) {
             issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
-            if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url)) {
+            if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url, role)) {
                 return 0
             }
         }
@@ -583,12 +636,29 @@ function valid_issue_work(value, record_id, work, range_values, range_count,
     while (match(remaining, /#[1-9][0-9]*/)) {
         issue_number = substr(remaining, RSTART + 1, RLENGTH - 1)
         issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
-        if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url)) {
+        if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url, role)) {
             return 0
         }
         remaining = substr(remaining, RSTART + RLENGTH)
     }
     return 1
+}
+function valid_role_evidence(value, record_id, separator, follow_up_work, verification_work) {
+    if (substr(value, 1, 11) != "Follow-up: ") {
+        return 0
+    }
+    value = substr(value, 12)
+    separator = index(value, "; verification: ")
+    if (!separator) {
+        return 0
+    }
+    follow_up_work = substr(value, 1, separator - 1)
+    verification_work = substr(value, separator + 16)
+    if (follow_up_work == "" || verification_work == "") {
+        return 0
+    }
+    return valid_issue_work(follow_up_work, record_id, "follow_up") &&
+        valid_issue_work(verification_work, record_id, "verification")
 }
 function record_readable_attackers(value, threat_id, remaining, relative_start, prefix,
                                    preceding, candidate, attacker_id, matched_length,
@@ -712,6 +782,31 @@ BEGIN {
     required_component["Migration, backup, and recovery tooling"] = 1
     required_component["Build and release path"] = 1
     required_component_count = 8
+    for (required_asset_index = 1; required_asset_index <= 9; required_asset_index++) {
+        required_asset[sprintf("A-%02d", required_asset_index)] = 1
+    }
+    required_asset_count = 9
+    required_attacker["ACT-NET"] = 1
+    required_attacker["ACT-MEMBER"] = 1
+    required_attacker["ACT-TENANT"] = 1
+    required_attacker["ACT-WORKLOAD"] = 1
+    required_attacker["ACT-PROVIDER"] = 1
+    required_attacker["ACT-PLATFORM"] = 1
+    required_attacker["ACT-SUPPLY"] = 1
+    required_attacker_count = 7
+    for (required_boundary_index = 1; required_boundary_index <= 13; required_boundary_index++) {
+        required_boundary[sprintf("TB-%02d", required_boundary_index)] = 1
+    }
+    required_boundary_count = 13
+    required_owner["OWN-SECURITY"] = 1
+    required_owner["OWN-IDENTITY"] = 1
+    required_owner["OWN-CREDENTIALS"] = 1
+    required_owner["OWN-DATA"] = 1
+    required_owner["OWN-RECONCILIATION"] = 1
+    required_owner["OWN-PROVIDERS"] = 1
+    required_owner["OWN-OPERATIONS"] = 1
+    required_owner["OWN-SUPPLY-CHAIN"] = 1
+    required_owner_count = 8
     for (required_threat_index = 1; required_threat_index <= 21; required_threat_index++) {
         required_threat[sprintf("TM-%03d", required_threat_index)] = 1
     }
@@ -816,7 +911,7 @@ FNR == NR {
             error("duplicate canonical threats table header")
             next
         }
-        expected_header = "| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Evidence |"
+        expected_header = "| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Follow-up and verification |"
         if ($0 != expected_header) {
             error("unexpected canonical threats table header")
             next
@@ -866,9 +961,13 @@ FNR == NR {
             next
         }
         asset_id = trim(cells[2])
+        if (!(asset_id in required_asset)) {
+            error("unexpected canonical asset " asset_id)
+        }
         if (assets[asset_id]++) {
             error("duplicate protected-asset row " asset_id)
         }
+        asset_rows++
         if (!has_complete_citation(trim(cells[5]))) {
             error("protected asset lacks a complete source citation: " asset_id)
         }
@@ -885,9 +984,13 @@ FNR == NR {
             next
         }
         attacker_id = trim(cells[2])
+        if (!(attacker_id in required_attacker)) {
+            error("unexpected canonical attacker " attacker_id)
+        }
         if (attackers[attacker_id]++) {
             error("duplicate attacker row " attacker_id)
         }
+        attacker_rows++
         next
     }
     if (table == "boundaries" && $0 ~ /^\| TB-[0-9][0-9] \|/) {
@@ -900,9 +1003,13 @@ FNR == NR {
             next
         }
         boundary_id = trim(cells[2])
+        if (!(boundary_id in required_boundary)) {
+            error("unexpected canonical boundary " boundary_id)
+        }
         if (boundaries[boundary_id]++) {
             error("duplicate trust-boundary row " boundary_id)
         }
+        boundary_rows++
         boundary_owner[boundary_id] = trim(cells[5])
         next
     }
@@ -916,10 +1023,14 @@ FNR == NR {
             next
         }
         owner_id = trim(cells[2])
+        if (!(owner_id in required_owner)) {
+            error("unexpected canonical owner " owner_id)
+        }
         if (owners[owner_id]++) {
             error("duplicate control-owner row " owner_id)
         }
-        if (!valid_issue_work(trim(cells[4]), "")) {
+        owner_rows++
+        if (!valid_issue_work(trim(cells[4]), "", "")) {
             error("invalid live verification work for control owner " owner_id)
         }
         next
@@ -964,8 +1075,8 @@ FNR == NR {
         if (!record_readable_attackers(trim(cells[3]), threat_id)) {
             error("invalid or undeclared actor set in readable attacker story " threat_id)
         }
-        if (!valid_issue_work(trim(cells[8]), threat_id)) {
-            error("invalid evidence work for readable attacker story " threat_id)
+        if (!valid_role_evidence(trim(cells[8]), threat_id)) {
+            error("invalid follow-up or verification work for readable attacker story " threat_id)
         }
         next
     }
@@ -1117,21 +1228,28 @@ NF != 17 {
         error("undeclared owner " $13)
     }
     used_owners[$13] = 1
-    if (!valid_links($14, $1)) {
+    if (!valid_links($14, $1, "follow_up")) {
         error("follow_up must contain exact Veer issue URLs")
     }
-    if (!valid_links($15, $1)) {
+    if (!valid_links($15, $1, "verification")) {
         error("verification must contain exact Veer issue URLs")
     }
-    issue_mismatch = 0
+    follow_up_mismatch = 0
+    verification_mismatch = 0
     for (issue_url in known_issue) {
         issue_key = $1 SUBSEP issue_url
-        if ((issue_key in model_issue) != (issue_key in ledger_issue)) {
-            issue_mismatch = 1
+        if ((issue_key in model_follow_up) != (issue_key in ledger_follow_up)) {
+            follow_up_mismatch = 1
+        }
+        if ((issue_key in model_verification) != (issue_key in ledger_verification)) {
+            verification_mismatch = 1
         }
     }
-    if (issue_mismatch) {
-        error("ledger issue references do not match readable evidence for " $1)
+    if (follow_up_mismatch) {
+        error("ledger follow-up references do not match readable follow-up work for " $1)
+    }
+    if (verification_mismatch) {
+        error("ledger verification references do not match readable verification work for " $1)
     }
     if (($3 == "critical" || $3 == "high") &&
         (trim($12) == "-" || trim($14) == "-")) {
@@ -1154,6 +1272,38 @@ END {
     for (component_name in required_component) {
         if (!(component_name in components)) {
             error("missing canonical component " component_name)
+        }
+    }
+    if (asset_rows != required_asset_count) {
+        error("readable model must contain exactly " required_asset_count " canonical assets")
+    }
+    for (required_asset_id in required_asset) {
+        if (!(required_asset_id in assets)) {
+            error("missing canonical asset " required_asset_id)
+        }
+    }
+    if (attacker_rows != required_attacker_count) {
+        error("readable model must contain exactly " required_attacker_count " canonical attackers")
+    }
+    for (required_attacker_id in required_attacker) {
+        if (!(required_attacker_id in attackers)) {
+            error("missing canonical attacker " required_attacker_id)
+        }
+    }
+    if (boundary_rows != required_boundary_count) {
+        error("readable model must contain exactly " required_boundary_count " canonical boundaries")
+    }
+    for (required_boundary_id in required_boundary) {
+        if (!(required_boundary_id in boundaries)) {
+            error("missing canonical boundary " required_boundary_id)
+        }
+    }
+    if (owner_rows != required_owner_count) {
+        error("readable model must contain exactly " required_owner_count " canonical owners")
+    }
+    for (required_owner_id in required_owner) {
+        if (!(required_owner_id in owners)) {
+            error("missing canonical owner " required_owner_id)
         }
     }
     for (required_threat_id in required_threat) {
