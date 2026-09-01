@@ -72,7 +72,7 @@
       ],
       "minimumRetentionHours": 24,
       "scope": "principal-method-canonical-target",
-      "replay": "original-status-headers-body",
+      "replay": "original-status-body-semantic-headers-current-request-id",
       "mismatchStatus": 409
     },
     "pagination": {
@@ -240,6 +240,9 @@
           "200": {
             "$ref": "#/components/responses/Workspace"
           },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailure"
+          },
           "401": {
             "$ref": "#/components/responses/AuthenticationRequired"
           },
@@ -362,6 +365,9 @@
           "202": {
             "$ref": "#/components/responses/MutationAccepted"
           },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailure"
+          },
           "401": {
             "$ref": "#/components/responses/AuthenticationRequired"
           },
@@ -447,7 +453,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/Workspace"
+            "$ref": "#/components/responses/StatusUpdated"
           },
           "400": {
             "$ref": "#/components/responses/ValidationFailure"
@@ -507,6 +513,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/Operation"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailure"
           },
           "401": {
             "$ref": "#/components/responses/AuthenticationRequired"
@@ -628,7 +637,7 @@
         "description": "Relative path of the accepted operation.",
         "schema": {
           "type": "string",
-          "pattern": "^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          "pattern": "^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{15,127}$"
         }
       },
       "RetryAfter": {
@@ -642,7 +651,8 @@
         "description": "Bearer challenge without token material or sensitive validation detail.",
         "schema": {
           "type": "string",
-          "pattern": "^Bearer($| )"
+          "maxLength": 64,
+          "pattern": "^Bearer realm=\"veer\"(?:, error=\"(?:invalid_request|invalid_token)\")?$"
         }
       },
       "Deprecation": {
@@ -664,7 +674,8 @@
         "schema": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 1024
+          "maxLength": 1024,
+          "pattern": "^<[^<>\\r\\n]{1,900}>; rel=\"deprecation\"(?:, <[^<>\\r\\n]{1,900}>; rel=\"sunset\")?$"
         }
       }
     },
@@ -742,6 +753,39 @@
                 "observedGeneration": 3,
                 "conditions": []
               }
+            }
+          }
+        }
+      },
+      "StatusUpdated": {
+        "description": "Bounded receipt for a persisted controller status update.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "ETag": {
+            "$ref": "#/components/headers/ETag"
+          },
+          "Deprecation": {
+            "$ref": "#/components/headers/Deprecation"
+          },
+          "Sunset": {
+            "$ref": "#/components/headers/Sunset"
+          },
+          "Link": {
+            "$ref": "#/components/headers/DeprecationLink"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/StatusReceipt"
+            },
+            "example": {
+              "resourceId": "wsp_01J00000000000000000000000",
+              "observedGeneration": 3,
+              "resourceVersion": "rv_01J00000000000000000000001",
+              "updatedAt": "2026-09-01T21:00:01.000Z"
             }
           }
         }
@@ -1298,7 +1342,9 @@
           "observedGeneration": {
             "type": "integer",
             "format": "int64",
-            "minimum": 0
+            "example": 3,
+            "minimum": 0,
+            "maximum": 9223372036854775807
           },
           "lastTransitionAt": {
             "$ref": "#/components/schemas/Timestamp"
@@ -1321,7 +1367,8 @@
           "observedGeneration": {
             "type": "integer",
             "format": "int64",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 9223372036854775807
           },
           "conditions": {
             "type": "array",
@@ -1438,6 +1485,39 @@
           },
           "status": {
             "$ref": "#/components/schemas/WorkspaceStatus"
+          }
+        }
+      },
+      "StatusReceipt": {
+        "type": "object",
+        "description": "Bounded non-read response proving a controller status update was persisted.",
+        "additionalProperties": false,
+        "required": [
+          "resourceId",
+          "observedGeneration",
+          "resourceVersion",
+          "updatedAt"
+        ],
+        "properties": {
+          "resourceId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "example": 3,
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "resourceVersion": {
+            "type": "string",
+            "example": "rv_01J00000000000000000000001",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
           }
         }
       },

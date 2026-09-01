@@ -158,6 +158,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: `operationId "getWorkspace" must use 200 response Workspace`,
 		},
 		{
+			name: "status response exceeds non-read contract",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "responses")
+				responses["200"] = map[string]any{"$ref": "#/components/responses/Workspace"}
+			},
+			message: `operationId "replaceWorkspaceStatus" must use 200 response StatusUpdated`,
+		},
+		{
 			name: "unexpected second success response",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get", "responses")
@@ -172,6 +180,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				post["parameters"] = []any{}
 			},
 			message: "omits IdempotencyKey",
+		},
+		{
+			name: "missing validation response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/operations/{operationId}", "get", "responses")
+				delete(responses, "400")
+			},
+			message: "omits required response 400",
+		},
+		{
+			name: "unreviewed error response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "get", "responses")
+				responses["422"] = map[string]any{"description": "Unreviewed"}
+			},
+			message: "declares unreviewed error response 422",
 		},
 		{
 			name: "missing optimistic concurrency header",
@@ -232,6 +256,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: `operationId "replaceWorkspaceStatus" must use request schema WorkspaceStatusWrite`,
 		},
 		{
+			name: "unbounded status receipt",
+			mutate: func(root map[string]any) {
+				resourceVersion := nestedMap(t, root, "components", "schemas", "StatusReceipt", "properties", "resourceVersion")
+				resourceVersion["maxLength"] = json.Number("4096")
+			},
+			message: "StatusReceipt resourceVersion contract drifted",
+		},
+		{
 			name: "generation status semantics",
 			mutate: func(root map[string]any) {
 				generation := nestedMap(t, root, "x-veer-evolution", "generation")
@@ -252,6 +284,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			mutate: func(root map[string]any) {
 				pagination := nestedMap(t, root, "x-veer-evolution", "pagination")
 				pagination["maximumPageSize"] = json.Number("1000")
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "pagination snapshot omitted",
+			mutate: func(root map[string]any) {
+				pagination := nestedMap(t, root, "x-veer-evolution", "pagination")
+				delete(pagination, "snapshot")
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "request-specific correlation replayed",
+			mutate: func(root map[string]any) {
+				idempotency := nestedMap(t, root, "x-veer-evolution", "idempotency")
+				idempotency["replay"] = "original-status-headers-body"
 			},
 			message: "rules drifted",
 		},
@@ -304,6 +352,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "Retry-After must reference #/components/headers/RetryAfter",
 		},
 		{
+			name: "short operation Location ID",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "Location", "schema")
+				schema["pattern"] = "^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+			},
+			message: "Location header contract drifted",
+		},
+		{
+			name: "unbounded authentication challenge",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "WWWAuthenticate", "schema")
+				delete(schema, "maxLength")
+			},
+			message: "WWWAuthenticate header contract drifted",
+		},
+		{
+			name: "deprecation link without relation",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "DeprecationLink", "schema")
+				delete(schema, "pattern")
+			},
+			message: "DeprecationLink header contract drifted",
+		},
+		{
 			name: "missing validation example",
 			mutate: func(root map[string]any) {
 				examples := nestedMap(t, root, "components", "examples")
@@ -334,6 +406,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				problem["additionalProperties"] = true
 			},
 			message: "permits unconstrained additional properties",
+		},
+		{
+			name: "non-camel-case schema property",
+			mutate: func(root map[string]any) {
+				properties := nestedMap(t, root, "components", "schemas", "Problem", "properties")
+				properties["resource_version"] = map[string]any{"type": "string"}
+			},
+			message: `schema property "resource_version" is not lowerCamelCase`,
 		},
 		{
 			name: "map marker removed",

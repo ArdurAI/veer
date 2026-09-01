@@ -700,7 +700,6 @@ check_docs() {
   "$repo_root/docs/architecture/stack-evaluation/verify.sh"
   "$repo_root/docs/security/verify.sh"
   "$repo_root/docs/security/verify_test.sh"
-  check_api
 }
 
 run_step() {
@@ -732,6 +731,7 @@ check_all() {
   run_step build "$repo_root/hack/dev" build
   run_step test "$repo_root/hack/dev" test
   run_step docs "$repo_root/hack/dev" docs
+  run_step api "$repo_root/hack/dev" api
   printf '%s\n' 'veer-check status=passed'
 }
 

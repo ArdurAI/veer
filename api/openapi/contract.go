@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -34,6 +35,8 @@ var pathItemMetadata = map[string]bool{
 	"servers":     true,
 	"summary":     true,
 }
+
+var lowerCamelCaseProperty = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
 
 // Load reads one bounded, regular, non-symlink contract file.
 func Load(path string) ([]byte, error) {
@@ -209,8 +212,19 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 
 	switch typed := value.(type) {
 	case map[string]any:
-		if _, hasProperties := typed["properties"]; hasProperties && typed["type"] != "object" {
-			return fmt.Errorf("%s schema with properties must declare type object", path)
+		if rawProperties, hasProperties := typed["properties"]; hasProperties {
+			if typed["type"] != "object" {
+				return fmt.Errorf("%s schema with properties must declare type object", path)
+			}
+			properties, ok := rawProperties.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%s schema properties is not an object", path)
+			}
+			for name := range properties {
+				if !lowerCamelCaseProperty.MatchString(name) {
+					return fmt.Errorf("%s schema property %q is not lowerCamelCase", path, name)
+				}
+			}
 		}
 		if _, hasAdditionalProperties := typed["additionalProperties"]; hasAdditionalProperties && typed["type"] != "object" {
 			return fmt.Errorf("%s schema with additionalProperties must declare type object", path)
@@ -346,7 +360,7 @@ type paginationContract struct {
 	DefaultPageSize      int      `json:"defaultPageSize"`
 	MaximumPageSize      int      `json:"maximumPageSize"`
 	TokenLifetimeSeconds int      `json:"tokenLifetimeSeconds"`
-	Snapshot             bool     `json:"snapshot"`
+	Snapshot             *bool    `json:"snapshot"`
 	TokenBinding         []string `json:"tokenBinding"`
 }
 
@@ -372,6 +386,7 @@ func validateEvolution(root map[string]any) error {
 		return fmt.Errorf("decode evolution rules: %w", err)
 	}
 
+	noSnapshot := false
 	want := evolutionContract{
 		TransportVersion:            "v1alpha1",
 		RoutePrefix:                 "/api/v1alpha1",
@@ -403,7 +418,7 @@ func validateEvolution(root map[string]any) error {
 			RequiredOn:            []string{"POST", "PUT", "PATCH", "DELETE"},
 			MinimumRetentionHours: 24,
 			Scope:                 "principal-method-canonical-target",
-			Replay:                "original-status-headers-body",
+			Replay:                "original-status-body-semantic-headers-current-request-id",
 			MismatchStatus:        409,
 		},
 		Pagination: paginationContract{
@@ -412,7 +427,7 @@ func validateEvolution(root map[string]any) error {
 			DefaultPageSize:      50,
 			MaximumPageSize:      100,
 			TokenLifetimeSeconds: 900,
-			Snapshot:             false,
+			Snapshot:             &noSnapshot,
 			TokenBinding:         []string{"principal", "workspace", "route", "filter", "ordering"},
 		},
 		Deprecation: deprecationContract{
@@ -496,7 +511,7 @@ func validateOperations(root map[string]any) error {
 			if err != nil {
 				return fmt.Errorf("%s %s: %w", strings.ToUpper(method), route, err)
 			}
-			for _, status := range []string{"401", "403", "429", "500", "503"} {
+			for _, status := range []string{"400", "401", "403", "429", "500", "503"} {
 				if _, exists := responses[status]; !exists {
 					return fmt.Errorf("%s %s omits required response %s", strings.ToUpper(method), route, status)
 				}
@@ -629,7 +644,7 @@ func validateSuccessResponse(operationID string, responses map[string]any) error
 		"getWorkspace":           {status: "200", component: "Workspace"},
 		"listWorkspaces":         {status: "200", component: "WorkspaceList"},
 		"replaceWorkspace":       {status: "202", component: "MutationAccepted"},
-		"replaceWorkspaceStatus": {status: "200", component: "Workspace"},
+		"replaceWorkspaceStatus": {status: "200", component: "StatusUpdated"},
 	}
 	expected, exists := want[operationID]
 	if !exists {
@@ -662,10 +677,13 @@ func validateResponseReferences(route, method string, responses map[string]any) 
 		"500": "InternalFailure",
 		"503": "Unavailable",
 	}
-	for status, component := range want {
-		raw, exists := responses[status]
-		if !exists {
+	for status, raw := range responses {
+		if len(status) == 3 && status[0] == '2' {
 			continue
+		}
+		component, exists := want[status]
+		if !exists {
+			return fmt.Errorf("%s %s declares unreviewed error response %s", strings.ToUpper(method), route, status)
 		}
 		response, ok := raw.(map[string]any)
 		if !ok || response["$ref"] != "#/components/responses/"+component {
@@ -757,6 +775,13 @@ func validateComponents(root map[string]any) error {
 		return err
 	}
 	if err := validateParameters(parameters); err != nil {
+		return err
+	}
+	headers, err := mapField(components, "headers")
+	if err != nil {
+		return err
+	}
+	if err := validateHeaders(headers); err != nil {
 		return err
 	}
 	responses, err := mapField(components, "responses")
@@ -866,10 +891,56 @@ func requireSchemaReference(parent map[string]any, want string) error {
 	return nil
 }
 
+func validateHeaders(headers map[string]any) error {
+	for _, name := range []string{
+		"Deprecation", "DeprecationLink", "ETag", "Location", "RetryAfter", "Sunset",
+		"VeerRequestId", "WWWAuthenticate",
+	} {
+		if _, exists := headers[name]; !exists {
+			return fmt.Errorf("header %s is missing", name)
+		}
+	}
+
+	for name, want := range map[string]struct {
+		minimum string
+		maximum string
+		pattern string
+	}{
+		"Location": {
+			pattern: `^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{15,127}$`,
+		},
+		"WWWAuthenticate": {
+			maximum: "64",
+			pattern: `^Bearer realm="veer"(?:, error="(?:invalid_request|invalid_token)")?$`,
+		},
+		"DeprecationLink": {
+			minimum: "1",
+			maximum: "1024",
+			pattern: `^<[^<>\r\n]{1,900}>; rel="deprecation"(?:, <[^<>\r\n]{1,900}>; rel="sunset")?$`,
+		},
+	} {
+		header, err := mapField(headers, name)
+		if err != nil {
+			return err
+		}
+		schema, err := mapField(header, "schema")
+		if err != nil {
+			return err
+		}
+		if schema["type"] != "string" || schema["pattern"] != want.pattern ||
+			(want.minimum != "" && !numberEquals(schema["minLength"], want.minimum)) ||
+			(want.maximum != "" && !numberEquals(schema["maxLength"], want.maximum)) {
+			return fmt.Errorf("%s header contract drifted", name)
+		}
+	}
+	return nil
+}
+
 func validateResponses(responses map[string]any) error {
 	successNames := map[string]bool{
 		"MutationAccepted": true,
 		"Operation":        true,
+		"StatusUpdated":    true,
 		"Workspace":        true,
 		"WorkspaceList":    true,
 	}
@@ -936,6 +1007,7 @@ func validateResponses(responses map[string]any) error {
 			wantSchema := map[string]string{
 				"MutationAccepted": "MutationReceipt",
 				"Operation":        "Operation",
+				"StatusUpdated":    "StatusReceipt",
 				"Workspace":        "Workspace",
 				"WorkspaceList":    "WorkspaceList",
 			}[name]
@@ -961,6 +1033,7 @@ func validateResponses(responses map[string]any) error {
 			"MutationAccepted":       {"Location": "Location"},
 			"Operation":              {"ETag": "ETag"},
 			"PreconditionFailed":     {"ETag": "ETag"},
+			"StatusUpdated":          {"ETag": "ETag"},
 			"Throttled":              {"Retry-After": "RetryAfter"},
 			"Unavailable":            {"Retry-After": "RetryAfter"},
 			"Workspace":              {"ETag": "ETag"},
@@ -1012,7 +1085,7 @@ func requireReference(parent map[string]any, name, want string) error {
 func validateSchemas(schemas map[string]any) error {
 	required := []string{
 		"Condition", "FieldViolation", "IdempotencyKey", "Labels", "MutationReceipt",
-		"OpaqueId", "Operation", "Problem", "RequestId", "ResourceMetadata", "StrongETag",
+		"OpaqueId", "Operation", "Problem", "RequestId", "ResourceMetadata", "StatusReceipt", "StrongETag",
 		"Timestamp", "Workspace", "WorkspaceCreate", "WorkspaceList", "WorkspaceReplace",
 		"WorkspaceSpec", "WorkspaceStatus", "WorkspaceStatusWrite", "WritableMetadata",
 	}
@@ -1081,6 +1154,44 @@ func validateSchemas(schemas map[string]any) error {
 	}
 	if _, exists := statusProperties["status"]; !exists {
 		return errors.New("WorkspaceStatusWrite omits status")
+	}
+
+	statusReceipt, err := mapField(schemas, "StatusReceipt")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(statusReceipt["required"], []string{"resourceId", "observedGeneration", "resourceVersion", "updatedAt"}) {
+		return errors.New("StatusReceipt required fields drifted")
+	}
+	statusReceiptProperties, err := mapField(statusReceipt, "properties")
+	if err != nil {
+		return err
+	}
+	if len(statusReceiptProperties) != 4 {
+		return errors.New("StatusReceipt must remain a four-field bounded response")
+	}
+	if err := requireReference(statusReceiptProperties, "resourceId", "#/components/schemas/OpaqueId"); err != nil {
+		return fmt.Errorf("StatusReceipt: %w", err)
+	}
+	if err := requireReference(statusReceiptProperties, "updatedAt", "#/components/schemas/Timestamp"); err != nil {
+		return fmt.Errorf("StatusReceipt: %w", err)
+	}
+	observedGeneration, err := mapField(statusReceiptProperties, "observedGeneration")
+	if err != nil {
+		return err
+	}
+	if observedGeneration["type"] != "integer" || observedGeneration["format"] != "int64" ||
+		!numberEquals(observedGeneration["minimum"], "0") ||
+		!numberEquals(observedGeneration["maximum"], "9223372036854775807") {
+		return errors.New("StatusReceipt observedGeneration contract drifted")
+	}
+	statusResourceVersion, err := mapField(statusReceiptProperties, "resourceVersion")
+	if err != nil {
+		return err
+	}
+	if statusResourceVersion["type"] != "string" || !numberEquals(statusResourceVersion["minLength"], "1") ||
+		!numberEquals(statusResourceVersion["maxLength"], "128") || statusResourceVersion["pattern"] != "^[A-Za-z0-9_-]+$" {
+		return errors.New("StatusReceipt resourceVersion contract drifted")
 	}
 
 	list, err := mapField(schemas, "WorkspaceList")

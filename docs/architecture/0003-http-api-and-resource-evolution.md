@@ -110,8 +110,10 @@ An accepted desired-state mutation returns `202 Accepted` with a bounded
 receipt and relative operation `Location`. It means the desired state,
 generation, idempotency result, integrity anchor, required audit data, and
 outbox work committed atomically. It does not mean provider convergence or
-deletion is complete. Synchronous status-only persistence returns `200` with
-the current representation and ETag.
+deletion is complete. Synchronous status-only persistence returns `200` with a
+bounded receipt and ETag. The receipt contains only resource identity, observed
+generation, resource version, and update time; the caller reads the point
+resource when it needs the full representation.
 
 Only `application/json` is accepted for a request body. Missing or mismatched
 `Content-Type` returns `415`. The maximum encoded request body, read response,
@@ -207,10 +209,15 @@ The transaction then:
 1. reserves or loads the scoped key and fingerprint;
 2. rejects the same key with a different fingerprint as
    `409 idempotency-key-reused`;
-3. atomically commits the accepted mutation and its exact response status,
-   required headers, and body; or
-4. returns the stored response for a matching replay without another
-   generation, audit event, outbox record, queue claim, or provider attempt.
+3. atomically commits the accepted mutation and its replayable response status,
+   operation-semantic headers, and body; or
+4. returns that stored semantic result for a matching replay without another
+   generation, audit event, outbox record, queue claim, or provider attempt,
+   while generating or echoing the current retry's `Veer-Request-Id`.
+
+Request correlation is never replayed from the original attempt. It is not
+part of the idempotency scope or fingerprint, and each retry's response, logs,
+and traces use that retry's validated or server-generated request ID.
 
 An outcome that failed before the idempotency transaction began is not cached.
 An uncertain commit result must resolve the durable idempotency row before a
@@ -272,7 +279,7 @@ The baseline includes validated examples for every issue-required class:
 | Class | Status | Stable example code | Retry behavior |
 | --- | ---: | --- | --- |
 | Validation | `400` | `validation-failed` | Correct the request; no mutation occurred |
-| Authentication | `401` | `authentication-required` | Obtain valid credentials; includes a bounded Bearer challenge |
+| Authentication | `401` | `authentication-required` | Obtain valid credentials; includes a bounded Bearer challenge with no error description or token material |
 | Authorization | `403` | `authorization-denied` | Do not retry unchanged; cross-scope existence may instead be concealed as `404` |
 | Conflict | `409` | `idempotency-key-reused` | Use the original request or a new key after resolving intent |
 | Throttling | `429` | `rate-limited` | Honor bounded `Retry-After`, add jitter, and retain an overall deadline |
