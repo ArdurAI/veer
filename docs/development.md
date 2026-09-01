@@ -19,10 +19,11 @@ it. It never invokes a remote install script and does not modify system or user
 tool directories.
 
 `check` requires the prepared repository-local toolchain. It disables Go
-toolchain switching, module proxies, checksum-database calls, and version
-control downloads. It also removes common AWS, Google Cloud, and Azure
-credential variables from child processes. No check needs a cloud API,
-database, queue, cluster, container runtime, or private credential.
+toolchain switching, inherited Go workspaces, module proxies,
+checksum-database calls, and version control downloads. It also removes common
+AWS, Google Cloud, and Azure credential variables from child processes. No
+check needs a cloud API, database, queue, cluster, container runtime, or
+private credential.
 
 ## Supported hosts and prerequisites
 
@@ -92,7 +93,7 @@ variables or credentials.
   runner is bounded to 15 minutes and has no service containers, cloud login,
   or paid third-party API calls.
 - Fast gates use repository-local Go, golangci-lint, and XDG caches but run
-  with `GOPROXY=off`, `GOVCS=off`, and `GOTOOLCHAIN=local`.
+  with `GOWORK=off`, `GOPROXY=off`, `GOVCS=off`, and `GOTOOLCHAIN=local`.
 - Deleted worktree paths and source symlinks are never passed to write-mode
   formatters; source symlinks are not a supported way to include Veer code.
 
@@ -134,9 +135,18 @@ failing step and command output.
 1. Verify the new release and compatibility at the upstream primary source.
 2. Update all four platform rows and their upstream SHA-256 digests in
    `tools/manifest.tsv` in one pull request.
-3. Run `./hack/dev bootstrap`, `./hack/dev versions`, and
+3. Synchronize every declaration of the changed version:
+   - the pinned-tool table in this guide for every tool;
+   - `.go-version` and the `go` directive in `go.mod` for Go;
+   - `docs/architecture/stack-evaluation/versions.tsv` and ADR 0002 for Go,
+     sqlc, or goose.
+   Search the repository for the previous version to find deliberate prose and
+   source-link references that also need review. Bootstrap and local checks
+   reject drift among the machine-readable pins and this guide; the stack
+   verifier rejects drift between its manifest and ADR 0002.
+4. Run `./hack/dev bootstrap`, `./hack/dev versions`, and
    `./hack/dev check` from a clean tool directory.
-4. Let the clean-bootstrap CI lane exercise the same commands on Linux.
+5. Let the clean-bootstrap CI lane exercise the same commands on Linux.
 
 Never use a floating tag, `@latest`, a curl-to-shell installer, or an
 unverified binary. Issue #15 owns the broader software-supply-chain gates,

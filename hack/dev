@@ -145,7 +145,7 @@ validate_manifest() {
             print FILENAME ":" NR ": raw artifact must use member -" > "/dev/stderr"
             failed = 1
         }
-        if ($5 != "raw" && ($6 == "" || $6 ~ "^/" || $6 ~ "(^|/)[.][.](/|$)")) {
+        if ($5 != "raw" && ($6 == "" || $6 ~ "^[-/]" || $6 ~ "(^|/)[.][.](/|$)")) {
             print FILENAME ":" NR ": unsafe archive member" > "/dev/stderr"
             failed = 1
         }
@@ -257,7 +257,7 @@ install_artifact() {
       validate_tar_paths "$archive"
       extract_dir="$temp_dir/extract-$name"
       mkdir -p -- "$extract_dir"
-      tar -xzf "$archive" -C "$extract_dir" "$member"
+      tar -xzf "$archive" -C "$extract_dir" -- "$member"
       [ -f "$extract_dir/$member" ] || fail "missing $member in ${archive##*/}"
       cp -- "$extract_dir/$member" "$next_binary"
       chmod 0755 "$next_binary"
@@ -287,6 +287,7 @@ bootstrap() {
     require_command "$host_command"
   done
   validate_manifest
+  verify_declared_versions
   platform
   sanitize_cloud_environment
 
@@ -356,6 +357,38 @@ version_for_tool() {
   ' "$manifest_file"
 }
 
+verify_declared_versions() {
+  go_version=$(version_for_tool go)
+  declared_go_version=$(sed -n '1p' "$repo_root/.go-version")
+  [ "$declared_go_version" = "$go_version" ] ||
+    fail ".go-version mismatch: expected $go_version, got $declared_go_version"
+
+  go_mod_version=$(LC_ALL=C awk '$1 == "go" { print $2; exit }' "$repo_root/go.mod")
+  [ "$go_mod_version" = "$go_version" ] ||
+    fail "go.mod version mismatch: expected $go_version, got $go_mod_version"
+
+  for tool in go golangci-lint sqlc goose shfmt shellcheck rumdl; do
+    version=$(version_for_tool "$tool")
+    case "$tool" in
+      go) display_name=Go ;;
+      shellcheck) display_name=ShellCheck ;;
+      *) display_name=$tool ;;
+    esac
+    if ! grep -Fq "| $display_name | $version |" "$repo_root/docs/development.md"; then
+      fail "docs/development.md is missing the $display_name $version pin"
+    fi
+  done
+
+  for tool in go sqlc goose; do
+    version=$(version_for_tool "$tool")
+    stack_version=$(LC_ALL=C awk -F '\t' -v tool="$tool" '
+      NR > 1 && $1 == tool { print $3; exit }
+    ' "$repo_root/docs/architecture/stack-evaluation/versions.tsv")
+    [ "$stack_version" = "$version" ] ||
+      fail "stack version mismatch for $tool: expected $version, got $stack_version"
+  done
+}
+
 verify_versions() {
   verify_version go "go$(version_for_tool go)" "$bin_dir/go" version
   verify_version golangci-lint "$(version_for_tool golangci-lint)" "$bin_dir/golangci-lint" version
@@ -368,6 +401,7 @@ verify_versions() {
 
 require_prepared() {
   validate_manifest
+  verify_declared_versions
   expected_manifest_sha=$(sha256_file "$manifest_file")
   [ -f "$state_dir/manifest.sha256" ] || fail 'toolchain is not prepared; run ./hack/dev bootstrap'
   actual_manifest_sha=$(sed -n '1p' "$state_dir/manifest.sha256")
@@ -393,13 +427,14 @@ prepare_offline_environment() {
   GOMODCACHE="$GOPATH/pkg/mod"
   XDG_CACHE_HOME="$tools_dir/cache/xdg"
   GOTOOLCHAIN=local
+  GOWORK=off
   GOPROXY=off
   GOSUMDB=off
   GOVCS=off
   GOFLAGS=-mod=readonly
   CGO_ENABLED=0
   export PATH GOROOT GOCACHE GOLANGCI_LINT_CACHE GOPATH GOMODCACHE \
-    XDG_CACHE_HOME GOTOOLCHAIN GOPROXY GOSUMDB GOVCS GOFLAGS CGO_ENABLED
+    XDG_CACHE_HOME GOTOOLCHAIN GOWORK GOPROXY GOSUMDB GOVCS GOFLAGS CGO_ENABLED
 }
 
 regular_source_files() {
