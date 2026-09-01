@@ -350,6 +350,34 @@ verifier requires readable story actors and ledger actors to match exactly.
 
 ### Residual risk that cannot be relabeled as mitigation
 
+The exact residual-risk projection below is bound to field 16 of every
+[threats.tsv](threats.tsv) row. These are accepted limits after the listed
+mitigations, not controls and not reasons to lower severity.
+
+| Threat | Residual risk |
+| --- | --- |
+| TM-001 | Identity-provider compromise or a valid stolen token remains usable until bounded expiry or revocation |
+| TM-002 | An authorized workspace administrator can still make harmful choices inside the owned workspace |
+| TM-003 | Revocation propagation and provider calls already in flight have a bounded race that must become explicit terminal state |
+| TM-004 | A provider administrator can intentionally broaden or redirect a provider identity outside Veer's control |
+| TM-005 | A compromised process can use a valid in-memory session until expiry revocation or lost ownership |
+| TM-006 | Veer cannot reduce an independently broad provider resource policy or provider administrator authority |
+| TM-007 | Privileged migration backup and recovery roles necessarily cross workspace storage and remain high-impact trust anchors |
+| TM-008 | An uncertain queue acknowledgement can duplicate delivery and must remain harmless rather than impossible |
+| TM-009 | A provider call with an unknown outcome cannot be made exactly once and needs observation plus terminal operator-visible state |
+| TM-010 | Provider behavior can remain inconsistent or unavailable even after malformed data is rejected |
+| TM-011 | Simultaneous compromise of relational audit archive and both integrity key boundaries can defeat detection |
+| TM-012 | An authorized platform operator remains capable of high-impact actions during the approved elevation window |
+| TM-013 | A correctly authorized but harmful migration can still require restore and forward repair rather than automatic rollback |
+| TM-014 | Provider-side partial effects and unknown outcomes may require manual recovery and retained cost until reconciled |
+| TM-015 | Compromise of both regional key boundaries or corruption older than retention remains outside the alpha recovery claim |
+| TM-016 | A protected signing or release identity remains a critical trust anchor whose compromise requires revocation and incident response |
+| TM-017 | A provider outage or valid workload burst can still reduce freshness within the documented exclusion and budget boundaries |
+| TM-018 | Authorized operators retain access to bounded operational and audit data required for support and incident response |
+| TM-019 | A legitimately authorized approver can approve harmful intent within their current scope |
+| TM-020 | Compromise of provider DNS PKI account administrator or cluster administrator remains outside ordinary tenant authority |
+| TM-021 | A correctly authorized cleanup permanently destroys its selected non-authoritative generation so target and state verification remain critical trust anchors |
+
 - Provider permissions are enforced by the provider. A broad AWS role,
   resource-based policy, Kubernetes ClusterRole, or cluster-admin credential
   remains broad even when Veer's database label says otherwise.
@@ -401,10 +429,11 @@ an unknown does not prove a vulnerability.
 | Medium | Bounded single-workspace availability/cost exhaustion, non-secret operational/configuration disclosure, or a recoverable integrity failure detected before external effect | Existing quotas, redaction, or isolated fixture requirements prevent meaningful authority gain and bound recovery inside the workspace |
 | Low | Self-only metadata inconsistency or safe error detail with no sensitive value, policy bypass, provider effect, durable corruption, or material resource consumption | Any cross-workspace identifier, credential, authorization decision, provider ownership, or retained audit impact raises the level |
 
-The current ledger has no Critical row because no scenario establishes that
-reachability from Veer's accepted ordinary actors. A future implementation
-finding can still be Critical if source/runtime evidence supplies the missing
-path.
+Current ledger Critical-row count: **0**.
+
+A future implementation finding can still be Critical if source or runtime
+evidence establishes the required reachability from Veer's accepted ordinary
+actors.
 
 ### Primary references
 

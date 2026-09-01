@@ -10,6 +10,8 @@ threat_file="$script_dir/threats.tsv"
 class_file="$script_dir/data-classes.tsv"
 summary_file="$script_dir/model.md"
 issue_inventory_file="$script_dir/issue-inventory.txt"
+max_verified_file_bytes=262144
+max_verified_line_bytes=4096
 
 fail() {
   printf '%s\n' "security threat-model verification failed: $*" >&2
@@ -20,6 +22,14 @@ validate_regular_file() {
   checked_file=$1
   [ -f "$checked_file" ] || fail "missing ${checked_file#"$repo_root/"}"
   [ ! -L "$checked_file" ] || fail "${checked_file#"$repo_root/"} must not be a symbolic link"
+  byte_count=$(wc -c <"$checked_file" | LC_ALL=C awk '{ print $1 }')
+  [ "$byte_count" -le "$max_verified_file_bytes" ] ||
+    fail "${checked_file#"$repo_root/"} exceeds ${max_verified_file_bytes}-byte file limit"
+  overlong_line=$(LC_ALL=C awk -v maximum="$max_verified_line_bytes" '
+    length($0) > maximum { print FNR; exit }
+  ' "$checked_file")
+  [ -z "$overlong_line" ] ||
+    fail "${checked_file#"$repo_root/"}:$overlong_line exceeds ${max_verified_line_bytes}-byte line limit"
   record_count=$(LC_ALL=C awk 'END { print NR + 0 }' "$checked_file")
   newline_count=$(wc -l <"$checked_file" | LC_ALL=C awk '{ print $1 }')
   [ "$record_count" -eq "$newline_count" ] ||
@@ -45,6 +55,9 @@ write_visible_markdown() {
             return 0
         }
         tail = substr(stripped, marker_length + 1)
+        if (!in_fence && marker == "`" && index(tail, "`")) {
+            return 0
+        }
         if (!in_fence) {
             in_fence = 1
             opening_marker = marker
@@ -243,6 +256,11 @@ write_visible_markdown() {
             failed = 1
         }
         normalized = normalize_atx_heading(line)
+        if (normalized ~ /^#+([[:space:]]|$)/ &&
+            normalized ~ /[^[:print:][:space:]]/) {
+            print FILENAME ":" FNR ": non-ASCII bytes are forbidden in verified Markdown headings" > "/dev/stderr"
+            failed = 1
+        }
         print normalized
     }
     END {
@@ -466,6 +484,10 @@ LC_ALL=C awk '
       return 0
   }
   function record_heading(heading) {
+      if (heading ~ /[^[:print:][:space:]]/) {
+          print FILENAME ":" FNR ": non-ASCII bytes are forbidden in verified Markdown headings" > "/dev/stderr"
+          failed = 1
+      }
       if (seen[heading]++) {
           print FILENAME ":" FNR ": duplicate visible heading: " heading > "/dev/stderr"
           failed = 1
@@ -890,6 +912,7 @@ BEGIN {
     for (required_threat_index = 1; required_threat_index <= 21; required_threat_index++) {
         required_threat[sprintf("TM-%03d", required_threat_index)] = 1
     }
+    required_threat_count = 21
     inventory_line_number = 1
     inventory_status = getline inventory_line < model_inventory
     expected_inventory_header = "kind\tid_or_name\tdescription\trequirement_or_exclusion\taccountability_or_evidence"
@@ -1007,10 +1030,13 @@ BEGIN {
 FNR == NR {
     if ($0 ~ /^##+ /) {
         current_heading_level = markdown_heading_level($0)
-        leaves_canonical_section = canonical_section_table == "" ||
-            current_heading_level <= canonical_section_level
         finish_table()
         section = $0
+        starts_nested_residual_section = section == \
+            "### Residual risk that cannot be relabeled as mitigation"
+        leaves_canonical_section = canonical_section_table == "" ||
+            current_heading_level <= canonical_section_level ||
+            starts_nested_residual_section
         if (leaves_canonical_section) {
             canonical_section_table = ""
             canonical_section_level = 0
@@ -1027,11 +1053,28 @@ FNR == NR {
                 canonical_section_table = "owners"
             } else if (section == "## Attack surface, mitigations, and attacker stories") {
                 canonical_section_table = "threats"
+            } else if (section == "### Residual risk that cannot be relabeled as mitigation") {
+                canonical_section_table = "residuals"
             }
             if (canonical_section_table != "") {
                 canonical_section_level = current_heading_level
             }
         }
+    }
+    if (section == "## Severity calibration" &&
+        index($0, "Current ledger Critical-row count:") == 1) {
+        if (model_critical_count_seen++) {
+            error("duplicate readable Critical-row count")
+        }
+        if ($0 !~ /^Current ledger Critical-row count: \*\*(0|[1-9][0-9]*)\*\*\.$/) {
+            error("invalid readable Critical-row count")
+        } else {
+            model_critical_count_text = $0
+            sub(/^Current ledger Critical-row count: \*\*/, "", model_critical_count_text)
+            sub(/\*\*\.$/, "", model_critical_count_text)
+            model_critical_count = model_critical_count_text + 0
+        }
+        next
     }
     if (canonical_header_seen && table == "" &&
         canonical_section_table != "" && $0 ~ /^\|/) {
@@ -1046,6 +1089,18 @@ FNR == NR {
         }
         table = "components"
         table_columns = 3
+        table_delimiter_seen = 0
+        canonical_header_seen = 1
+        next
+    }
+    if (section == "### Residual risk that cannot be relabeled as mitigation" &&
+        $0 == "| Threat | Residual risk |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical residual-risk table header")
+            next
+        }
+        table = "residuals"
+        table_columns = 2
         table_delimiter_seen = 0
         canonical_header_seen = 1
         next
@@ -1149,6 +1204,26 @@ FNR == NR {
         if (!has_complete_citation(trim(cells[4]))) {
             error("component row lacks a complete source citation")
         }
+        next
+    }
+    if (table == "residuals" && $0 ~ /^\| TM-[0-9][0-9][0-9] \|/) {
+        if (!table_delimiter_seen) {
+            error("canonical residual-risk row appears before a valid delimiter")
+            next
+        }
+        if (!valid_readable_row($0, table_columns, cells)) {
+            error("invalid required cells in canonical residual-risk row")
+            next
+        }
+        threat_id = trim(cells[2])
+        if (!(threat_id in required_threat)) {
+            error("unexpected canonical residual-risk threat " threat_id)
+        }
+        if (model_residual_seen[threat_id]++) {
+            error("duplicate readable residual risk for " threat_id)
+        }
+        model_residual[threat_id] = trim(cells[3])
+        residual_rows++
         next
     }
     if (table == "assets" && $0 ~ /^\| A-[0-9][0-9] \|/) {
@@ -1376,6 +1451,8 @@ NF != 17 {
     }
     if (!($3 in risks)) {
         error("invalid risk " $3)
+    } else if ($3 == "critical") {
+        ledger_critical_count++
     }
     if (($1 in model_threat) && $3 != model_risk[$1]) {
         error("ledger risk does not match readable priority for " $1)
@@ -1397,6 +1474,11 @@ NF != 17 {
     }
     if (($1 in model_threat) && $12 != model_mitigation[$1]) {
         error("ledger mitigation does not match readable attacker story for " $1)
+    }
+    if (!($1 in model_residual)) {
+        error("threat ID is absent from the readable residual-risk table: " $1)
+    } else if ($16 != model_residual[$1]) {
+        error("ledger residual risk does not match readable model for " $1)
     }
     if (trim($4) == "") {
         error("threat requires at least one asset")
@@ -1544,6 +1626,17 @@ END {
         if (!(required_threat_id in seen)) {
             error("missing required threat " required_threat_id)
         }
+        if (!(required_threat_id in model_residual)) {
+            error("missing readable residual risk for " required_threat_id)
+        }
+    }
+    if (residual_rows != required_threat_count) {
+        error("readable model must contain exactly " required_threat_count " residual-risk rows")
+    }
+    if (model_critical_count_seen != 1) {
+        error("readable model must contain exactly one Critical-row count")
+    } else if (model_critical_count != ledger_critical_count) {
+        error("readable Critical-row count does not match threat ledger")
     }
     for (stride_category in stride) {
         if (!(stride_category in used_stride)) {

@@ -1365,6 +1365,121 @@ expect_rejection 'follow-up and verification role shift' \
   'ledger follow-up references do not match readable follow-up work for TM-006'
 
 new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  "\`\`\`invalid\`\`\`" \
+  '### Control owners' \
+  '| ID | Accountable surface | Live verification work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' \
+  "\`\`\`" >>"$model"
+expect_rejection 'backtick in fenced-code info string' \
+  'duplicate visible heading: ### Control owners'
+
+new_fixture
+rewrite_threat_field TM-005 16 \
+  'There is no residual credential risk'
+expect_rejection 'residual-risk ledger drift' \
+  'ledger residual risk does not match readable model for TM-005'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| TM-005 \|/ {
+      sub(/A compromised process can use a valid in-memory session until expiry revocation or lost ownership/, "There is no residual credential risk")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable residual-risk drift' \
+  'ledger residual risk does not match readable model for TM-005'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '$0 !~ /^\| TM-005 \|/' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'missing readable residual-risk row' \
+  'threat ID is absent from the readable residual-risk table: TM-005'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / { sub(/^\| High \|/, "| Critical |") }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+rewrite_threat_field TM-001 3 'critical'
+expect_rejection 'Critical-row count drift' \
+  'readable Critical-row count does not match threat ledger'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "Current ledger Critical-row count: **0**." {
+      print "Current ledger Critical-row count: **1**."
+      next
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable Critical-row count drift' \
+  'readable Critical-row count does not match threat ledger'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+zero_width_space=$(printf '\342\200\213')
+printf '%s\n' \
+  '' \
+  "## Attack surface,${zero_width_space} mitigations, and attacker stories" \
+  '| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Follow-up and verification |' \
+  '| --- | --- | --- | --- | --- | --- | --- |' \
+  '| High | **TM-001 — Contradictory scenario.** ACT-NET gains alternate authority. | Alternate prerequisite | Alternate impact | Alternate control | Alternate mitigation | Follow-up: Issue #14; verification: Issue #14 |' >>"$model"
+expect_rejection 'invisible Unicode in a rendered heading' \
+  'non-ASCII bytes are forbidden in verified Markdown headings'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+zero_width_space=$(printf '\342\200\213')
+printf '%s\n' \
+  '' \
+  "Attack surface,${zero_width_space} mitigations, and attacker stories" \
+  '---' \
+  '| Priority | Conflicting story | Alternate evidence |' \
+  '| --- | --- | --- |' \
+  '| High | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'invisible Unicode in a Setext heading' \
+  'non-ASCII bytes are forbidden in verified Markdown headings'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+LC_ALL=C awk 'BEGIN {
+  for (occurrence = 1; occurrence <= 586; occurrence++) {
+      printf "docs/x "
+  }
+  print ""
+}' >>"$model"
+expect_rejection 'verified Markdown line beyond the work bound' \
+  'exceeds 4096-byte line limit'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+LC_ALL=C awk 'BEGIN {
+  for (row_index = 1; row_index <= 70; row_index++) {
+      for (byte_index = 1; byte_index <= 4000; byte_index++) {
+          printf "x"
+      }
+      print ""
+  }
+}' >>"$model"
+expect_rejection 'verified file beyond the work bound' \
+  'exceeds 262144-byte file limit'
+
+new_fixture
 inventory="$test_root/docs/security/issue-inventory.txt"
 printf '%s\n' \
   'https://github.com/ArdurAI/veer/issues/9007199254740992' >>"$inventory"
