@@ -215,6 +215,40 @@ expect_rejection 'owner table hidden in an indented fence' \
 new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '   ````text' \
+  '   ```' \
+  '### Workspace isolation assumptions' \
+  '   ````' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'shorter marker cannot close an indented fence' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '   ```text' \
+  '   ~~~' \
+  '### Workspace isolation assumptions' \
+  '   ```' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'mismatched marker cannot close an indented fence' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
 required_source='https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
 LC_ALL=C awk -v source="$required_source" '
   index($0, source) { next }
@@ -235,6 +269,28 @@ LC_ALL=C awk '
 mv "$rewritten_model" "$model"
 expect_rejection 'empty protected-asset cells' \
   'invalid required cells in canonical assets row'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| ACT-NET \|/ { print "| ACT-NET | | |"; next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'empty attacker cells' \
+  'invalid required cells in canonical attackers row'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| TB-01 \|/ { print "| TB-01 | | | |"; next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'empty trust-boundary cells' \
+  'invalid required cells in canonical boundaries row'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"

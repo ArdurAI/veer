@@ -29,8 +29,42 @@ visible_markdown_has() {
   match_mode=$2
   checked_file=$3
   LC_ALL=C awk -v required="$required_content" -v mode="$match_mode" '
+    function fence_transition(line, stripped, marker, marker_length, tail) {
+        stripped = line
+        sub(/^[ ]?[ ]?[ ]?/, "", stripped)
+        marker = substr(stripped, 1, 1)
+        if (marker != "`" && marker != "~") {
+            return 0
+        }
+        marker_length = 0
+        while (substr(stripped, marker_length + 1, 1) == marker) {
+            marker_length++
+        }
+        if (marker_length < 3) {
+            return 0
+        }
+        tail = substr(stripped, marker_length + 1)
+        if (!in_fence) {
+            in_fence = 1
+            opening_marker = marker
+            opening_length = marker_length
+            return 1
+        }
+        if (marker == opening_marker && marker_length >= opening_length &&
+            tail ~ /^[[:space:]]*$/) {
+            in_fence = 0
+            opening_marker = ""
+            opening_length = 0
+            return 1
+        }
+        return 0
+    }
     {
         line = $0
+        if (in_fence) {
+            fence_transition(line)
+            next
+        }
         if (in_comment) {
             if (index(line, "-->")) {
                 in_comment = 0
@@ -44,13 +78,11 @@ visible_markdown_has() {
             }
             next
         }
-        if (line ~ /^[ ]?[ ]?[ ]?```/ || line ~ /^[ ]?[ ]?[ ]?~~~/) {
-            in_fence = !in_fence
+        if (fence_transition(line)) {
             next
         }
-        if (!in_fence &&
-            ((mode == "exact" && line == required) ||
-             (mode == "contains" && index(line, required)))) {
+        if ((mode == "exact" && line == required) ||
+            (mode == "contains" && index(line, required))) {
             found = 1
         }
     }
@@ -152,7 +184,41 @@ function valid_readable_row(line, expected_columns, cells, count, cell_index, va
     }
     return 1
 }
+function fence_transition(line, stripped, marker, marker_length, tail) {
+    stripped = line
+    sub(/^[ ]?[ ]?[ ]?/, "", stripped)
+    marker = substr(stripped, 1, 1)
+    if (marker != "`" && marker != "~") {
+        return 0
+    }
+    marker_length = 0
+    while (substr(stripped, marker_length + 1, 1) == marker) {
+        marker_length++
+    }
+    if (marker_length < 3) {
+        return 0
+    }
+    tail = substr(stripped, marker_length + 1)
+    if (!in_fence) {
+        in_fence = 1
+        opening_marker = marker
+        opening_length = marker_length
+        return 1
+    }
+    if (marker == opening_marker && marker_length >= opening_length &&
+        tail ~ /^[[:space:]]*$/) {
+        in_fence = 0
+        opening_marker = ""
+        opening_length = 0
+        return 1
+    }
+    return 0
+}
 FNR == NR {
+    if (in_fence) {
+        fence_transition($0)
+        next
+    }
     if (in_model_comment) {
         if (index($0, "-->")) {
             in_model_comment = 0
@@ -166,11 +232,7 @@ FNR == NR {
         }
         next
     }
-    if ($0 ~ /^[ ]?[ ]?[ ]?```/ || $0 ~ /^[ ]?[ ]?[ ]?~~~/) {
-        in_model_fence = !in_model_fence
-        next
-    }
-    if (in_model_fence) {
+    if (fence_transition($0)) {
         next
     }
     if ($0 ~ /^##+ /) {
@@ -434,7 +496,41 @@ function valid_readable_row(line, expected_columns, cells, count, cell_index, va
     }
     return 1
 }
+function fence_transition(line, stripped, marker, marker_length, tail) {
+    stripped = line
+    sub(/^[ ]?[ ]?[ ]?/, "", stripped)
+    marker = substr(stripped, 1, 1)
+    if (marker != "`" && marker != "~") {
+        return 0
+    }
+    marker_length = 0
+    while (substr(stripped, marker_length + 1, 1) == marker) {
+        marker_length++
+    }
+    if (marker_length < 3) {
+        return 0
+    }
+    tail = substr(stripped, marker_length + 1)
+    if (!in_fence) {
+        in_fence = 1
+        opening_marker = marker
+        opening_length = marker_length
+        return 1
+    }
+    if (marker == opening_marker && marker_length >= opening_length &&
+        tail ~ /^[[:space:]]*$/) {
+        in_fence = 0
+        opening_marker = ""
+        opening_length = 0
+        return 1
+    }
+    return 0
+}
 FNR == NR {
+    if (in_fence) {
+        fence_transition($0)
+        next
+    }
     if (in_model_comment) {
         if (index($0, "-->")) {
             in_model_comment = 0
@@ -448,11 +544,7 @@ FNR == NR {
         }
         next
     }
-    if ($0 ~ /^[ ]?[ ]?[ ]?```/ || $0 ~ /^[ ]?[ ]?[ ]?~~~/) {
-        in_model_fence = !in_model_fence
-        next
-    }
-    if (in_model_fence) {
+    if (fence_transition($0)) {
         next
     }
     if ($0 ~ /^##+ /) {
