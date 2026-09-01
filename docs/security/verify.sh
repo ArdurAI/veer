@@ -3,6 +3,7 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../.." && pwd)
+docs_root=$(CDPATH='' cd -- "$repo_root/docs" && pwd -P)
 model_file="$script_dir/threat-model.md"
 threat_file="$script_dir/threats.tsv"
 class_file="$script_dir/data-classes.tsv"
@@ -86,6 +87,24 @@ function valid_links(value, values, count, link_index) {
     return 1
 }
 FNR == NR {
+    if ($0 == "## Attack surface, mitigations, and attacker stories") {
+        in_attack_section = 1
+    } else if (in_attack_section && $0 ~ /^## /) {
+        in_attack_section = 0
+        in_attack_table = 0
+    }
+    if (in_attack_section && $0 ~ /^\| Priority \| Scenario and capability gain \|/) {
+        in_attack_table = 1
+    } else if (in_attack_table && $0 !~ /^\|/) {
+        in_attack_table = 0
+    } else if (in_attack_table &&
+               $0 ~ /^\| (Critical|High|Medium|Low) \| \*\*TM-[0-9][0-9][0-9] /) {
+        match($0, /TM-[0-9][0-9][0-9]/)
+        threat_id = substr($0, RSTART, RLENGTH)
+        if (model_threat[threat_id]++) {
+            error("duplicate readable attacker-story row " threat_id)
+        }
+    }
     if ($0 ~ /^\| A-[0-9][0-9] \|/) {
         split($0, cells, "|")
         assets[trim(cells[2])] = 1
@@ -98,11 +117,6 @@ FNR == NR {
     } else if ($0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
         split($0, cells, "|")
         owners[trim(cells[2])] = 1
-    }
-    remaining = $0
-    while (match(remaining, /TM-[0-9][0-9][0-9]/)) {
-        model_threat[substr(remaining, RSTART, RLENGTH)] = 1
-        remaining = substr(remaining, RSTART + RLENGTH)
     }
     next
 }
@@ -312,7 +326,7 @@ END {
 LC_ALL=C awk '
 {
     remaining = $0
-    while (match(remaining, /docs\/[A-Za-z0-9_.\/-]+:[0-9][0-9]*/)) {
+    while (match(remaining, /docs\/[A-Za-z0-9_.\/-]+:[0-9][0-9]*(-[0-9][0-9]*)?/)) {
         citation = substr(remaining, RSTART, RLENGTH)
         if (!seen[citation]++) {
             print citation
@@ -323,17 +337,38 @@ LC_ALL=C awk '
 ' "$model_file" "$threat_file" |
   while IFS= read -r citation; do
     citation_path=${citation%:*}
-    citation_line=${citation##*:}
+    citation_location=${citation##*:}
+    case "$citation_location" in
+      *-*)
+        citation_start=${citation_location%-*}
+        citation_end=${citation_location#*-}
+        ;;
+      *)
+        citation_start=$citation_location
+        citation_end=$citation_location
+        ;;
+    esac
     case "$citation_path" in
-      docs/*) ;;
+      docs/*)
+        case "/$citation_path/" in
+          */../* | */./* | *//*) fail "unsafe citation path: $citation" ;;
+        esac
+        ;;
       *) fail "unsafe citation path: $citation" ;;
     esac
     citation_file="$repo_root/$citation_path"
     [ -f "$citation_file" ] || fail "citation target does not exist: $citation"
     [ ! -L "$citation_file" ] || fail "citation target must not be a symbolic link: $citation"
+    citation_dir=$(CDPATH='' cd -- "$(dirname -- "$citation_file")" && pwd -P)
+    case "$citation_dir/" in
+      "$docs_root"/*) ;;
+      *) fail "citation target resolves outside docs: $citation" ;;
+    esac
     line_count=$(wc -l <"$citation_file" | LC_ALL=C awk '{ print $1 }')
-    [ "$citation_line" -ge 1 ] && [ "$citation_line" -le "$line_count" ] ||
-      fail "citation line is outside the target: $citation"
+    [ "$citation_start" -ge 1 ] &&
+      [ "$citation_end" -ge "$citation_start" ] &&
+      [ "$citation_end" -le "$line_count" ] ||
+      fail "citation range is outside the target: $citation"
   done
 
 printf '%s\n' 'security threat-model verification passed'

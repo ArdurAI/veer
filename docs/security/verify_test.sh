@@ -94,7 +94,30 @@ expect_rejection 'missing required data class' \
 new_fixture
 rewrite_threat_field TM-001 14 'docs/security/model.md:9999'
 expect_rejection 'stale source citation' \
-  'citation line is outside the target: docs/security/model.md:9999'
+  'citation range is outside the target: docs/security/model.md:9999'
+
+new_fixture
+rewrite_threat_field TM-001 14 'docs/security/model.md:1-9999'
+expect_rejection 'stale source citation range endpoint' \
+  'citation range is outside the target: docs/security/model.md:1-9999'
+
+new_fixture
+rewrite_threat_field TM-001 14 'docs/security/../security/model.md:1'
+expect_rejection 'citation parent traversal' \
+  'unsafe citation path: docs/security/../security/model.md:1'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / { next }
+  { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' '<!-- TM-001 is intentionally not a readable attacker-story row. -->' \
+  >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'threat ID outside attacker-story table' \
+  'threat ID is absent from the readable attacker-story table: TM-001'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"
