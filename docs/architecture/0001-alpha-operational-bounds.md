@@ -127,12 +127,13 @@ an explicit quota response; they must not cause silent data loss.
 | Concurrent non-terminal operations | 10 | 100 | 1,000 |
 | Pending reconciliation items | 100 | 10,000 | 100,000 |
 | Oldest ready-item admission threshold | 30 min | 15 min | 15 min |
+| Durable queue 64 KiB request units/month | 0 | 20,000,000 | 100,000,000 |
 | Provider mutations/minute, aggregate | 10 | 60 | 600 |
-| Audit events/month | 100,000 | 2,000,000 | 20,000,000 |
-| Archived audit and evidence bytes/30-day month, GB | 0.4 | 8 | 80 |
-| Archive objects written/month | 2,000 | 8,000 | 80,000 |
-| Archive S3 tier-1 requests/month, both regions | 6,000 | 24,000 | 240,000 |
-| Archive KMS requests/month, both regions | 8,000 | 32,000 | 320,000 |
+| Audit events/month | 100,000 | 4,000,000 | 20,000,000 |
+| Archived audit and evidence bytes/30-day month, GB | 0.4 | 16 | 80 |
+| Archive objects written/month | 2,000 | 12,000 | 80,000 |
+| Archive S3 tier-1 requests/month, both regions | 6,000 | 36,000 | 240,000 |
+| Archive KMS requests/month, both regions | 8,000 | 48,000 | 320,000 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Database changed blocks/month, GiB | 5 | 50 | 500 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
@@ -156,6 +157,13 @@ continue, accepted work is never discarded, and depth, age, rejection count,
 and projected drain time are observable. Qualification holds a provider fake
 in throttling until each threshold is crossed and verifies this response.
 
+The monthly schedule produces 3,449,250 small and 17,246,250 target accepted
+writes plus operation cancellations. One send, receive, and delete request unit
+per accepted action consumes 10,347,750 and 51,738,750 queue units before
+retries or empty long polls. The rounded 20 million and 100 million limits leave
+the remaining units for those paths; batching does not reduce billable message
+units.
+
 ### Load qualification
 
 Qualification uses generated resources with provider adapters operating in a
@@ -167,36 +175,57 @@ target result cannot substitute for the small profile:
 1. Load the selected profile's full object counts before timing begins.
 2. Run that profile's steady traffic for 24 hours, including its stated
    provider mutation rate and one-thirtieth of its monthly audit volume,
-   rounded up: 66,667 events small or 666,667 target.
+   rounded up: 133,334 events small or 666,667 target.
 3. Run the selected profile's 15-minute peak once per hour.
 4. Inject one process failure, one worker lease expiry, one queue redelivery,
-   one database failover, and one simulated Availability Zone loss.
-5. Report every SLI below for the entire run and for each failure window.
+   and one database failover. Run an isolated Availability Zone loss window for
+   every active zone, resetting and re-seeding between windows.
+5. Pause the deterministic recovery feed through its 15-, 25-, and 30-minute
+   thresholds and verify warning, critical, and qualification-failure behavior.
+6. Restore the latest simulated regional checkpoint and apply the acknowledged-
+   record completeness oracle defined under recovery objectives.
+7. Report every SLI below for the entire run and for each failure window.
 
 The request generator uses a checked-in seed and a fixed mix at both steady and
-peak rates: 75% reads (45% point resource reads, 20% operation/status reads,
+peak rates: 70% reads (40% point resource reads, 20% operation/status reads,
 and 10% paginated list reads), 10% successful desired-state mutations, 5%
 idempotent replays of a prior successful mutation, 5% stale-version conflicts,
-and 5% accepted cancellation requests. Cancellations target operations created
-earlier in the seeded run, split equally between an interruptible provider fake
-and a provider fake that must finish safely before reporting canceled.
-Successful mutations are 20% creates, 60% updates, and 20% deletes,
-selected across Workspace, Environment, Application, Component, Policy, and
-ProviderConnection resources at 5%, 15%, 20%, 40%, 15%, and 5% respectively.
-The steady mix therefore produces the stated 30 and 150 accepted mutations per
-minute for the small and target profiles; conflict and replay traffic cannot be
-reclassified as cheap reads.
+and 5% accepted operation-cancellation requests. The remaining 5% is split
+equally across invalid, unauthenticated, unauthorized, quota-rejected, and
+request-context-canceled calls. Each rejection class therefore has a non-empty
+latency denominator. The client-cancellation case cancels after the server
+observes the request but before commit and is distinct from an accepted request
+to cancel an asynchronous provider operation.
 
-The checked-in seed assigns every generated resource representation and every
-applicable request body or response page to fixed serialized-size buckets: 40%
-at 4 KiB, 49% at 16 KiB, 9% at 64 KiB, and 2% at 256 KiB. Operations without a
-body use zero bytes and are reported separately; deterministic non-secret
-padding fills the selected bucket. The maximum accepted request body, resource,
-or response page is 256 KiB, and larger input fails before persistence with a
-stable client error. The harness reports bucket counts by operation class so
-two runs cannot satisfy the same percentiles with different byte workloads.
-Provider calls and cost-incurring cloud fixtures are capped and explicitly
-enabled; public CI uses deterministic fakes.
+Accepted operation cancellations target operations created earlier in the
+seeded run, split equally between an interruptible provider fake and a provider
+fake that must finish safely before reporting canceled. Successful mutations
+are 20% creates, 60% updates, and 20% deletes, selected across Workspace,
+Environment, Application, Component, Policy, and ProviderConnection resources
+at 5%, 15%, 20%, 40%, 15%, and 5% respectively. The steady mix therefore
+produces the stated 30 and 150 accepted mutations per minute for the small and
+target profiles; conflicts, replays, and rejections cannot be reclassified as
+cheap reads.
+
+The checked-in seed assigns every generated resource representation, mutation
+body, and read response page to fixed serialized-size buckets: 90% at 1 KiB, 8%
+at 4 KiB, and 2% at 256 KiB, for an exact 6.34 KiB mean and 256 KiB p99.
+Non-read response bodies are receipt, status, or error envelopes capped at 1
+KiB. Operations without a request body use zero bytes and are reported
+separately; deterministic non-secret padding fills the selected bucket. The
+maximum accepted request body, resource, or response page is 256 KiB, and
+larger input fails before persistence with a stable client error. The harness
+reports bucket counts by operation class so two runs cannot satisfy the same
+percentiles with different byte workloads.
+
+For a 730-hour month where each hourly 15-minute peak replaces steady traffic,
+the schedule produces exactly 22,995,000 small and 114,975,000 target requests.
+At 70% read responses averaging 6.34 KiB, all other response bodies capped at 1
+KiB, and a conservative 1 KiB per-request header and TLS allowance, gross
+egress is 135.11 GB small and 675.56 GB target. Two synthetic calls per minute
+also fit inside the worksheet's rounded 150 GB and 800 GB limits. Provider calls
+and cost-incurring cloud fixtures are capped and explicitly enabled; public CI
+uses deterministic fakes.
 
 ## Service indicators and objectives
 
@@ -213,6 +242,7 @@ environments have measurement coverage but no SLO.
 | Client-cancellation cleanup | p99 <= 100 ms | Time from server observation of request-context cancellation to handler termination, with no partial uncommitted state retained. |
 | Planning start delay | 99% <= 30 s; 99.9% <= 2 min | Time from successful write commit to a worker acquiring the current generation. |
 | Observation freshness | 95% <= 5 min; 99% <= 15 min | Age of the newest successful provider observation for every non-deleted resource that requires observation. Rate-limited and terminally failed resources remain in the denominator; a resource with no successful observation is aged from activation. |
+| Recovery-copy freshness | <= 30 min hard bound; warn at 15 min; critical at 25 min | Source-commit age of the newest common database, outbox, audit-manifest, and object checkpoint verified as restorable in `us-west-2`. Missing or unverifiable checkpoints have infinite age. |
 | Audit publication delay | 99.9% <= 60 s | Time from security-relevant commit to availability in the append-only audit query/export path. Missing required audit events are a correctness failure, not error-budget consumption. |
 | Worker recovery | 99% of abandoned leases reacquired <= 2 min | Time from lease expiry or process loss to fenced ownership by a replacement worker. |
 | Cancellation acknowledgment | 99% <= 30 s | Time from accepted cancellation request to a persisted canceled or cancel-pending condition. Provider operations that cannot be interrupted must be identified explicitly. |
@@ -276,7 +306,7 @@ error budget:
 | Single Availability Zone loss | 15 min | 0 for acknowledged state | 2 min | Multi-AZ database and queue failover plus endpoint health routing |
 | Bad application release | 30 min | 0 for committed data | 5 min | Version rollback with backward-compatible persisted formats |
 | Logical database corruption or operator error | 2 hr | 5 min | 15 min | Relationship and audit-integrity checks plus in-region point-in-time restore into an isolated validation target before cutover |
-| Primary-region loss | 4 hr | 30 min | 2 min | Independent regional probes, encrypted cross-region restore, control-plane deployment, authority revalidation, and endpoint switch |
+| Primary-region loss | 4 hr | 30 min | 2 min | Independent regional probes, freshness alarms, encrypted cross-region restore, control-plane deployment, authority revalidation, and endpoint switch |
 
 RTO starts at failure onset, not incident declaration. Fault-injection evidence
 uses the injection timestamp. Production evidence uses a provider or deployment
@@ -286,8 +316,22 @@ signal. Detection and declaration consume the same RTO. The external probe uses
 two consecutive failures; platform health signals must open an incident within
 the table's detection bound. Supported logical-corruption classes are checked
 at least every 15 minutes. Missing the detection bound or the end-to-end RTO
-fails the objective. RPO is measured against the latest acknowledged write
-present after recovery. Issue
+fails the objective.
+
+Recovery freshness compares a primary commit watermark with the newest common
+checkpoint whose database backup, outbox, audit manifest, and required objects
+have all passed integrity verification in `us-west-2`. At 15 minutes an alert
+warns operators; at 25 minutes it pages as critical. Reaching 30 minutes fails
+qualification, suspends the production regional-RPO claim, and blocks planned
+cutover. An emergency restore may still proceed but records an RPO breach.
+
+For every recovery test, define the cutoff as `failure onset - stated RPO`.
+The qualification harness keeps an ordered, hashed ledger of acknowledged
+state, outbox, and required audit records. Every ledger entry at or before the
+cutoff must exist after restore with matching content and referential-integrity
+checks; RPO zero uses failure onset as the cutoff. A recent recovered record
+cannot hide an older omission, and any missing or mismatched prefix entry fails
+the recovery objective. Issue
 [#64](https://github.com/ArdurAI/veer/issues/64) must exercise these objectives.
 Until those exercises pass, they are design targets rather than demonstrated
 service claims.
@@ -313,15 +357,23 @@ the primary copy plus 35 days of changes requires 108.34 GB-month small and
 actual managed-service incremental backups may consume less.
 
 Canonical audit events are at most 16 KiB before archive compression and must
-average no more than 3,000 bytes at the full event count. That allocates at most
-6 GB/month small and 60 GB/month target to audit records, leaving 2 GB and 20 GB
-inside the combined 8 GB and 80 GB archive-ingress caps for operations, plans,
-policy decisions, and recovery evidence. The archive writer measures actual
-stored object bytes, including framing and encryption overhead. Over 365 days,
-the combined cap consumes at most 97.34 GB small and 973.34 GB target, fitting
-the worksheet's 100 GB and 1,000 GB primary and recovery copies. Audit records
-are never sampled or dropped: exceeding the bound rejects or backpressures new
-work and surfaces a capacity condition.
+average no more than 3,000 bytes at the full event count. Successful mutations,
+accepted operation cancellations, and unauthenticated or unauthorized attempts
+consume 17% of the fixed schedule: 3,909,150 small and 19,545,750 target audit
+records. The 4 million and 20 million limits leave room for the 43,800 synthetic
+writes and bounded system events. Invalid, quota-rejected, replayed, conflicted,
+and request-context-canceled attempts produce bounded metrics or ordinary logs
+unless issue #14 classifies one as a required security audit event.
+
+At full event count the average-size limit allocates at most 12 GB/month small
+and 60 GB/month target to audit records, leaving 4 GB and 20 GB inside the
+combined 16 GB and 80 GB archive-ingress caps for operations, plans, policy
+decisions, and recovery evidence. The archive writer measures actual stored
+object bytes, including framing and encryption overhead. Over 365 days, the
+combined cap consumes at most 194.67 GB small and 973.34 GB target, fitting the
+worksheet's 200 GB and 1,000 GB primary and recovery copies. Audit records are
+never sampled or dropped: exceeding the bound rejects or backpressures new work
+and surfaces a capacity condition.
 
 The archive writer fills an object until it contains 1,000 records, the next
 record would exceed the 8 MiB compressed-object limit, or the oldest buffered
@@ -329,10 +381,10 @@ record reaches 30 minutes; one final accounting-window flush is also allowed.
 Process shutdown transfers the durable buffer and does not create an extra
 partial object. The timer is shared across record types rather than creating
 one partial object per stream.
-Audit objects have a 6,000/month small and 60,000/month target sublimit;
-non-audit evidence has 2,000 and 20,000, for total limits of 8,000 and 80,000.
+Audit objects have a 10,000/month small and 60,000/month target sublimit;
+non-audit evidence has 2,000 and 20,000, for total limits of 12,000 and 80,000.
 Even ignoring the stricter 3,000-byte average, packing every audit record at the
-16 KiB maximum requires at most 3,907 and 39,063 objects; no more than 1,440
+16 KiB maximum requires at most 7,813 and 39,063 objects; no more than 1,440
 timer flushes occur in a 30-day month, so full in-profile audit volume fits its
 sublimit. Each profile budgets three S3 tier-1 requests and four KMS requests
 per object across primary write, recovery replication, retries, manifest/list
@@ -353,10 +405,10 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 699.70 | USD 750.00 | USD 50.30 |
-| Target-scale qualification | USD 2,425.27 | USD 2,500.00 | USD 74.73 |
+| Small production | USD 712.41 | USD 750.00 | USD 37.59 |
+| Target-scale qualification | USD 2,463.27 | USD 2,500.00 | USD 36.73 |
 
-The target reference consumes 97.01% of its ceiling after conservatively
+The target reference consumes 98.53% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional
 recurring target resource may be added without reducing another input or
@@ -403,7 +455,7 @@ the exercise continues.
 - Nodes stay private. S3 gateway endpoints avoid NAT processing for backup and
   artifact traffic; interface endpoints require a before/after cost comparison.
 - Queue messages carry identifiers and generations, not resource bodies, and
-  are capped at 64 KiB. The 5/50 million monthly limits count billable 64 KiB
+  are capped at 64 KiB. The 20/100 million monthly limits count billable 64 KiB
   request units after sends, receives, deletes, retries, batching, and empty
   long polls rather than counting only logical messages.
 - The recovery-region synthetic's run count, Lambda duration, output bytes, and

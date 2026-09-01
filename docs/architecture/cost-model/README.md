@@ -46,20 +46,20 @@ does not contact AWS or read environment credentials.
 | Database changed blocks per 30 days | 50 GiB | 500 GiB |
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
 | Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
-| Modeled 64 KiB queue request units with no free allowance | 5 million | 50 million |
+| Modeled 64 KiB queue request units with no free allowance | 20 million | 100 million |
 | Average ALB capacity | 1 LCU | 5 LCU |
 | NAT processed data | 100 GiB | 1,000 GiB |
-| Total internet egress | 150 GiB | 600 GiB |
-| Billable internet egress with no free allowance | 150 GiB | 600 GiB |
+| Derived response egress | 135.11 GB | 675.56 GB |
+| Billable internet egress with no free allowance | 150 GB | 800 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
-| Stored archive ingress per 30-day month | 8 GB | 80 GB |
-| Archive objects written | 8,000 | 80,000 |
-| S3 tier-1 archive requests, primary plus recovery | 24,000 | 240,000 |
-| KMS archive requests, primary plus recovery | 32,000 | 320,000 |
-| Encrypted primary archive/object storage | 100 GiB | 1,000 GiB |
-| Encrypted recovery archive/object storage | 100 GiB | 1,000 GiB |
+| Stored archive ingress per 30-day month | 16 GB | 80 GB |
+| Archive objects written | 12,000 | 80,000 |
+| S3 tier-1 archive requests, primary plus recovery | 36,000 | 240,000 |
+| KMS archive requests, primary plus recovery | 48,000 | 320,000 |
+| Encrypted primary archive/object storage | 200 GiB | 1,000 GiB |
+| Encrypted recovery archive/object storage | 200 GiB | 1,000 GiB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
 | Secrets Manager API requests, recovery region | 5,000 | 50,000 |
 | Recovery-region secret replicas | 10 | 100 |
@@ -74,16 +74,27 @@ Multi-AZ gp3 rate. Recovery storage and transfer model one provisioned database
 copy plus one archive copy, each with one full-size equivalent of monthly
 changed data; incremental copies may cost less.
 
+Queue units derive from the accepted 15% write-and-cancellation share of the
+monthly request schedule. One send, receive, and delete consumes 10.35 million
+units small and 51.74 million target; the rounded limits reserve the balance for
+retries, empty long polls, and recovery traffic.
+
 Backup storage conservatively applies no included allocation. At one
 dataset-equivalent of changed blocks per 30 days, primary storage is
 `dataset * (1 + 35/30)` and recovery storage is `dataset * (1 + 7/30)`, rounded
 up to two decimals. Cross-region transfer retains the one-dataset monthly change
 assumption.
 
-The archive quantities hold 365 days at the ADR's measured 8 GB and 80 GB
+The archive quantities hold 365 days at the ADR's measured 16 GB and 80 GB
 monthly ingress caps. Secret values use a version-aware, single-flight cache;
 the request rows are hard monthly budgets rather than an assumption that every
 provider operation reads Secrets Manager.
+
+Egress is derived from the exact monthly request schedule and fixed response
+distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
+at no more than 1 KiB, and 1 KiB of header/TLS allowance for every request. The
+rounded worksheet quantities also contain the external synthetic's two calls
+per minute.
 
 The one-minute recovery-region canary uses 43,800 runs in a 730-hour month. Its
 dependent Lambda, log, S3 artifact, three-metric, and one-alarm quantities use
