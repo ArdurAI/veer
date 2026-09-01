@@ -27,7 +27,12 @@ fail() {
 fixture_count=0
 new_fixture() {
   fixture_count=$((fixture_count + 1))
-  test_root="$fixture_root/case-$fixture_count"
+  test_root="$fixture_root/case"
+  case "$test_root" in
+    "$fixture_root"/case) ;;
+    *) fail "unsafe reusable fixture path $test_root" ;;
+  esac
+  rm -rf -- "$test_root"
   mkdir -p "$test_root"
   cp -R "$repo_root/docs" "$test_root/docs"
 }
@@ -45,6 +50,27 @@ rewrite_threat_field() {
       { print }
     ' "$ledger" >"$rewritten"
   mv "$rewritten" "$ledger"
+}
+
+escape_required_link() {
+  checked_file=$1
+  required_link=$2
+  rewritten="$test_root/escaped-link.md"
+
+  LC_ALL=C awk -v required="$required_link" '
+    {
+        remaining = $0
+        rewritten_line = ""
+        while ((position = index(remaining, required))) {
+            rewritten_line = rewritten_line substr(remaining, 1, position - 1) "\\" required
+            remaining = substr(remaining, position + length(required))
+            changed = 1
+        }
+        print rewritten_line remaining
+    }
+    END { exit changed ? 0 : 1 }
+  ' "$checked_file" >"$rewritten" || fail "required link fixture target was not found: $required_link"
+  mv "$rewritten" "$checked_file"
 }
 
 expect_rejection() {
@@ -484,7 +510,7 @@ printf '%s\n' \
   '</pre>' >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'comment text in an HTML opener cannot expose a heading' \
-  'is missing visible heading: ### Workspace isolation assumptions'
+  'rendered raw HTML is forbidden in verified Markdown'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -501,7 +527,7 @@ printf '%s\n' \
   '</pre>' >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'required heading hidden in a raw HTML block' \
-  'is missing visible heading: ### Workspace isolation assumptions'
+  'rendered raw HTML is forbidden in verified Markdown'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -519,7 +545,7 @@ printf '%s\n' \
   '' >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'required heading hidden by quoted HTML attribute' \
-  'is missing visible heading: ### Workspace isolation assumptions'
+  'rendered raw HTML is forbidden in verified Markdown'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -536,7 +562,7 @@ printf '%s\n' \
   '</pre>' >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'quoted raw-HTML close tag cannot expose a heading' \
-  'is missing visible heading: ### Workspace isolation assumptions'
+  'rendered raw HTML is forbidden in verified Markdown'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -588,7 +614,7 @@ printf '%s\n' \
   '</pre>' >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'owner table hidden in a raw HTML block' \
-  'undeclared owner OWN-SECURITY'
+  'rendered raw HTML is forbidden in verified Markdown'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -1040,6 +1066,111 @@ printf '%s\n' \
   '| High | Conflicting contract | Issue #14 |' >>"$model"
 expect_rejection 'Setext duplicate canonical section' \
   'duplicate visible heading: ## Attack surface, mitigations, and attacker stories'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Assumptions and unresolved evidence" {
+      print "<script>"
+      print "</script><script>"
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'same-line raw HTML close and reopen' \
+  'rendered raw HTML is forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '### Control&#32;owners' \
+  '| ID | Conflicting responsibility | Alternate work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'entity-obfuscated canonical heading' \
+  'entity references are forbidden in verified headings'
+
+new_fixture
+summary="$test_root/docs/security/model.md"
+escape_required_link \
+  "$summary" \
+  '[formal threat model and data classification](threat-model.md)'
+expect_rejection 'escaped formal-model reference' \
+  'is missing unescaped Markdown link: [formal threat model and data classification](threat-model.md)'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+escape_required_link "$model" "[\`threats.tsv\`](threats.tsv)"
+expect_rejection 'escaped threat-ledger reference' \
+  "is missing unescaped Markdown link: [\`threats.tsv\`](threats.tsv)"
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+escape_required_link "$model" "[\`data-classes.tsv\`](data-classes.tsv)"
+expect_rejection 'escaped data-class-ledger reference' \
+  "is missing unescaped Markdown link: [\`data-classes.tsv\`](data-classes.tsv)"
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+escape_required_link "$model" "[\`issue-inventory.txt\`](issue-inventory.txt)"
+expect_rejection 'escaped issue-inventory reference' \
+  "is missing unescaped Markdown link: [\`issue-inventory.txt\`](issue-inventory.txt)"
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" {
+      print "<table>"
+      print "<tr><th>ID</th><th>Conflicting responsibility</th><th>Alternate work</th></tr>"
+      print "<tr><td>OWN-FAKE</td><td>Conflicting contract</td><td>Issue #9999</td></tr>"
+      print "</table>"
+      print ""
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'rendered raw HTML table in a canonical section' \
+  'rendered raw HTML is forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" {
+      print "ID | Conflicting responsibility | Alternate work"
+      print "--- | --- | ---"
+      print "OWN-FAKE | Conflicting contract | Issue #14"
+      print ""
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'GFM table without outer pipes in a canonical section' \
+  'unexpected table in canonical owners section'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  { sub(/Issue #13 controls bootstrap/, "Issue #9999 controls bootstrap <!-- retained marker -->"); print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'inline comment cannot erase visible issue work' \
+  'unknown readable issue reference #9999'
+
+new_fixture
+inventory="$test_root/docs/security/issue-inventory.txt"
+printf '%s\n' \
+  'https://github.com/ArdurAI/veer/issues/9007199254740992' >>"$inventory"
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  'Issue #9007199254740992 through #9007199254740992.' >>"$model"
+expect_rejection 'issue number outside the supported AWK integer range' \
+  'issue inventory entry exceeds supported issue number'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"

@@ -59,155 +59,34 @@ write_visible_markdown() {
         }
         return 0
     }
-    function html_tag_end(line, character_index, character, quote) {
-        quote = ""
-        for (character_index = 1; character_index <= length(line); character_index++) {
-            character = substr(line, character_index, 1)
-            if (quote != "") {
-                if (character == quote) {
-                    quote = ""
-                }
-                continue
-            }
-            if (character == "\"" || character == single_quote) {
-                quote = character
-                continue
-            }
-            if (character == ">") {
-                return character_index
-            }
-        }
-        return 0
-    }
-    function complete_html_tag(line, character_index, character, quote, masked, tail) {
-        if (substr(line, 1, 1) != "<") {
-            return 0
-        }
-        quote = ""
-        masked = ""
-        for (character_index = 1; character_index <= length(line); character_index++) {
-            character = substr(line, character_index, 1)
-            if (quote != "") {
-                if (character == quote) {
-                    quote = ""
-                    masked = masked character
-                } else {
-                    masked = masked "_"
-                }
-                continue
-            }
-            if (character == "\"" || character == single_quote) {
-                quote = character
-                masked = masked character
-                continue
-            }
-            masked = masked character
-            if (character == ">") {
-                tail = substr(line, character_index + 1)
-                return tail ~ /^[[:space:]]*$/ &&
-                    masked ~ /^<\/?[A-Za-z][A-Za-z0-9-]*([[:space:]][^<>]*)?\/?>$/
-            }
-        }
-        return 0
-    }
-    function html_transition(line, stripped, lower, tag) {
-        stripped = line
-        sub(/^[ ]?[ ]?[ ]?/, "", stripped)
-        lower = tolower(stripped)
-        if (in_html_literal) {
-            if (index(lower, html_close)) {
-                in_html_literal = 0
-                html_close = ""
-            }
-            return 1
-        }
-        if (in_html_until_blank) {
-            if (line ~ /^[[:space:]]*$/) {
-                in_html_until_blank = 0
-            }
-            return 1
-        }
-        if (in_processing_instruction) {
-            if (index(line, "?>")) {
-                in_processing_instruction = 0
-            }
-            return 1
-        }
-        if (in_declaration) {
-            if (index(line, ">")) {
-                in_declaration = 0
-            }
-            return 1
-        }
-        if (in_cdata) {
-            if (index(line, "]]>") ) {
-                in_cdata = 0
-            }
-            return 1
-        }
-        if (lower ~ /^<(pre|script|style|textarea)([[:space:]>]|$)/) {
-            tag = lower
-            sub(/^</, "", tag)
-            sub(/[[:space:]>].*$/, "", tag)
-            html_close = "</" tag ">"
-            opening_end = html_tag_end(stripped)
-            if (!opening_end || !index(substr(lower, opening_end + 1), html_close)) {
-                in_html_literal = 1
-            }
-            return 1
-        }
-        if (substr(stripped, 1, 9) == "<![CDATA[") {
-            if (!index(stripped, "]]>") ) {
-                in_cdata = 1
-            }
-            return 1
-        }
-        if (substr(stripped, 1, 2) == "<?") {
-            if (!index(stripped, "?>")) {
-                in_processing_instruction = 1
-            }
-            return 1
-        }
-        if (stripped ~ /^<![A-Z]/) {
-            if (!index(stripped, ">")) {
-                in_declaration = 1
-            }
-            return 1
-        }
-        if (substr(lower, 1, 1) == "<") {
-            tag = lower
-            sub(/^<\//, "", tag)
-            sub(/^</, "", tag)
-            sub(/[[:space:]\/>].*$/, "", tag)
-            if (tag in block_tag || complete_html_tag(stripped)) {
-                in_html_until_blank = 1
-                return 1
-            }
-        }
-        return 0
-    }
-    function comment_transition(line, remaining, marker, saw_comment) {
+    function strip_comments(line, remaining, marker, visible) {
         remaining = line
-        saw_comment = in_comment
+        visible = ""
         while (1) {
             if (in_comment) {
                 marker = index(remaining, "-->")
                 if (!marker) {
-                    return 1
+                    return visible
                 }
                 remaining = substr(remaining, marker + 3)
                 in_comment = 0
-                saw_comment = 1
                 continue
             }
             marker = index(remaining, "<!--")
             if (!marker) {
-                return saw_comment
+                return visible remaining
             }
+            visible = visible substr(remaining, 1, marker - 1)
             remaining = substr(remaining, marker + 4)
             in_comment = 1
-            saw_comment = 1
         }
+    }
+    function has_rendered_raw_html(line) {
+        return line ~ /<\/?[A-Za-z][A-Za-z0-9-]*([[:space:]\/>]|$)/ ||
+            line ~ /<!\[CDATA\[|<\?|<![A-Z]/
+    }
+    function has_heading_entity(line) {
+        return line ~ /&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/
     }
     function normalize_atx_heading(line, normalized, leading_spaces, hashes, content) {
         normalized = line
@@ -233,16 +112,9 @@ write_visible_markdown() {
         sub(/^[[:space:]]+/, "", content)
         sub(/[[:space:]]+#+[[:space:]]*$/, "", content)
         sub(/[[:space:]]+$/, "", content)
+        gsub(/[[:space:]]+/, " ", content)
         normalized = substr(normalized, 1, hashes)
         return content == "" ? normalized : normalized " " content
-    }
-    BEGIN {
-        single_quote = sprintf("%c", 39)
-        tags = "address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option p param search section summary table tbody td tfoot th thead title tr track ul"
-        tag_count = split(tags, tag_values, " ")
-        for (tag_index = 1; tag_index <= tag_count; tag_index++) {
-            block_tag[tag_values[tag_index]] = 1
-        }
     }
     {
         line = $0
@@ -251,22 +123,25 @@ write_visible_markdown() {
             print ""
             next
         }
-        if (in_html_literal || in_html_until_blank || in_processing_instruction ||
-            in_declaration || in_cdata) {
-            html_transition(line)
+        line = strip_comments(line)
+        if (fence_transition(line)) {
             print ""
             next
         }
-        if (fence_transition(line) || html_transition(line)) {
+        if (has_rendered_raw_html(line)) {
+            print FILENAME ":" FNR ": rendered raw HTML is forbidden in verified Markdown" > "/dev/stderr"
+            failed = 1
             print ""
             next
         }
-        if (comment_transition(line)) {
-            print ""
-            next
+        normalized = normalize_atx_heading(line)
+        if (normalized ~ /^#+( |$)/ && has_heading_entity(normalized)) {
+            print FILENAME ":" FNR ": entity references are forbidden in verified headings" > "/dev/stderr"
+            failed = 1
         }
-        print normalize_atx_heading(line)
+        print normalized
     }
+    END { exit failed ? 1 : 0 }
   ' "$source_file" >"$destination_file"
 }
 
@@ -323,12 +198,54 @@ require_visible_section() {
     fail "${checked_file#"$repo_root/"} has no visible section content: $required_heading"
 }
 
-require_visible_text() {
-  required_text=$1
-  checked_file=$2
-  visible_file=$3
-  visible_markdown_has "$required_text" contains "$visible_file" ||
-    fail "${checked_file#"$repo_root/"} is missing visible text: $required_text"
+require_markdown_link() {
+  required_label=$1
+  required_destination=$2
+  checked_file=$3
+  visible_file=$4
+  required_link="[$required_label]($required_destination)"
+  LC_ALL=C awk -v required="$required_link" '
+    function is_escaped(line, position, slash_count) {
+        slash_count = 0
+        position--
+        while (position > 0 && substr(line, position, 1) == "\\") {
+            slash_count++
+            position--
+        }
+        return slash_count % 2 == 1
+    }
+    function is_image_opener(line, position) {
+        return position > 1 && substr(line, position - 1, 1) == "!" &&
+            !is_escaped(line, position - 1)
+    }
+    {
+        line = $0
+        for (character_index = 1; character_index <= length(line); character_index++) {
+            if (!code_tick_count &&
+                substr(line, character_index, length(required)) == required &&
+                !is_escaped(line, character_index) &&
+                !is_image_opener(line, character_index)) {
+                found = 1
+            }
+            if (substr(line, character_index, 1) != "`" ||
+                is_escaped(line, character_index)) {
+                continue
+            }
+            run_length = 1
+            while (substr(line, character_index + run_length, 1) == "`") {
+                run_length++
+            }
+            if (!code_tick_count) {
+                code_tick_count = run_length
+            } else if (run_length == code_tick_count) {
+                code_tick_count = 0
+            }
+            character_index += run_length - 1
+        }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$visible_file" ||
+    fail "${checked_file#"$repo_root/"} is missing unescaped Markdown link: $required_link"
 }
 
 require_primary_reference() {
@@ -360,10 +277,23 @@ for checked_file in \
 done
 
 LC_ALL=C awk '
+  function issue_number_is_supported(issue_number) {
+      return length(issue_number) < 10 ||
+          (length(issue_number) == 10 && issue_number <= 2147483647)
+  }
   !/^https:\/\/github[.]com\/ArdurAI\/veer\/issues\/[1-9][0-9]*$/ {
       print FILENAME ":" FNR ": invalid issue inventory entry" > "/dev/stderr"
       failed = 1
       next
+  }
+  {
+      issue_number = $0
+      sub(/^.*\//, "", issue_number)
+      if (!issue_number_is_supported(issue_number)) {
+          print FILENAME ":" FNR ": issue inventory entry exceeds supported issue number" > "/dev/stderr"
+          failed = 1
+          next
+      }
   }
   seen[$0]++ {
       print FILENAME ":" FNR ": duplicate issue inventory entry " $0 > "/dev/stderr"
@@ -395,8 +325,10 @@ trap cleanup 0 1 2 15
 
 visible_model_file="$verification_tmp/threat-model.visible.md"
 visible_summary_file="$verification_tmp/model.visible.md"
-write_visible_markdown "$model_file" "$visible_model_file"
-write_visible_markdown "$summary_file" "$visible_summary_file"
+write_visible_markdown "$model_file" "$visible_model_file" ||
+  fail 'formal threat model contains unsupported rendered markup'
+write_visible_markdown "$summary_file" "$visible_summary_file" ||
+  fail 'security summary contains unsupported rendered markup'
 
 LC_ALL=C awk '
   function trim(value) {
@@ -423,6 +355,10 @@ LC_ALL=C awk '
       return 0
   }
   function record_heading(heading) {
+      if (heading ~ /&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/) {
+          print FILENAME ":" FNR ": entity references are forbidden in verified headings" > "/dev/stderr"
+          failed = 1
+      }
       if (seen[heading]++) {
           print FILENAME ":" FNR ": duplicate visible heading: " heading > "/dev/stderr"
           failed = 1
@@ -550,20 +486,24 @@ for required_source in \
   require_primary_reference "$required_source" "$visible_model_file"
 done
 
-require_visible_text \
-  '[formal threat model and data classification](threat-model.md)' \
+require_markdown_link \
+  'formal threat model and data classification' \
+  'threat-model.md' \
   "$summary_file" \
   "$visible_summary_file"
-require_visible_text \
-  "[\`threats.tsv\`](threats.tsv)" \
+require_markdown_link \
+  "\`threats.tsv\`" \
+  'threats.tsv' \
   "$model_file" \
   "$visible_model_file"
-require_visible_text \
-  "[\`data-classes.tsv\`](data-classes.tsv)" \
+require_markdown_link \
+  "\`data-classes.tsv\`" \
+  'data-classes.tsv' \
   "$model_file" \
   "$visible_model_file"
-require_visible_text \
-  "[\`issue-inventory.txt\`](issue-inventory.txt)" \
+require_markdown_link \
+  "\`issue-inventory.txt\`" \
+  'issue-inventory.txt' \
   "$model_file" \
   "$visible_model_file"
 
@@ -711,6 +651,25 @@ function valid_delimiter_row(line, expected_columns, cells, count, cell_index, v
         return 0
     }
     for (cell_index = 2; cell_index < count; cell_index++) {
+        value = trim(cells[cell_index])
+        if (value !~ /^:?-{3,}:?$/) {
+            return 0
+        }
+    }
+    return 1
+}
+function valid_gfm_delimiter_row(line, cells, candidate, count, cell_index, value) {
+    candidate = trim(line)
+    if (candidate !~ /\|/) {
+        return 0
+    }
+    sub(/^\|/, "", candidate)
+    sub(/\|$/, "", candidate)
+    count = split(candidate, cells, "|")
+    if (count < 2) {
+        return 0
+    }
+    for (cell_index = 1; cell_index <= count; cell_index++) {
         value = trim(cells[cell_index])
         if (value !~ /^:?-{3,}:?$/) {
             return 0
@@ -1018,6 +977,9 @@ FNR == NR {
         finish_table()
     }
     if (table == "" && canonical_section_table != "" && $0 ~ /^\|/) {
+        error("unexpected table in canonical " canonical_section_table " section")
+    } else if (table == "" && canonical_section_table != "" &&
+               valid_gfm_delimiter_row($0, alternate_delimiter_cells)) {
         error("unexpected table in canonical " canonical_section_table " section")
     }
     next
@@ -1344,6 +1306,25 @@ function valid_delimiter_row(line, expected_columns, cells, count, cell_index, v
     }
     return 1
 }
+function valid_gfm_delimiter_row(line, cells, candidate, count, cell_index, value) {
+    candidate = trim(line)
+    if (candidate !~ /\|/) {
+        return 0
+    }
+    sub(/^\|/, "", candidate)
+    sub(/\|$/, "", candidate)
+    count = split(candidate, cells, "|")
+    if (count < 2) {
+        return 0
+    }
+    for (cell_index = 1; cell_index <= count; cell_index++) {
+        value = trim(cells[cell_index])
+        if (value !~ /^:?-{3,}:?$/) {
+            return 0
+        }
+    }
+    return 1
+}
 function markdown_heading_level(line, level) {
     level = 0
     while (substr(line, level + 1, 1) == "#") {
@@ -1486,6 +1467,9 @@ FNR == NR {
         finish_table()
     }
     if (table == "" && canonical_section_table != "" && $0 ~ /^\|/) {
+        error("unexpected table in canonical " canonical_section_table " section")
+    } else if (table == "" && canonical_section_table != "" &&
+               valid_gfm_delimiter_row($0, alternate_delimiter_cells)) {
         error("unexpected table in canonical " canonical_section_table " section")
     }
     next
