@@ -1,0 +1,117 @@
+profile	item	category	quantity	unit	unit_rate_usd	source_id	note
+developer	local_cloud_resources	compute	0	resource-month	0	internal-local	Developer profile runs on the contributor machine
+small	eks_control_plane	compute	744	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support for a thirty-one-day month
+small	compute_nodes	compute	1488	instance-hour	0.1632	aws-ec2-m7g	Two on-demand m7g.xlarge nodes across two zones for seven hundred forty-four hours
+small	compute_root_storage	compute	60	GB-month	0.08	aws-ec2-ebs	Thirty GiB gp3 root volume for each of two nodes
+small	database_compute	storage	744	instance-hour	0.129	aws-rds-postgresql	Multi-AZ db.t4g.medium price proxy for a thirty-one-day month
+small	database_cpu_credits	compute	2976	vCPU-hour	0.075	aws-rds-postgresql	Physical maximum for two copies times two vCPUs times seven hundred forty-four hours
+small	database_storage	storage	50	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
+small	primary_backup_storage	storage	108.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus the hard rolling thirty-five-day changed-block cap
+small	recovery_backup_storage	recovery	61.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus the hard rolling seven-day changed-block cap
+small	recovery_backup_transfer	recovery	50	GB	0.02	aws-cross-region-transfer	Hard rolling thirty-day changed-block cap
+small	queue_requests	queue	20	million-64-KiB-request-units	0.40	aws-sqs	Covers 10.639935 million generated and synthetic baseline units plus fixed retry empty-poll and critical reserves
+small	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
+small	load_balancer_capacity	network	744	LCU-hour	0.008	aws-elb	One LCU bounded across new active byte and rule dimensions
+small	nat_gateways	network	1488	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of two active zones for seven hundred forty-four hours
+small	nat_processing	network	300	GB	0.045	aws-ec2-nat	Rounded above 111.54 provider plus 81 telemetry plus 80 queue plus 20 other service GB
+small	public_ipv4	network	2976	address-hour	0.005	aws-vpc-ipv4	Two NAT and two load-balancer addresses for seven hundred forty-four hours
+small	internet_egress	network	200	GB	0.09	aws-data-transfer	Rounded above 137.70 GB HTTP responses and headers plus 14 GB TLS handshakes plus 27.88 GB provider requests
+small	cross_az_transfer	network	200	directional-GB	0.01	aws-data-transfer	Hard cap: 40 queue body, 140 database and service, and 20 failover and retry
+small	log_ingestion	telemetry	50	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
+small	log_archive	telemetry	135	GB-month	0.03	aws-cloudwatch	Two uncompressed boundary-concentrated ingestion envelopes plus twenty-five percent service framing
+small	trace_ingestion	telemetry	10	GB	0.50	aws-cloudwatch	OTEL byte proxy enforcing the accepted monthly trace cap
+small	custom_metrics	telemetry	50	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
+small	primary_alarm_metrics	monitoring	64	alarm-metric-month	0.10	aws-cloudwatch	Bounded primary-region standard alarm metric evaluations across all required alert domains
+small	external_synthetic_schedule_invocations	monitoring	93744	scheduled-invocation	0.000001	aws-eventbridge-recovery	Forty-four thousand six hundred forty intended identities plus equal duplicate and ten percent shutdown-race reserves
+small	external_synthetic_lambda_requests	monitoring	93744	API-request	0.0000002	aws-lambda-recovery	Every intended duplicate and shutdown-race Scheduler delivery invokes Lambda
+small	external_synthetic_lambda_duration	monitoring	937440	GB-second	0.0000166667	aws-lambda-recovery	Ten seconds at one GB for every intended duplicate and shutdown-race invocation
+small	external_synthetic_log_ingestion	monitoring	14.0616	GB	0.50	aws-cloudwatch-recovery	0.00015 GB for every intended duplicate and shutdown-race invocation
+small	external_synthetic_log_storage	monitoring	14.0616	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of every bounded probe invocation log
+small	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
+small	external_synthetic_alarm	monitoring	1	alarm-metric-month	0.30	aws-cloudwatch-recovery	One ten-second high-resolution missing-or-failed-run alarm
+small	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
+small	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One conditional tier-one S3 PUT attempt per admitted probe identity
+small	object_archive	storage	208	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
+small	recovery_object_archive	recovery	208	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
+small	archive_delete_marker_overlap	storage	0.02	GB-month	0.023	aws-s3	One boundary-concentrated envelope of maximum 512-byte delete-marker keys pending exact-version cleanup
+small	recovery_archive_delete_marker_overlap	recovery	0.02	GB-month	0.023	aws-s3-recovery	One replicated boundary-concentrated envelope of maximum 512-byte delete-marker keys pending cleanup
+small	archive_lifecycle_list_requests	storage	74001	API-request	0.000005	aws-s3	One ListObjectVersions request per expiring data version and marker plus final empty proof
+small	recovery_archive_lifecycle_list_requests	recovery	74001	API-request	0.000005	aws-s3-recovery	One recovery-region version-list request per expiring version and marker plus final empty proof
+small	normal_recovery_object_transfer	recovery	16	GB	0.02	aws-cross-region-transfer	One full monthly archive ingress envelope replicated to the recovery region
+small	recovery_object_transfer	recovery	229	GB	0.02	aws-cross-region-transfer	One full retained-archive reseed with ten percent byte retry headroom
+small	primary_archive_requests	storage	55500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of thirty-seven thousand monthly archive objects
+small	recovery_archive_requests	recovery	55500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of thirty-seven thousand monthly archive objects
+small	full_reseed_source_get_requests	recovery	530000	API-request	0.0000004	aws-s3	Source GET attempts for four hundred eighty-one thousand retained objects plus ten percent retry headroom
+small	full_reseed_destination_put_requests	recovery	530000	API-request	0.000005	aws-s3-recovery	Destination PUT attempts for four hundred eighty-one thousand retained objects plus ten percent retry headroom
+small	full_reseed_kms_requests	recovery	2120000	API-request	0.000003	aws-kms	Source decrypt destination encrypt and validation data-key plus decrypt per full-reseed attempt
+small	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations replication job per modeled full reseed
+small	full_reseed_batch_object_operations	recovery	530000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including rounded-up retry headroom
+small	full_reseed_generated_manifest_scan	recovery	481000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
+small	full_reseed_manifest_storage	recovery	0.28	GB-month	0.023	aws-s3	Eight GiB converted to decimal GB and retained for at most twenty-four hours in a thirty-one-day window
+small	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
+small	full_reseed_candidate_storage	recovery	7.39	GB-month	0.023	aws-s3-recovery	Retry-inclusive candidate generation retained for at most twenty-four hours
+small	full_reseed_destination_get_requests	recovery	530000	API-request	0.0000004	aws-s3-recovery	Exact-version destination body GET validation attempts including rounded-up retry headroom
+small	full_reseed_cleanup_list_requests	recovery	530001	API-request	0.000005	aws-s3-recovery	One version-list request per possible version plus one final empty proof
+small	encryption_keys	security	3	key-month	1.00	aws-kms	Primary data audit and recovery-region keys
+small	archive_kms_requests	security	148000	API-request	0.000003	aws-kms	Four normal envelope and validation requests per monthly archive object
+small	managed_secrets	security	10	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
+small	secret_api_requests	security	45000	API-request	0.000005	aws-secrets-manager	Primary version-aware single-flight cache request ceiling
+small	recovery_managed_secrets	recovery	10	secret-month	0.40	aws-secrets-manager-recovery	Encrypted recovery-region replicas of unavoidable third-party credentials
+small	recovery_secret_api_requests	recovery	5000	API-request	0.000005	aws-secrets-manager-recovery	Recovery validation rotation and restore-time request ceiling
+target	eks_control_plane	compute	744	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support for a thirty-one-day month
+target	compute_nodes	compute	4464	instance-hour	0.1632	aws-ec2-m7g	Six on-demand m7g.xlarge nodes across three zones for seven hundred forty-four hours
+target	compute_root_storage	compute	180	GB-month	0.08	aws-ec2-ebs	Thirty GiB gp3 root volume for each of six nodes
+target	database_compute	storage	744	instance-hour	0.478	aws-rds-postgresql	Multi-AZ db.r7g.large price proxy for a thirty-one-day month
+target	database_storage	storage	500	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
+target	primary_backup_storage	storage	1083.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus the hard rolling thirty-five-day changed-block cap
+target	recovery_backup_storage	recovery	616.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus the hard rolling seven-day changed-block cap
+target	recovery_backup_transfer	recovery	500	GB	0.02	aws-cross-region-transfer	Hard rolling thirty-day changed-block cap
+target	queue_requests	queue	100	million-64-KiB-request-units	0.40	aws-sqs	Covers 52.824735 million generated and synthetic baseline units plus fixed retry empty-poll and critical reserves
+target	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
+target	load_balancer_capacity	network	3720	LCU-hour	0.008	aws-elb	Five LCUs bounded across new active byte and rule dimensions
+target	nat_gateways	network	2232	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of three active zones for seven hundred forty-four hours
+target	nat_processing	network	2250	GB	0.045	aws-ec2-nat	Rounded above 932.51 provider plus 806 telemetry plus 400 queue plus 100 other service GB
+target	public_ipv4	network	4464	address-hour	0.005	aws-vpc-ipv4	Three NAT and three load-balancer addresses for seven hundred forty-four hours
+target	internet_egress	network	1000	GB	0.09	aws-data-transfer	Rounded above 688.52 GB HTTP responses and headers plus 70 GB TLS handshakes plus 233.13 GB provider requests
+target	cross_az_transfer	network	2000	directional-GB	0.01	aws-data-transfer	Hard cap: 200 queue body, 1600 database and service, and 200 failover and retry
+target	log_ingestion	telemetry	500	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
+target	log_archive	telemetry	1343	GB-month	0.03	aws-cloudwatch	Two uncompressed boundary-concentrated ingestion envelopes plus twenty-five percent service framing
+target	trace_ingestion	telemetry	100	GB	0.50	aws-cloudwatch	OTEL byte proxy enforcing the accepted monthly trace cap
+target	custom_metrics	telemetry	500	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
+target	primary_alarm_metrics	monitoring	64	alarm-metric-month	0.10	aws-cloudwatch	Bounded primary-region standard alarm metric evaluations across all required alert domains
+target	external_synthetic_schedule_invocations	monitoring	93744	scheduled-invocation	0.000001	aws-eventbridge-recovery	Forty-four thousand six hundred forty intended identities plus equal duplicate and ten percent shutdown-race reserves
+target	external_synthetic_lambda_requests	monitoring	93744	API-request	0.0000002	aws-lambda-recovery	Every intended duplicate and shutdown-race Scheduler delivery invokes Lambda
+target	external_synthetic_lambda_duration	monitoring	937440	GB-second	0.0000166667	aws-lambda-recovery	Ten seconds at one GB for every intended duplicate and shutdown-race invocation
+target	external_synthetic_log_ingestion	monitoring	14.0616	GB	0.50	aws-cloudwatch-recovery	0.00015 GB for every intended duplicate and shutdown-race invocation
+target	external_synthetic_log_storage	monitoring	14.0616	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of every bounded probe invocation log
+target	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
+target	external_synthetic_alarm	monitoring	1	alarm-metric-month	0.30	aws-cloudwatch-recovery	One ten-second high-resolution missing-or-failed-run alarm
+target	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
+target	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One conditional tier-one S3 PUT attempt per admitted probe identity
+target	object_archive	storage	1040	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
+target	recovery_object_archive	recovery	1040	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
+target	archive_delete_marker_overlap	storage	0.09	GB-month	0.023	aws-s3	One boundary-concentrated envelope of maximum 512-byte delete-marker keys pending exact-version cleanup
+target	recovery_archive_delete_marker_overlap	recovery	0.09	GB-month	0.023	aws-s3-recovery	One replicated boundary-concentrated envelope of maximum 512-byte delete-marker keys pending cleanup
+target	archive_lifecycle_list_requests	storage	326001	API-request	0.000005	aws-s3	One ListObjectVersions request per expiring data version and marker plus final empty proof
+target	recovery_archive_lifecycle_list_requests	recovery	326001	API-request	0.000005	aws-s3-recovery	One recovery-region version-list request per expiring version and marker plus final empty proof
+target	normal_recovery_object_transfer	recovery	80	GB	0.02	aws-cross-region-transfer	One full monthly archive ingress envelope replicated to the recovery region
+target	recovery_object_transfer	recovery	1144	GB	0.02	aws-cross-region-transfer	One full retained-archive reseed with ten percent byte retry headroom
+target	primary_archive_requests	storage	244500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of one hundred sixty-three thousand monthly archive objects
+target	recovery_archive_requests	recovery	244500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of one hundred sixty-three thousand monthly archive objects
+target	full_reseed_source_get_requests	recovery	2331000	API-request	0.0000004	aws-s3	Source GET attempts for two million one hundred nineteen thousand retained objects plus ten percent retry headroom
+target	full_reseed_destination_put_requests	recovery	2331000	API-request	0.000005	aws-s3-recovery	Destination PUT attempts for two million one hundred nineteen thousand retained objects plus ten percent retry headroom
+target	full_reseed_kms_requests	recovery	9324000	API-request	0.000003	aws-kms	Source decrypt destination encrypt and validation data-key plus decrypt per full-reseed attempt
+target	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations replication job per modeled full reseed
+target	full_reseed_batch_object_operations	recovery	2331000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including retry headroom
+target	full_reseed_generated_manifest_scan	recovery	2119000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
+target	full_reseed_manifest_storage	recovery	0.28	GB-month	0.023	aws-s3	Eight GiB converted to decimal GB and retained for at most twenty-four hours in a thirty-one-day window
+target	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
+target	full_reseed_candidate_storage	recovery	36.91	GB-month	0.023	aws-s3-recovery	Retry-inclusive candidate generation retained for at most twenty-four hours
+target	full_reseed_destination_get_requests	recovery	2331000	API-request	0.0000004	aws-s3-recovery	Exact-version destination body GET validation attempts including retry headroom
+target	full_reseed_cleanup_list_requests	recovery	2331001	API-request	0.000005	aws-s3-recovery	One version-list request per possible version plus one final empty proof
+target	encryption_keys	security	6	key-month	1.00	aws-kms	Separated primary recovery and rotation key set
+target	archive_kms_requests	security	652000	API-request	0.000003	aws-kms	Four normal envelope and validation requests per monthly archive object
+target	managed_secrets	security	100	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
+target	secret_api_requests	security	450000	API-request	0.000005	aws-secrets-manager	Primary version-aware single-flight cache request ceiling
+target	recovery_managed_secrets	recovery	100	secret-month	0.40	aws-secrets-manager-recovery	Encrypted recovery-region replicas of unavoidable third-party credentials
+target	recovery_secret_api_requests	recovery	50000	API-request	0.000005	aws-secrets-manager-recovery	Recovery validation rotation and restore-time request ceiling

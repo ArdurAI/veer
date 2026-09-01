@@ -105,3 +105,8 @@ ownership, conflict resolution, and recovery objectives are proven.
 
 This keeps the first failure model understandable and avoids paying for
 cross-region data transfer and duplicated stateful infrastructure prematurely.
+
+The numeric availability, scale, recovery, retention, and cost boundaries for
+the first operable alpha are defined in
+[ADR 0001](0001-alpha-operational-bounds.md). Later implementation decisions
+must either fit those bounds or replace them with a reviewed ADR.
