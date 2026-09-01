@@ -53,6 +53,7 @@ The first implementation slice targets AWS and Kubernetes:
 ## Documentation
 
 - [Architecture overview](docs/architecture/overview.md)
+- [Alpha operational bounds](docs/architecture/0001-alpha-operational-bounds.md)
 - [Security model](docs/security/model.md)
 - [Roadmap](docs/roadmap.md)
 

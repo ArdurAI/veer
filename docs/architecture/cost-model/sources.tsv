@@ -1,0 +1,17 @@
+source_id	pricing_date	region	url	rate_scope
+internal-local	2026-08-31	local	https://github.com/ArdurAI/veer/issues/11	No managed cloud resources in the developer profile
+aws-eks	2026-08-31	us-east-1	https://aws.amazon.com/eks/pricing/	Standard-support cluster at USD 0.10 per cluster-hour
+aws-ec2-m7g	2026-08-31	us-east-1	https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/20260831181331/us-east-1/index.json	Linux shared m7g.xlarge on demand SKU Y7X6HJY9G859NU23 at USD 0.1632 per hour; offer 20260831181331
+aws-rds-postgresql	2026-08-31	us-east-1	https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json	PostgreSQL Multi-AZ db.t4g.medium SKU SCBZU9XX357QUA4D at USD 0.129 per hour; db.r7g.large SKU QPKXCKEKNV5DW3QA at USD 0.478 per hour; offer 20260831092223
+aws-rds-storage	2026-08-31	us-east-1	https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json	PostgreSQL Multi-AZ gp3 SKU J7S7KD4WFDNQWKNX at USD 0.23 per GB-month; offer 20260831092223
+aws-rds-recovery-storage	2026-08-31	us-west-2	https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-west-2/index.json	PostgreSQL excess backup SKU PAHDKG6EF4XSHYXC at USD 0.095 per GB-month; offer 20260831092223
+aws-rds-cross-region	2026-08-31	us-east-1-to-us-west-2	https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/20260831121448/us-east-1/index.json	Cross-region data transfer SKU XGXYRYWGNXSSEUVT at USD 0.02 per GB out; offer 20260831121448
+aws-sqs	2026-08-31	us-east-1	https://aws.amazon.com/sqs/pricing/	Standard requests after first one million at USD 0.40 per million
+aws-elb	2026-08-31	us-east-1	https://aws.amazon.com/elasticloadbalancing/pricing/	Application Load Balancer at USD 0.0225 per hour and USD 0.008 per LCU-hour
+aws-vpc-nat	2026-08-31	us-east-1	https://aws.amazon.com/vpc/pricing/	NAT gateway at USD 0.045 per hour and USD 0.045 per GB processed
+aws-vpc-ipv4	2026-08-31	us-east-1	https://aws.amazon.com/vpc/pricing/	In-use public IPv4 at USD 0.005 per address-hour
+aws-data-transfer	2026-08-31	us-east-1	https://aws.amazon.com/ec2/pricing/on-demand/	Internet egress first paid tier at USD 0.09 per GB after the aggregated 100 GB allowance; cross-AZ at USD 0.01 per GB in each direction
+aws-cloudwatch	2026-08-31	us-east-1	https://aws.amazon.com/cloudwatch/pricing/	Log ingestion at USD 0.50 per GB; archive at USD 0.03 per GB-month; first 10000 custom metrics at USD 0.30 each
+aws-s3	2026-08-31	us-east-1	https://aws.amazon.com/s3/pricing/	S3 Standard first 50 TB at USD 0.023 per GB-month
+aws-kms	2026-08-31	us-east-1-and-us-west-2	https://aws.amazon.com/kms/pricing/	Customer-managed keys at USD 1 per key-month; request free tier assumed sufficient
+aws-secrets-manager	2026-08-31	us-east-1	https://aws.amazon.com/secrets-manager/pricing/	Secrets at USD 0.40 per secret-month; API calls excluded as immaterial at profile scale

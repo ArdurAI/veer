@@ -1,0 +1,42 @@
+profile	item	category	quantity	unit	unit_rate_usd	source_id	note
+developer	local_cloud_resources	compute	0	resource-month	0	internal-local	Developer profile runs on the contributor machine
+small	eks_control_plane	compute	730	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support
+small	compute_nodes	compute	1460	instance-hour	0.1632	aws-ec2-m7g	Two on-demand m7g.xlarge nodes across two zones
+small	database_compute	storage	730	instance-hour	0.129	aws-rds-postgresql	Multi-AZ db.t4g.medium price proxy
+small	database_storage	storage	50	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
+small	recovery_backup_storage	recovery	50	GB-month	0.095	aws-rds-recovery-storage	Encrypted copy in the recovery region
+small	recovery_backup_transfer	recovery	50	GB	0.02	aws-rds-cross-region	One full-dataset equivalent of monthly changed data
+small	queue_requests	queue	4	million-requests	0.40	aws-sqs	Five million total requests less one million free allowance
+small	load_balancer	network	730	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer
+small	load_balancer_capacity	network	730	LCU-hour	0.008	aws-elb	Average one LCU
+small	nat_gateways	network	1460	gateway-hour	0.045	aws-vpc-nat	One NAT gateway in each of two active zones
+small	nat_processing	network	100	GB	0.045	aws-vpc-nat	Non-endpoint outbound processing
+small	public_ipv4	network	2920	address-hour	0.005	aws-vpc-ipv4	Two NAT and two load-balancer addresses
+small	internet_egress	network	50	GB	0.09	aws-data-transfer	150 GB total less 100 GB aggregated account allowance
+small	cross_az_transfer	network	200	directional-GB	0.01	aws-data-transfer	100 GB round trip billed in each direction
+small	log_ingestion	telemetry	50	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
+small	log_archive	telemetry	10	GB-month	0.03	aws-cloudwatch	Assumes 5 to 1 compression during online retention
+small	custom_metrics	telemetry	50	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
+small	object_archive	storage	100	GB-month	0.023	aws-s3	Plans audit exports and recovery evidence
+small	encryption_keys	security	3	key-month	1.00	aws-kms	Primary data audit and recovery-region keys
+small	managed_secrets	security	10	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
+target	eks_control_plane	compute	730	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support
+target	compute_nodes	compute	4380	instance-hour	0.1632	aws-ec2-m7g	Six on-demand m7g.xlarge nodes across three zones
+target	database_compute	storage	730	instance-hour	0.478	aws-rds-postgresql	Multi-AZ db.r7g.large price proxy
+target	database_storage	storage	500	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
+target	recovery_backup_storage	recovery	500	GB-month	0.095	aws-rds-recovery-storage	Encrypted copy in the recovery region
+target	recovery_backup_transfer	recovery	500	GB	0.02	aws-rds-cross-region	One full-dataset equivalent of monthly changed data
+target	queue_requests	queue	49	million-requests	0.40	aws-sqs	Fifty million total requests less one million free allowance
+target	load_balancer	network	730	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer
+target	load_balancer_capacity	network	3650	LCU-hour	0.008	aws-elb	Average five LCU
+target	nat_gateways	network	2190	gateway-hour	0.045	aws-vpc-nat	One NAT gateway in each of three active zones
+target	nat_processing	network	1000	GB	0.045	aws-vpc-nat	Non-endpoint outbound processing
+target	public_ipv4	network	4380	address-hour	0.005	aws-vpc-ipv4	Three NAT and three load-balancer addresses
+target	internet_egress	network	500	GB	0.09	aws-data-transfer	600 GB total less 100 GB aggregated account allowance
+target	cross_az_transfer	network	2000	directional-GB	0.01	aws-data-transfer	1000 GB round trip billed in each direction
+target	log_ingestion	telemetry	500	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
+target	log_archive	telemetry	100	GB-month	0.03	aws-cloudwatch	Assumes 5 to 1 compression during online retention
+target	custom_metrics	telemetry	500	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
+target	object_archive	storage	1000	GB-month	0.023	aws-s3	Plans audit exports and recovery evidence
+target	encryption_keys	security	6	key-month	1.00	aws-kms	Separated primary recovery and rotation key set
+target	managed_secrets	security	100	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
