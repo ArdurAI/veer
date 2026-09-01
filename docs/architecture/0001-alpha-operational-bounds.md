@@ -1082,13 +1082,13 @@ resources, and `us-west-2` recovery storage.
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 931.85 | USD 1,000.00 | USD 68.15 |
-| Target-scale qualification | USD 2,619.23 | USD 2,650.00 | USD 30.77 |
+| Small production | USD 937.50 | USD 1,000.00 | USD 62.50 |
+| Target-scale qualification | USD 2,627.40 | USD 2,650.00 | USD 22.60 |
 
-The target reference consumes 98.84% of its ceiling after conservatively
-pricing all retained backup data, the external synthetic, and request
-allowances. No additional recurring target resource may be added without
-reducing another input or approving a replacement ADR.
+The target reference leaves only the narrow headroom reported above after
+conservatively pricing all retained backup data, the external synthetic, and
+request allowances. No additional recurring target resource may be added
+without reducing another input or approving a replacement ADR.
 
 These figures cover the Veer control plane only. They exclude taxes, support,
 discount programs, CI minutes, developer workstations, domain registration,

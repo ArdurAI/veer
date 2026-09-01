@@ -18,7 +18,8 @@ docs/architecture/cost-model/verify.sh
 
 The command validates the worksheet schema and source references, recalculates
 monthly totals with the system `awk`, compares them with
-[`expected.tsv`](expected.tsv), and fails if a profile exceeds its ceiling. It
+[`expected.tsv`](expected.tsv), verifies that the ADR's monthly-cost table
+matches those reviewed results, and fails if a profile exceeds its ceiling. It
 does not contact AWS or read environment credentials.
 
 ## Files
