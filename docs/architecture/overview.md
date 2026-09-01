@@ -110,3 +110,8 @@ The numeric availability, scale, recovery, retention, and cost boundaries for
 the first operable alpha are defined in
 [ADR 0001](0001-alpha-operational-bounds.md). Later implementation decisions
 must either fit those bounds or replace them with a reviewed ADR.
+
+The alpha runtime, relational store, queue, migration tooling, replaceable
+ports, and repository boundaries are selected in
+[ADR 0002](0002-alpha-implementation-stack.md). Implementations must preserve
+its weak queue-delivery contract and atomic store boundary.
