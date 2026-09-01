@@ -1,4 +1,4 @@
 profile	ceiling_usd	description
 developer	0	Local-only functional environment with no managed cloud infrastructure
-small	750	Two-zone small production control plane
-target	2500	Three-zone alpha target-scale qualification control plane
+small	1000	Two-zone small production control plane
+target	2600	Three-zone alpha target-scale qualification control plane

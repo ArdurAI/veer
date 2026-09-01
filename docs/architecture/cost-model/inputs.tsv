@@ -1,82 +1,82 @@
 profile	item	category	quantity	unit	unit_rate_usd	source_id	note
 developer	local_cloud_resources	compute	0	resource-month	0	internal-local	Developer profile runs on the contributor machine
-small	eks_control_plane	compute	730	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support
-small	compute_nodes	compute	1460	instance-hour	0.1632	aws-ec2-m7g	Two on-demand m7g.xlarge nodes across two zones
+small	eks_control_plane	compute	744	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support for a thirty-one-day month
+small	compute_nodes	compute	1488	instance-hour	0.1632	aws-ec2-m7g	Two on-demand m7g.xlarge nodes across two zones for seven hundred forty-four hours
 small	compute_root_storage	compute	60	GB-month	0.08	aws-ec2-ebs	Thirty GiB gp3 root volume for each of two nodes
-small	database_compute	storage	730	instance-hour	0.129	aws-rds-postgresql	Multi-AZ db.t4g.medium price proxy
-small	database_cpu_credits	compute	100	vCPU-hour	0.075	aws-rds-postgresql	Hard monthly surplus-credit allowance fenced at ninety vCPU-hours
+small	database_compute	storage	744	instance-hour	0.129	aws-rds-postgresql	Multi-AZ db.t4g.medium price proxy for a thirty-one-day month
+small	database_cpu_credits	compute	2976	vCPU-hour	0.075	aws-rds-postgresql	Physical maximum for two copies times two vCPUs times seven hundred forty-four hours
 small	database_storage	storage	50	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
 small	primary_backup_storage	storage	108.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus thirty-five days of bounded changed blocks
 small	recovery_backup_storage	recovery	61.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus seven days of bounded changed blocks
 small	recovery_backup_transfer	recovery	50	GB	0.02	aws-cross-region-transfer	One full-dataset equivalent of monthly changed data
-small	queue_requests	queue	20	million-64-KiB-request-units	0.40	aws-sqs	Covers 10.35 million baseline send receive delete units plus retry and empty-poll headroom
-small	load_balancer	network	730	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer
-small	load_balancer_capacity	network	730	LCU-hour	0.008	aws-elb	Average one LCU
-small	nat_gateways	network	1460	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of two active zones
-small	nat_processing	network	100	GB	0.045	aws-ec2-nat	Rounded bound above 86.12 GB from 120 provider transfer units per minute
-small	public_ipv4	network	2920	address-hour	0.005	aws-vpc-ipv4	Two NAT and two load-balancer addresses
-small	internet_egress	network	200	GB	0.09	aws-data-transfer	Rounded bound above 135.11 GB client responses plus 21.53 GB provider requests
+small	queue_requests	queue	20	million-64-KiB-request-units	0.40	aws-sqs	Covers 10.506015 million baseline units plus fixed retry empty-poll and critical reserves
+small	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
+small	load_balancer_capacity	network	744	LCU-hour	0.008	aws-elb	One LCU bounded across new active byte and rule dimensions
+small	nat_gateways	network	1488	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of two active zones for seven hundred forty-four hours
+small	nat_processing	network	300	GB	0.045	aws-ec2-nat	Rounded above 87.77 provider plus 75 telemetry plus 80 queue plus 20 other service GB
+small	public_ipv4	network	2976	address-hour	0.005	aws-vpc-ipv4	Two NAT and two load-balancer addresses for seven hundred forty-four hours
+small	internet_egress	network	200	GB	0.09	aws-data-transfer	Rounded above 137.70 GB client responses plus 21.94 GB provider requests
 small	cross_az_transfer	network	200	directional-GB	0.01	aws-data-transfer	Hard cap: 40 queue body, 140 database and service, and 20 failover and retry
 small	log_ingestion	telemetry	50	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
 small	log_archive	telemetry	10	GB-month	0.03	aws-cloudwatch	Assumes 5 to 1 compression during online retention
 small	trace_ingestion	telemetry	10	GB	0.50	aws-cloudwatch	OTEL byte proxy enforcing the accepted monthly trace cap
 small	custom_metrics	telemetry	50	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
-small	external_synthetic_runs	monitoring	43800	canary-run	0.0012	aws-cloudwatch-recovery	One API canary run per minute from us-west-2 with no free allowance
-small	external_synthetic_lambda_requests	monitoring	43800	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per canary run with no free allowance
-small	external_synthetic_lambda_duration	monitoring	876000	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per canary run
-small	external_synthetic_log_ingestion	monitoring	6.57	GB	0.50	aws-cloudwatch-recovery	0.00015 GB per run with no free allowance
-small	external_synthetic_log_storage	monitoring	6.57	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded canary logs
+small	external_synthetic_runs	monitoring	44640	canary-run	0.0012	aws-cloudwatch-recovery	One API canary run per minute for a thirty-one-day month with no free allowance
+small	external_synthetic_lambda_requests	monitoring	44640	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per canary run with no free allowance
+small	external_synthetic_lambda_duration	monitoring	892800	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per canary run
+small	external_synthetic_log_ingestion	monitoring	6.696	GB	0.50	aws-cloudwatch-recovery	0.00015 GB per run with no free allowance
+small	external_synthetic_log_storage	monitoring	6.696	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded canary logs
 small	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
 small	external_synthetic_alarm	monitoring	1	alarm-month	0.10	aws-cloudwatch-recovery	One standard-resolution missing-or-failed-run alarm
-small	external_synthetic_artifact_storage	monitoring	43.8	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
-small	external_synthetic_artifact_requests	monitoring	43800	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
+small	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
+small	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
 small	object_archive	storage	200	GB-month	0.023	aws-s3	Plans audit exports and recovery evidence retained for 365 days
 small	recovery_object_archive	recovery	200	GB-month	0.023	aws-s3-recovery	Replicated archive and recovery objects in us-west-2
 small	recovery_object_transfer	recovery	200	GB	0.02	aws-cross-region-transfer	One full-archive equivalent of monthly changed data
-small	primary_archive_requests	storage	48000	API-request	0.000005	aws-s3	Half of three tier-one requests for each of thirty-two thousand archive objects
-small	recovery_archive_requests	recovery	48000	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of thirty-two thousand archive objects
+small	primary_archive_requests	storage	49500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of thirty-three thousand archive objects
+small	recovery_archive_requests	recovery	49500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of thirty-three thousand archive objects
 small	encryption_keys	security	3	key-month	1.00	aws-kms	Primary data audit and recovery-region keys
-small	archive_kms_requests	security	128000	API-request	0.000003	aws-kms	Four envelope and validation requests per archive object
+small	archive_kms_requests	security	132000	API-request	0.000003	aws-kms	Four envelope and validation requests per archive object
 small	managed_secrets	security	10	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
 small	secret_api_requests	security	45000	API-request	0.000005	aws-secrets-manager	Primary version-aware single-flight cache request ceiling
 small	recovery_managed_secrets	recovery	10	secret-month	0.40	aws-secrets-manager-recovery	Encrypted recovery-region replicas of unavoidable third-party credentials
 small	recovery_secret_api_requests	recovery	5000	API-request	0.000005	aws-secrets-manager-recovery	Recovery validation rotation and restore-time request ceiling
-target	eks_control_plane	compute	730	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support
-target	compute_nodes	compute	4380	instance-hour	0.1632	aws-ec2-m7g	Six on-demand m7g.xlarge nodes across three zones
+target	eks_control_plane	compute	744	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support for a thirty-one-day month
+target	compute_nodes	compute	4464	instance-hour	0.1632	aws-ec2-m7g	Six on-demand m7g.xlarge nodes across three zones for seven hundred forty-four hours
 target	compute_root_storage	compute	180	GB-month	0.08	aws-ec2-ebs	Thirty GiB gp3 root volume for each of six nodes
-target	database_compute	storage	730	instance-hour	0.478	aws-rds-postgresql	Multi-AZ db.r7g.large price proxy
+target	database_compute	storage	744	instance-hour	0.478	aws-rds-postgresql	Multi-AZ db.r7g.large price proxy for a thirty-one-day month
 target	database_storage	storage	500	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
 target	primary_backup_storage	storage	1083.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus thirty-five days of bounded changed blocks
 target	recovery_backup_storage	recovery	616.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus seven days of bounded changed blocks
 target	recovery_backup_transfer	recovery	500	GB	0.02	aws-cross-region-transfer	One full-dataset equivalent of monthly changed data
-target	queue_requests	queue	100	million-64-KiB-request-units	0.40	aws-sqs	Covers 51.74 million baseline send receive delete units plus retry and empty-poll headroom
-target	load_balancer	network	730	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer
-target	load_balancer_capacity	network	3650	LCU-hour	0.008	aws-elb	Average five LCU
-target	nat_gateways	network	2190	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of three active zones
-target	nat_processing	network	1000	GB	0.045	aws-ec2-nat	Rounded bound above 861.15 GB from 1200 provider transfer units per minute
-target	public_ipv4	network	4380	address-hour	0.005	aws-vpc-ipv4	Three NAT and three load-balancer addresses
-target	internet_egress	network	1000	GB	0.09	aws-data-transfer	Rounded bound above 675.56 GB client responses plus 215.29 GB provider requests
+target	queue_requests	queue	100	million-64-KiB-request-units	0.40	aws-sqs	Covers 52.690815 million baseline units plus fixed retry empty-poll and critical reserves
+target	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
+target	load_balancer_capacity	network	3720	LCU-hour	0.008	aws-elb	Five LCUs bounded across new active byte and rule dimensions
+target	nat_gateways	network	2232	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of three active zones for seven hundred forty-four hours
+target	nat_processing	network	2250	GB	0.045	aws-ec2-nat	Rounded above 877.66 provider plus 750 telemetry plus 400 queue plus 100 other service GB
+target	public_ipv4	network	4464	address-hour	0.005	aws-vpc-ipv4	Three NAT and three load-balancer addresses for seven hundred forty-four hours
+target	internet_egress	network	1000	GB	0.09	aws-data-transfer	Rounded above 688.52 GB client responses plus 219.42 GB provider requests
 target	cross_az_transfer	network	2000	directional-GB	0.01	aws-data-transfer	Hard cap: 200 queue body, 1600 database and service, and 200 failover and retry
 target	log_ingestion	telemetry	500	GB	0.50	aws-cloudwatch	Bounded uncompressed platform logs
 target	log_archive	telemetry	100	GB-month	0.03	aws-cloudwatch	Assumes 5 to 1 compression during online retention
 target	trace_ingestion	telemetry	100	GB	0.50	aws-cloudwatch	OTEL byte proxy enforcing the accepted monthly trace cap
 target	custom_metrics	telemetry	500	metric-month	0.30	aws-cloudwatch	Low-cardinality platform and SLO metrics
-target	external_synthetic_runs	monitoring	43800	canary-run	0.0012	aws-cloudwatch-recovery	One API canary run per minute from us-west-2 with no free allowance
-target	external_synthetic_lambda_requests	monitoring	43800	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per canary run with no free allowance
-target	external_synthetic_lambda_duration	monitoring	876000	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per canary run
-target	external_synthetic_log_ingestion	monitoring	6.57	GB	0.50	aws-cloudwatch-recovery	0.00015 GB per run with no free allowance
-target	external_synthetic_log_storage	monitoring	6.57	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded canary logs
+target	external_synthetic_runs	monitoring	44640	canary-run	0.0012	aws-cloudwatch-recovery	One API canary run per minute for a thirty-one-day month with no free allowance
+target	external_synthetic_lambda_requests	monitoring	44640	API-request	0.0000002	aws-lambda-recovery	One Lambda invocation per canary run with no free allowance
+target	external_synthetic_lambda_duration	monitoring	892800	GB-second	0.0000166667	aws-lambda-recovery	Twenty seconds at one GB per canary run
+target	external_synthetic_log_ingestion	monitoring	6.696	GB	0.50	aws-cloudwatch-recovery	0.00015 GB per run with no free allowance
+target	external_synthetic_log_storage	monitoring	6.696	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of bounded canary logs
 target	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
 target	external_synthetic_alarm	monitoring	1	alarm-month	0.10	aws-cloudwatch-recovery	One standard-resolution missing-or-failed-run alarm
-target	external_synthetic_artifact_storage	monitoring	43.8	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
-target	external_synthetic_artifact_requests	monitoring	43800	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
+target	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
+target	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One tier-one S3 artifact write per run
 target	object_archive	storage	1000	GB-month	0.023	aws-s3	Plans audit exports and recovery evidence
 target	recovery_object_archive	recovery	1000	GB-month	0.023	aws-s3-recovery	Replicated archive and recovery objects in us-west-2
 target	recovery_object_transfer	recovery	1000	GB	0.02	aws-cross-region-transfer	One full-archive equivalent of monthly changed data
-target	primary_archive_requests	storage	232500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of one hundred fifty-five thousand archive objects
-target	recovery_archive_requests	recovery	232500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of one hundred fifty-five thousand archive objects
+target	primary_archive_requests	storage	235500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of one hundred fifty-seven thousand archive objects
+target	recovery_archive_requests	recovery	235500	API-request	0.000005	aws-s3-recovery	Half of three tier-one requests for each of one hundred fifty-seven thousand archive objects
 target	encryption_keys	security	6	key-month	1.00	aws-kms	Separated primary recovery and rotation key set
-target	archive_kms_requests	security	620000	API-request	0.000003	aws-kms	Four envelope and validation requests per archive object
+target	archive_kms_requests	security	628000	API-request	0.000003	aws-kms	Four envelope and validation requests per archive object
 target	managed_secrets	security	100	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
 target	secret_api_requests	security	450000	API-request	0.000005	aws-secrets-manager	Primary version-aware single-flight cache request ceiling
 target	recovery_managed_secrets	recovery	100	secret-month	0.40	aws-secrets-manager-recovery	Encrypted recovery-region replicas of unavoidable third-party credentials

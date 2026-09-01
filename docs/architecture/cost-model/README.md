@@ -36,13 +36,13 @@ does not contact AWS or read environment credentials.
 
 | Input | Small production | Target-scale qualification |
 | --- | ---: | ---: |
-| Month length | 730 hours | 730 hours |
+| Hard billing month | 744 hours | 744 hours |
 | Active zones | 2 | 3 |
 | EKS clusters under standard support | 1 | 1 |
 | m7g.xlarge on-demand node count | 2 | 6 |
 | gp3 root storage per node | 30 GiB | 30 GiB |
 | Multi-AZ database proxy | db.t4g.medium | db.r7g.large |
-| Billable T4g surplus CPU credits | 100 vCPU-hours | 0 |
+| Billable T4g surplus CPU credits | 2,976 vCPU-hours | 0 |
 | Database gp3 storage | 50 GiB | 500 GiB |
 | Database changed blocks per 30 days | 50 GiB | 500 GiB |
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
@@ -50,27 +50,32 @@ does not contact AWS or read environment credentials.
 | Modeled 64 KiB queue request units with no free allowance | 20 million | 100 million |
 | Encoded queue message body hard limit | 2 KiB | 2 KiB |
 | Aggregate encoded queue body byte limit | 40 GB | 200 GB |
-| Average ALB capacity | 1 LCU | 5 LCU |
-| Derived provider traffic through NAT | 86.12 GB | 861.15 GB |
-| Billable NAT processed data | 100 GB | 1,000 GB |
-| Derived client plus provider-request egress | 156.64 GB | 890.85 GB |
+| New TLS connections/second | 20 | 100 |
+| Active TLS connections, one-minute sample | 2,500 | 12,000 |
+| ALB processed bytes/hour | 0.5 GB | 4 GB |
+| Billable rule evaluations/second | 500 | 4,000 |
+| Billable ALB capacity | 1 LCU | 5 LCU |
+| Derived provider traffic through NAT | 87.77 GB | 877.66 GB |
+| Telemetry/queue/other AWS-service NAT wire caps | 75/80/20 GB | 750/400/100 GB |
+| Billable NAT processed data | 300 GB | 2,250 GB |
+| Derived client plus provider-request egress | 159.64 GB | 907.93 GB |
 | Billable internet egress with no free allowance | 200 GB | 1,000 GB |
 | Billable directional cross-AZ transfer | 200 GB | 2,000 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
-| Stored archive ingress per 30-day month | 16 GB | 80 GB |
-| Archive objects written | 32,000 | 155,000 |
-| S3 tier-1 archive requests, primary plus recovery | 96,000 | 465,000 |
-| KMS archive requests, primary plus recovery | 128,000 | 620,000 |
+| Stored archive ingress per 31-day month | 16 GB | 80 GB |
+| Archive objects written | 33,000 | 157,000 |
+| S3 tier-1 archive requests, primary plus recovery | 99,000 | 471,000 |
+| KMS archive requests, primary plus recovery | 132,000 | 628,000 |
 | Encrypted primary archive/object storage | 200 GiB | 1,000 GiB |
 | Encrypted recovery archive/object storage | 200 GiB | 1,000 GiB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
 | Secrets Manager API requests, recovery region | 5,000 | 50,000 |
 | Recovery-region secret replicas | 10 | 100 |
-| Recovery-region Synthetics canary runs | 43,800 | 43,800 |
-| Canary Lambda duration | 876,000 GB-seconds | 876,000 GB-seconds |
-| Canary logs/artifacts retained 30 days | 6.57/43.8 GB | 6.57/43.8 GB |
+| Recovery-region Synthetics canary runs | 44,640 | 44,640 |
+| Canary Lambda duration | 892,800 GB-seconds | 892,800 GB-seconds |
+| Canary logs/artifacts retained 30 days | 6.696/44.64 GB | 6.696/44.64 GB |
 
 The database and queue rows are price proxies so issue #12 can compare
 alternatives on equal assumptions. They do not select the final implementation.
@@ -79,11 +84,18 @@ Multi-AZ gp3 rate. Recovery storage and transfer model one provisioned database
 copy plus one archive copy, each with one full-size equivalent of monthly
 changed data; incremental copies may cost less.
 
+The small CPU-credit quantity is the physical 31-day maximum for both
+db.t4g.medium Multi-AZ copies: `2 vCPU * 2 copies * 744 hours = 2,976`
+vCPU-hours. This deliberately overprices baseline credits so background and
+maintenance CPU cannot exceed the accepted ceiling.
+
 Queue units derive from the accepted 15% write-and-cancellation share of the
-monthly request schedule. One send, receive, and delete consumes 10.35 million
-units small and 51.74 million target; the rounded limits reserve the balance for
-retries, empty long polls, and recovery traffic. Encoded bodies are capped at 2
-KiB even though each request is conservatively priced as a 64 KiB billable unit.
+generated request schedule after reserving two synthetic calls per minute. One
+send, receive, and delete consumes 10,506,015 units small and 52,690,815 target.
+The remaining units are hard partitions for retries/redeliveries, empty polls,
+and critical work, enforced by the fail-closed meter in the ADR. Encoded bodies
+are capped at 2 KiB even though each request is conservatively priced as a 64
+KiB billable unit.
 A separate counter expands batches and caps all send, receive, redelivery, and
 recovery body occurrences at 40/200 GB. That queue budget, 140/1,600 GB for
 database and internal service traffic, and 20/200 GB for failover and retries
@@ -92,9 +104,17 @@ measurable admission limits rather than usage forecasts.
 
 Provider traffic units allow at most 4 KiB outbound and 12 KiB inbound across
 requests, responses, pagination, observations, and retries. The continuous
-120/1,200 unit-per-minute limits derive 21.53/215.29 GB internet egress and
-86.12/861.15 GB combined NAT processing per 730-hour month; the worksheet
-rounds those quantities up and does not subtract free allowances.
+120/1,200 unit-per-minute limits derive 21.94/219.42 GB internet egress and
+87.77/877.66 GB combined NAT processing per 744-hour month. Adding bounded
+telemetry, queue-service, and other AWS-service wire traffic produces
+262.77/2,127.66 GB; the worksheet rounds those quantities to 300/2,250 GB and
+does not subtract free allowances.
+
+ALB limits use the maximum of the four AWS LCU dimensions. Small remains below
+one LCU at 20 new and 2,500 active TLS connections, 0.5 GB/hour, and 500
+billable rule evaluations/second. Target caps each dimension at four LCUs and
+prices five. See the
+[AWS LCU definition](https://aws.amazon.com/elasticloadbalancing/faqs/).
 
 Backup storage conservatively applies no included allocation. At one
 dataset-equivalent of changed blocks per 30 days, primary storage is
@@ -103,20 +123,22 @@ up to two decimals. Cross-region transfer retains the one-dataset monthly change
 assumption.
 
 The archive quantities hold 365 days at the ADR's measured 16 GB and 80 GB
-monthly ingress caps. The 7/50 million event limits include one record per
-provider mutation attempt. Audit and compact non-audit record multiplicity
-derives the object/request quantities. Secret values use a version-aware,
-single-flight cache; the request rows are hard monthly budgets rather than an
-assumption that every provider operation reads Secrets Manager.
+31-day ingress caps. The 7/50 million event limits include one record per
+provider mutation attempt. Worst-case audit packing uses 500 records per object
+to reserve 192 KiB for framing, compression expansion, and encryption. Audit
+and compact non-audit record multiplicity derives the object/request quantities.
+Secret values use a version-aware, single-flight cache; the request rows are
+hard monthly budgets rather than an assumption that every provider operation
+reads Secrets Manager.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
 at no more than 1 KiB, and 1 KiB of header/TLS allowance for every request.
-Adding bounded outbound provider traffic yields 156.64/890.85 GB; the rounded
-worksheet quantities also contain the external synthetic's two calls per
-minute.
+The 23,436,000/117,180,000 total API envelopes already contain the external
+synthetic. Adding bounded outbound provider traffic yields 159.64/907.93 GB;
+the worksheet prices 200/1,000 GB.
 
-The one-minute recovery-region canary uses 43,800 runs in a 730-hour month. Its
+The one-minute recovery-region canary uses 44,640 runs in a 744-hour month. Its
 dependent Lambda, log, S3 artifact, three-metric, and one-alarm quantities use
 the bounded assumptions from the
 [AWS CloudWatch pricing example](https://aws.amazon.com/cloudwatch/pricing/).
