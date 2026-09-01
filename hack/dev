@@ -86,6 +86,10 @@ platform() {
 
 validate_manifest() {
   [ -f "$manifest_file" ] || fail "missing tool manifest: $manifest_file"
+  manifest_record_count=$(LC_ALL=C awk 'END { print NR + 0 }' "$manifest_file")
+  manifest_newline_count=$(wc -l <"$manifest_file" | awk '{ print $1 }')
+  [ "$manifest_record_count" -eq "$manifest_newline_count" ] ||
+    fail "$manifest_file must end with a newline"
 
   LC_ALL=C awk -F '\t' '
     BEGIN {
@@ -281,12 +285,17 @@ validate_tar_archive() {
   fi
 
   if ! LC_ALL=C awk '
-        /^\// || /(^|\/)[.][.](\/|$)/ {
-            print FILENAME ":" NR ": unsafe archive path" > "/dev/stderr"
+        $0 == "" || /^\// || /\/\// || /(^|\/)[.](\/|$)/ || \
+            /(^|\/)[.][.](\/|$)/ {
+            print FILENAME ":" NR ": non-canonical archive path" > "/dev/stderr"
             failed = 1
         }
-        seen[$0]++ {
-            print FILENAME ":" NR ": duplicate archive path" > "/dev/stderr"
+        {
+            canonical = $0
+            sub(/\/$/, "", canonical)
+        }
+        seen[canonical]++ {
+            print FILENAME ":" NR ": duplicate or aliased archive path" > "/dev/stderr"
             failed = 1
         }
         END { exit failed }
@@ -388,10 +397,11 @@ install_artifact() {
   esac
 }
 
-sanitize_cloud_environment() {
+sanitize_external_environment() {
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE \
     AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE GOOGLE_APPLICATION_CREDENTIALS \
-    AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID || true
+    AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID GZIP SHELLCHECK_OPTS \
+    TAR_OPTIONS || true
 }
 
 bootstrap() {
@@ -401,7 +411,7 @@ bootstrap() {
   validate_manifest
   verify_declared_versions
   platform
-  sanitize_cloud_environment
+  sanitize_external_environment
 
   umask 022
   if [ -L "$tools_dir" ]; then
@@ -539,6 +549,7 @@ prepare_go_telemetry() {
 }
 
 verify_versions() {
+  sanitize_external_environment
   prepare_go_telemetry
   verify_version go "go$(version_for_tool go)" "$bin_dir/go" version
   verify_version golangci-lint "$(version_for_tool golangci-lint)" "$bin_dir/golangci-lint" version
@@ -571,7 +582,7 @@ require_prepared() {
 
 prepare_offline_environment() {
   require_prepared
-  sanitize_cloud_environment
+  sanitize_external_environment
   PATH="$bin_dir:$PATH"
   GOROOT="$tools_dir/go"
   GOCACHE="$tools_dir/cache/go-build"
@@ -628,7 +639,7 @@ check_format() {
 }
 
 lint() {
-  shell_source_files | xargs -0 "$bin_dir/shellcheck" --
+  shell_source_files | xargs -0 "$bin_dir/shellcheck" --norc --
   "$bin_dir/golangci-lint" run --config "$repo_root/.golangci.yml" ./...
 }
 

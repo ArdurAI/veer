@@ -21,9 +21,10 @@ tool directories.
 `check` requires the prepared repository-local toolchain. It disables Go
 toolchain switching, inherited Go workspaces, per-user Go configuration, Go
 telemetry, module proxies, checksum-database calls, and version control
-downloads. It also removes common AWS, Google Cloud, and Azure credential
-variables from child processes. No check needs a cloud API, database, queue,
-cluster, container runtime, or private credential.
+downloads. It also removes inherited tar and ShellCheck defaults plus common
+AWS, Google Cloud, and Azure credential variables from child processes. No
+check needs a cloud API, database, queue, cluster, container runtime, or
+private credential.
 
 ## Supported hosts and prerequisites
 
@@ -87,9 +88,9 @@ variables or credentials.
   their digest.
 - Each manifest row is bound to the selected tool's exact upstream repository,
   release version, platform artifact name, archive format, and binary member.
-  Tar archives may contain only unique regular files and directories, at most
-  20,000 members, and at most 512 MiB of expanded file data. The compressed
-  download cap remains 100 MiB per artifact.
+  Tar archives may contain only canonical, uniquely addressed regular files
+  and directories, at most 20,000 members, and at most 512 MiB of expanded
+  file data. The compressed download cap remains 100 MiB per artifact.
 - On a macOS/arm64 clean run verified on 2026-09-01, the download cache was
   exactly 157,327,393 bytes and `.tools/` occupied approximately 769 MiB after
   one full check. Other platforms may differ. The whole directory is ignored
@@ -100,6 +101,9 @@ variables or credentials.
 - Fast gates use repository-local Go, golangci-lint, and XDG caches but run
   with `GOENV=off`, `GOWORK=off`, `GOPROXY=off`, `GOVCS=off`, and
   `GOTOOLCHAIN=local`.
+- Bootstrap clears `TAR_OPTIONS` and `GZIP`; lint clears `SHELLCHECK_OPTS` and
+  passes `--norc`. Archive behavior and ShellCheck policy therefore do not
+  inherit user or CI defaults.
 - The pinned Go process uses `.tools/cache/go-telemetry` with mode `off`, and
   every command verifies the reported mode and directory before invoking Go.
   This prevents collection and upload without changing the developer's global
@@ -146,7 +150,7 @@ failing step and command output.
 2. Update all four platform rows and their upstream SHA-256 digests in
    `tools/manifest.tsv` in one pull request. The URL, format, and member must
    continue to match the tool-specific platform contract enforced by
-   `./hack/dev bootstrap`.
+   `./hack/dev bootstrap`, and the file must retain its terminal newline.
 3. Synchronize every declaration of the changed version:
    - the pinned-tool table in this guide for every tool;
    - `.go-version` and the `go` directive in `go.mod` for Go;
