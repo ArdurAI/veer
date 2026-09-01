@@ -91,8 +91,8 @@ flowchart TB
 - The target profile schedules replicas across three failure zones and must
   tolerate loss of any one zone without manual traffic movement.
 - Relational state uses synchronous in-region Multi-AZ durability. A successful
-  write response is not sent until the desired state and required outbox/audit
-  record are committed atomically.
+  write response is not sent until the desired state, integrity anchor, and
+  required outbox/audit records are committed atomically.
 - The durable queue spans failure zones, provides at-least-once delivery, and
   cannot be the source of record. Workers must be idempotent and fenced.
 - Nodes, database endpoints, and queue endpoints are private. Public IPv4 is
@@ -157,7 +157,9 @@ an explicit quota response; they must not cause silent data loss.
 | Archive S3 tier-1 requests/month, both regions | 6,000 | 99,000 | 471,000 |
 | Archive KMS requests/month, both regions | 8,000 | 132,000 | 628,000 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
-| Database changed blocks/month, GiB | 5 | 50 | 500 |
+| Database changed blocks/rolling 7 days, GiB | 1.17 | 11.67 | 116.67 |
+| Database changed blocks/rolling 30 days, GiB | 5 | 50 | 500 |
+| Database changed blocks/rolling 35 days, GiB | 5.84 | 58.34 | 583.34 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
 | Accepted trace data/month, GiB | 1 | 10 | 100 |
 | Secrets Manager API requests/month, primary region | 0 | 45,000 | 450,000 |
@@ -262,24 +264,31 @@ target result cannot substitute for the small profile:
 
 1. Load the selected profile's full object counts, including its Policy and
    ProviderConnection counts. Seed age-distributed operations, plans, policy
-   decisions, audit records, tombstones, idempotency rows, and indexes across
-   their full online-retention windows until relational occupancy is 40 GiB
-   small or 400 GiB target (80% of provisioned storage). Seed both the primary
-   and recovery archives to 166.4 GB for small or 832 GB for target. The timed
-   run must remain below 90% relational occupancy, leaving 10% for maintenance
-   and recovery work.
+   decisions, audit records, integrity-anchor rows, tombstones, idempotency
+   rows, and indexes across their full online-retention windows until relational
+   occupancy is 40 GiB small or 400 GiB target (80% of provisioned storage).
+   Seed both the primary and recovery archives to 166.4 GB for small or 832 GB
+   for target. The timed run must remain below 90% relational occupancy, leaving
+   10% for maintenance and recovery work.
 2. Run that profile for 24 hours. In each hour, a 15-minute peak replaces steady
    traffic; the generator yields two calls per minute to the external synthetic.
    The resulting required audit counts are 215,867 small and 1,507,547 target,
    before separately labeled injected-fault events. Every raw provider mutation
    attempt contributes its required per-attempt audit record.
-3. Force queue retries and redeliveries, then hold an empty queue under long
-   polling. Drive each queue-unit partition through 80%, 90%, and 100% with a
-   deterministic fake and verify alert, poll backoff, fail-closed admission,
-   critical-reserve isolation, accepted-work drain, and hard-cap failure.
-4. Inject one process failure, one worker lease expiry, one queue redelivery,
-   and one database failover. Run an isolated Availability Zone loss window for
-   every active zone, resetting and re-seeding between windows.
+3. In an isolated accounting environment, force queue retries and redeliveries,
+   then hold an empty queue under long polling. Drive each queue-unit partition
+   through 80%, 90%, and 100% with a deterministic fake and verify alert, poll
+   backoff, fail-closed admission, critical-reserve isolation, accepted-work
+   drain, and hard-cap failure. Reset the durable meter and re-seed from the
+   standard preload between exhausted partitions and before continuing.
+4. Use isolated, reset windows for each infrastructure failure. Process loss
+   must be detected within two minutes and recover within five. Worker-lease
+   expiry and queue redelivery must reacquire fenced ownership within two
+   minutes without a duplicate provider resource. Compute-node loss must be
+   detected within two minutes and reschedule with fenced ownership within 10.
+   Database failover and loss of every active Availability Zone must be detected
+   within two minutes and recover within 15. Every window must pass the zero-RPO
+   acknowledgement oracle before re-seeding.
 5. Deploy a signed bad-release fixture that writes an added optional persisted
    field and then fails the external synthetic after activation. From rollout
    onset, verify detection within five minutes, rollback within 30 minutes, and
@@ -294,19 +303,26 @@ target result cannot substitute for the small profile:
    plane unavailable at a recorded onset. Verify two failed external probes and
    paging within four minutes; deploy the exact control-plane release from
    immutable configuration in `us-west-2`; restore and integrity-check the
-   newest common database, outbox, audit-manifest, and object checkpoint;
-   revalidate replicated secret versions and policies; issue new short-lived
-   workload authority; switch the endpoint; and pass both the synthetic and
-   acknowledged-record completeness oracle. End-to-end recovery must finish
-   within four hours and the recovered cutoff must be no older than 30 minutes.
+   newest common database, integrity-anchor, outbox, audit-manifest, and object
+   checkpoint; revalidate replicated secret versions and policies; issue new
+   short-lived workload authority; switch the endpoint; and pass both the
+   synthetic and acknowledged-record completeness oracle. End-to-end recovery
+   must finish within four hours and the recovered cutoff must be no older than
+   30 minutes.
 8. In an isolated accounting test, drive each cross-AZ byte partition through
    its 80%, 90%, and 100% thresholds and verify alert, admission-control, and
    qualification-failure behavior without sending equivalent billable traffic.
-9. Run three load-balancer windows: normal keep-alive reuse; connection churn at
+9. In a separate backup-accounting test, include user writes, indexes, engine
+   logs, maintenance, and migration amplification. Place permitted bursts on
+   both sides of a former calendar boundary, drive each rolling 7-, 30-, and
+   35-day changed-block envelope through 80%, 90%, and 100%, and verify alert,
+   admission fencing, maintenance deferral, exact reserve accounting, and hard-
+   cap failure. Reset and re-seed after the test.
+10. Run three load-balancer windows: normal keep-alive reuse; connection churn at
    20/100 new TLS connections per second; and an idle-connection soak at
    2,500/12,000 active connections. Verify processed bytes, billable rule
    evaluations, and every hourly LCU dimension remain inside 1/5 LCUs.
-10. Report every SLI and bounded capacity/cost dimension for the entire run and
+11. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
 
@@ -380,8 +396,8 @@ environments have measurement coverage but no SLO.
 | --- | --- | --- |
 | API availability | 99.9% per calendar month | A one-minute recovery-region synthetic performs authenticated read and idempotent no-op write transactions. Missing results, server errors, timeouts, and planned maintenance count as unavailable. |
 | API read latency | p95 <= 300 ms; p99 <= 750 ms | Server-side duration from accepted request to complete response under the profile's steady load, excluding client network time. |
-| API write acceptance latency | p95 <= 500 ms; p99 <= 1 s | Server-side duration through durable desired-state, outbox, and required audit commit. Provider execution is asynchronous and excluded. |
-| Invalid or unauthenticated rejection latency | p99 <= 250 ms | Server receipt of a complete, size-bounded request through the final documented response; no durable write is permitted. |
+| API write acceptance latency | p95 <= 500 ms; p99 <= 1 s | Server-side duration through durable desired-state, integrity-anchor, outbox, and required audit commit. Provider execution is asynchronous and excluded. |
+| Invalid or unauthenticated rejection latency | p99 <= 250 ms | Server receipt of a complete, size-bounded request through the final documented response. Invalid input makes no durable write. An unauthenticated rejection may commit only its required append-only security-audit event, which is included in this duration; no request or business state is written. |
 | Unauthorized or quota rejection latency | p99 <= 500 ms | Server receipt of a complete, authenticated request through the final documented response, including policy and quota evaluation. |
 | Client-cancellation cleanup | p99 <= 100 ms | Time from server observation of request-context cancellation to handler termination, with no partial uncommitted state retained. |
 | Planning start delay | 99% <= 30 s; 99.9% <= 2 min | Time from successful write commit to a worker acquiring the current generation. |
@@ -418,6 +434,7 @@ error budget:
 - retry or redelivery never creates a second externally visible resource;
 - authorization and workspace isolation are applied both when work is accepted
   and when it executes;
+- the current-state integrity anchor is updated atomically with accepted state;
 - required security audit events are committed atomically with the state change;
 - secrets and provider credentials never appear in resources, plans, logs,
   traces, metrics, or cost reports.
@@ -467,10 +484,10 @@ detection bound or the end-to-end RTO fails the objective.
 The logical-corruption objective covers these alpha classes, each checked at
 least every 15 minutes: a workspace-scoped desired-state row updated or deleted
 outside the accepted API transaction, without a matching generation and digest
-in the independently append-only required security-audit stream protected by a
-separate write-only role; missing, duplicate, or out-of-order generation and
-outbox rows (foreign-key, uniqueness, monotonic-generation, and state/outbox
-checksum checks); cross-workspace references (workspace-closure and ownership checks);
+in the independently write-protected current-state integrity anchor; missing,
+duplicate, or out-of-order generation and outbox rows (foreign-key, uniqueness,
+monotonic-generation, and state/outbox checksum checks); cross-workspace
+references (workspace-closure and ownership checks);
 missing or modified required audit records (hash-chain and archive-manifest
 checks); partially applied or mismatched schema migration (migration journal,
 schema version, and checksum); and accidental required table or index removal
@@ -481,18 +498,26 @@ restore point. Other logical defects are detected best-effort and do not inherit
 the two-hour/five-minute alpha claim until a replacement ADR adds a concrete
 oracle and drill.
 
-The accepted-command generation and digest are fields of the required audit
-event already emitted for each successful mutation, not a second ledger record.
-They inherit the security-audit stream's 90-day online and 365-day archive
-retention, 1,000-byte measured average, qualification preload, and object-count
-budget below.
+Every current or tombstoned resource has exactly one integrity-anchor row keyed
+by workspace, resource type, and stable identifier. It stores the latest
+accepted generation, digest, and commit identity in at most 256 bytes before
+indexes. A narrowly scoped definer routine updates it atomically with desired
+state, outbox, and required audit event; the ordinary state-writer role cannot
+modify it directly. The anchor remains for the resource lifetime and 90-day
+tombstone, so corruption checks do not depend on audit-history retention. The
+required audit event also carries the generation and digest for historical
+evidence and retains its 90-day online/365-day archive bounds. This is one
+bounded current projection per resource, not a second unbounded command ledger;
+full-count anchor rows and indexes are included in qualification preload and the
+40/400 GiB relational occupancy budgets.
 
 Recovery freshness compares a primary commit watermark with the newest common
-checkpoint whose database backup, outbox, audit manifest, and required objects
-have all passed integrity verification in `us-west-2`. At 20 minutes an alert
-warns operators; at 25 minutes it pages as critical. Reaching 30 minutes fails
-qualification, suspends the production regional-RPO claim, and blocks planned
-cutover. An emergency restore may still proceed but records an RPO breach.
+checkpoint whose database backup, integrity anchors, outbox, audit manifest,
+and required objects have all passed integrity verification in `us-west-2`. At
+20 minutes an alert warns operators; at 25 minutes it pages as critical.
+Reaching 30 minutes fails qualification, suspends the production regional-RPO
+claim, and blocks planned cutover. An emergency restore may still proceed but
+records an RPO breach.
 
 For an RPO greater than zero, define the recovery cutoff as
 `failure onset - stated RPO`. For RPO zero, the expected set instead includes
@@ -502,10 +527,10 @@ path cannot preserve that set, Veer must fence write admission before sending
 another acknowledgement.
 
 The qualification harness keeps an ordered, hashed ledger of acknowledged
-state, outbox, and required audit records. Every ledger entry in the expected
-set must exist after restore with matching content and referential-integrity
-checks. A recent recovered record cannot hide an older omission, and any
-missing or mismatched entry fails the recovery objective. Issue
+state, integrity anchors, outbox, and required audit records. Every ledger entry
+in the expected set must exist after restore with matching content and
+referential-integrity checks. A recent recovered record cannot hide an older
+omission, and any missing or mismatched entry fails the recovery objective. Issue
 [#64](https://github.com/ArdurAI/veer/issues/64) must exercise these objectives.
 Until those exercises pass, they are design targets rather than demonstrated
 service claims.
@@ -515,6 +540,7 @@ service claims.
 | Data | Online retention | Recovery/archive retention | Notes |
 | --- | --- | --- | --- |
 | Current desired and observed state | Resource lifetime | 90-day tombstone after deletion | Stable identifiers remain reserved through tombstone expiry. |
+| Current-state integrity anchors | Resource lifetime | 90-day tombstone after deletion | One independently write-protected latest-generation proof per resource. |
 | Operations, plans, and policy decisions | 90 days | 365 days in encrypted object storage | Secret-bearing inputs are prohibited. |
 | Security audit events | 90 days queryable | 365 days immutable and encrypted | Shorter retention requires a reviewed security decision. |
 | Idempotency records | 24 hours minimum | None | A caller cannot rely on replay safety after expiry. |
@@ -523,10 +549,23 @@ service claims.
 | Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
 | High-resolution metrics | 15 days | 13 months for SLO rollups | Workspace, resource ID, request ID, and provider object ID are forbidden metric labels. |
 
-Database changed blocks and logs are bounded to one provisioned-dataset
-equivalent per 30 days. Conservatively applying no included backup allocation,
-the primary copy plus 35 days of changes requires 108.34 GB-month small and
-1,083.34 GB-month target. The recovery copy plus seven days of changes requires
+Database changed bytes include user data, indexes, engine logs, compaction or
+vacuum, maintenance, and schema-migration amplification. A durable meter uses
+service-reported physical bytes and a conservative pre-acknowledgement reserve
+for the selected stack's maximum single-transaction amplification. It enforces
+11.67/116.67 GiB in every rolling seven days, 50/500 GiB in every rolling 30
+days, and 58.34/583.34 GiB in every rolling 35 days. The developer equivalents
+are 1.17, 5, and 5.84 GiB. Missing or stale measurements fail closed for writes.
+At 80% Veer alerts; at 90% it rejects non-reserved mutations and defers optional
+maintenance. The final 10% is reserved explicitly for rollback, integrity
+repair, deletion, and security work. Reaching any cap fences all new writes and
+fails qualification. Background work must reserve its worst-case bytes before
+starting; a stack that cannot expose and enforce these bounds cannot qualify.
+
+The rolling bounds prevent calendar-boundary bursts from exceeding retained
+backup storage. Conservatively applying no included backup allocation, the
+primary copy plus its 35-day changed-block cap requires 108.34 GB-month small and
+1,083.34 GB-month target. The recovery copy plus its seven-day cap requires
 61.67 GB-month and 616.67 GB-month. The worksheet prices all four quantities;
 actual managed-service incremental backups may consume less.
 
@@ -653,8 +692,9 @@ the exercise continues.
 - Recovery-region secret replicas, archive tier-1 requests, and KMS envelope
   operations are priced without free request allowances. Replication lag,
   version mismatch, request volume, and restore-time access are alarmed.
-- Backup storage includes the current copy and bounded changed blocks for both
-  the 35-day primary and seven-day recovery retention windows.
+- Backup storage includes the current copy and rolling 7/30/35-day changed-byte
+  envelopes for recovery retention, transfer, and primary retention. The meter
+  includes engine and maintenance amplification, not only accepted payloads.
 - High-cardinality identifiers are logs or traces, never metric dimensions.
 - Nodes stay private. S3 gateway endpoints avoid NAT processing for backup and
   artifact traffic. Provider, telemetry, queue, and other AWS-service wire

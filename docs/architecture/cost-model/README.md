@@ -44,7 +44,9 @@ does not contact AWS or read environment credentials.
 | Multi-AZ database proxy | db.t4g.medium | db.r7g.large |
 | Billable T4g surplus CPU credits | 2,976 vCPU-hours | 0 |
 | Database gp3 storage | 50 GiB | 500 GiB |
-| Database changed blocks per 30 days | 50 GiB | 500 GiB |
+| Database changed blocks per rolling 7 days | 11.67 GiB | 116.67 GiB |
+| Database changed blocks per rolling 30 days | 50 GiB | 500 GiB |
+| Database changed blocks per rolling 35 days | 58.34 GiB | 583.34 GiB |
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
 | Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
 | Modeled 64 KiB queue request units with no free allowance | 20 million | 100 million |
@@ -81,7 +83,9 @@ The database and queue rows are price proxies so issue #12 can compare
 alternatives on equal assumptions. They do not select the final implementation.
 RDS Multi-AZ rates include the standby instance. Database storage uses the
 Multi-AZ gp3 rate. Database recovery storage and transfer model one provisioned
-copy plus one full-dataset equivalent of monthly changed data. Archive rows
+copy plus one full-dataset equivalent of rolling 30-day changed data. Relational
+occupancy includes one bounded current-state integrity anchor per resource and
+its index. Archive rows
 retain 13 ingress envelopes in each region and price one full retained-archive
 reseed; incremental replication may cost less.
 
@@ -117,11 +121,12 @@ billable rule evaluations/second. Target caps each dimension at four LCUs and
 prices five. See the
 [AWS LCU definition](https://aws.amazon.com/elasticloadbalancing/faqs/).
 
-Backup storage conservatively applies no included allocation. At one
-dataset-equivalent of changed blocks per 30 days, primary storage is
-`dataset * (1 + 35/30)` and recovery storage is `dataset * (1 + 7/30)`, rounded
-up to two decimals. Cross-region transfer retains the one-dataset monthly change
-assumption.
+Backup storage conservatively applies no included allocation. A durable byte
+meter caps every rolling 7/30/35-day interval at 7/30, 1, and 35/30 dataset
+equivalents, including database maintenance and write amplification. Primary
+storage is therefore `dataset * (1 + 35/30)` and recovery storage is
+`dataset * (1 + 7/30)`, rounded up to two decimals, without a calendar-boundary
+smoothing assumption. Cross-region transfer prices the rolling 30-day cap.
 
 The archive quantities price 13 complete 31-day ingress envelopes, or 208/1,040
 GB in each region, because a 365-day retention interval can intersect 13 windows

@@ -6,9 +6,9 @@ small	compute_root_storage	compute	60	GB-month	0.08	aws-ec2-ebs	Thirty GiB gp3 r
 small	database_compute	storage	744	instance-hour	0.129	aws-rds-postgresql	Multi-AZ db.t4g.medium price proxy for a thirty-one-day month
 small	database_cpu_credits	compute	2976	vCPU-hour	0.075	aws-rds-postgresql	Physical maximum for two copies times two vCPUs times seven hundred forty-four hours
 small	database_storage	storage	50	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
-small	primary_backup_storage	storage	108.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus thirty-five days of bounded changed blocks
-small	recovery_backup_storage	recovery	61.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus seven days of bounded changed blocks
-small	recovery_backup_transfer	recovery	50	GB	0.02	aws-cross-region-transfer	One full-dataset equivalent of monthly changed data
+small	primary_backup_storage	storage	108.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus the hard rolling thirty-five-day changed-block cap
+small	recovery_backup_storage	recovery	61.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus the hard rolling seven-day changed-block cap
+small	recovery_backup_transfer	recovery	50	GB	0.02	aws-cross-region-transfer	Hard rolling thirty-day changed-block cap
 small	queue_requests	queue	20	million-64-KiB-request-units	0.40	aws-sqs	Covers 10.506015 million baseline units plus fixed retry empty-poll and critical reserves
 small	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
 small	load_balancer_capacity	network	744	LCU-hour	0.008	aws-elb	One LCU bounded across new active byte and rule dimensions
@@ -46,9 +46,9 @@ target	compute_nodes	compute	4464	instance-hour	0.1632	aws-ec2-m7g	Six on-demand
 target	compute_root_storage	compute	180	GB-month	0.08	aws-ec2-ebs	Thirty GiB gp3 root volume for each of six nodes
 target	database_compute	storage	744	instance-hour	0.478	aws-rds-postgresql	Multi-AZ db.r7g.large price proxy for a thirty-one-day month
 target	database_storage	storage	500	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 provisioned storage
-target	primary_backup_storage	storage	1083.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus thirty-five days of bounded changed blocks
-target	recovery_backup_storage	recovery	616.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus seven days of bounded changed blocks
-target	recovery_backup_transfer	recovery	500	GB	0.02	aws-cross-region-transfer	One full-dataset equivalent of monthly changed data
+target	primary_backup_storage	storage	1083.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus the hard rolling thirty-five-day changed-block cap
+target	recovery_backup_storage	recovery	616.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus the hard rolling seven-day changed-block cap
+target	recovery_backup_transfer	recovery	500	GB	0.02	aws-cross-region-transfer	Hard rolling thirty-day changed-block cap
 target	queue_requests	queue	100	million-64-KiB-request-units	0.40	aws-sqs	Covers 52.690815 million baseline units plus fixed retry empty-poll and critical reserves
 target	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
 target	load_balancer_capacity	network	3720	LCU-hour	0.008	aws-elb	Five LCUs bounded across new active byte and rule dimensions
