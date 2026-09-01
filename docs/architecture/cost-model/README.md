@@ -51,8 +51,10 @@ does not contact AWS or read environment credentials.
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
+| Stored archive ingress per 30-day month | 8 GB | 80 GB |
 | Encrypted primary archive/object storage | 100 GiB | 1,000 GiB |
 | Encrypted recovery archive/object storage | 100 GiB | 1,000 GiB |
+| Secrets Manager API requests | 50,000 | 500,000 |
 
 The database and queue rows are price proxies so issue #12 can compare
 alternatives on equal assumptions. They do not select the final implementation.
@@ -60,6 +62,11 @@ RDS Multi-AZ rates include the standby instance. Database storage uses the
 Multi-AZ gp3 rate. Recovery storage and transfer model one provisioned database
 copy plus one archive copy, each with one full-size equivalent of monthly
 changed data; incremental copies may cost less.
+
+The archive quantities hold 365 days at the ADR's measured 8 GB and 80 GB
+monthly ingress caps. Secret values use a version-aware, single-flight cache;
+the request rows are hard monthly budgets rather than an assumption that every
+provider operation reads Secrets Manager.
 
 ## Immutable rate evidence
 
@@ -82,7 +89,7 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month |
 | Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month |
 | Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month |
-| Managed secrets | [AWSSecretsManager 20260831092330](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-east-1/index.json) | `BJ3PQ9BYGU6P632F` at USD 0.40/secret-month |
+| Managed secrets | [AWSSecretsManager 20260831092330](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-east-1/index.json) | `BJ3PQ9BYGU6P632F` at USD 0.40/secret-month; API request SKU `4MDZ5VNEJPMUTG9B` at USD 0.000005/request (USD 0.05/10,000) |
 
 ## Updating the model
 

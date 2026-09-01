@@ -114,12 +114,16 @@ an explicit quota response; they must not cause silent data loss.
 | Components | 100 | 5,000 | 50,000 |
 | API requests/second, steady | 1 | 5 | 25 |
 | API requests/second, 15-minute peak | 2 | 20 | 100 |
+| Accepted desired-state mutations/minute, steady | 6 | 30 | 150 |
+| Accepted desired-state mutations/minute, 15-minute peak | 12 | 120 | 600 |
 | Concurrent non-terminal operations | 10 | 100 | 1,000 |
 | Provider mutations/minute, aggregate | 10 | 60 | 600 |
 | Audit events/month | 100,000 | 2,000,000 | 20,000,000 |
+| Archived audit and evidence bytes/30-day month, GB | 0.4 | 8 | 80 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
 | Accepted trace data/month, GiB | 1 | 10 | 100 |
+| Secrets Manager API requests/month | 0 | 50,000 | 500,000 |
 
 The developer profile is a single-machine functional environment. It has no
 availability commitment and must not be used to claim HA or disaster-recovery
@@ -137,6 +141,17 @@ deterministic test mode, followed by bounded live-provider smoke tests:
 4. Inject one process failure, one worker lease expiry, one queue redelivery,
    one database failover, and one simulated Availability Zone loss.
 5. Report every SLI below for the entire run and for each failure window.
+
+The request generator uses a checked-in seed and a fixed mix at both steady and
+peak rates: 80% reads (50% point resource reads, 20% operation/status reads,
+and 10% paginated list reads), 10% successful desired-state mutations, 5%
+idempotent replays of a prior successful mutation, and 5% stale-version
+conflicts. Successful mutations are 20% creates, 60% updates, and 20% deletes,
+selected across Workspace, Environment, Application, Component, Policy, and
+ProviderConnection resources at 5%, 15%, 20%, 40%, 15%, and 5% respectively.
+The steady mix therefore produces the stated 30 and 150 accepted mutations per
+minute for the small and target profiles; conflict and replay traffic cannot be
+reclassified as cheap reads.
 
 Payloads use a 16 KiB median and 256 KiB p99 serialized resource size. Requests
 over the API limit selected later must fail before persistence with a stable
@@ -196,20 +211,27 @@ error budget:
 
 ## Recovery objectives
 
-| Failure | RTO | RPO | Required mechanism and evidence |
-| --- | ---: | ---: | --- |
-| API or worker process loss | 5 min | 0 | Replica replacement, readiness gating, durable state, and expired-lease takeover |
-| Compute node loss | 10 min | 0 | Rescheduling onto another node and zone, with no duplicate provider resource |
-| Single Availability Zone loss | 15 min | 0 for acknowledged state | Multi-AZ database and queue failover plus endpoint health routing |
-| Bad application release | 30 min | 0 for committed data | Version rollback with backward-compatible persisted formats |
-| Logical database corruption or operator error | 2 hr | 5 min | In-region point-in-time restore into an isolated validation target before cutover |
-| Primary-region loss | 4 hr | 30 min | Restore encrypted cross-region automated backups, deploy control-plane compute, rotate/revalidate authority, and switch endpoint |
+| Failure | RTO | RPO | Maximum detection time inside RTO | Required mechanism and evidence |
+| --- | ---: | ---: | ---: | --- |
+| API or worker process loss | 5 min | 0 | 1 min | Replica replacement, readiness gating, durable state, and expired-lease takeover |
+| Compute node loss | 10 min | 0 | 2 min | Rescheduling onto another node and zone, with no duplicate provider resource |
+| Single Availability Zone loss | 15 min | 0 for acknowledged state | 2 min | Multi-AZ database and queue failover plus endpoint health routing |
+| Bad application release | 30 min | 0 for committed data | 5 min | Version rollback with backward-compatible persisted formats |
+| Logical database corruption or operator error | 2 hr | 5 min | 15 min | Relationship and audit-integrity checks plus in-region point-in-time restore into an isolated validation target before cutover |
+| Primary-region loss | 4 hr | 30 min | 2 min | Independent regional probes, encrypted cross-region restore, control-plane deployment, authority revalidation, and endpoint switch |
 
-RTO starts when the failure is detected by the control plane's alerting path.
-RPO is measured against the latest acknowledged write present after recovery.
-Issue [#64](https://github.com/ArdurAI/veer/issues/64) must exercise these
-objectives. Until those exercises pass, they are design targets rather than
-demonstrated service claims.
+RTO starts at failure onset, not incident declaration. Fault-injection evidence
+uses the injection timestamp; production evidence uses the earliest applicable
+provider event, deployment event, failed 30-second external probe, or failed
+internal integrity signal. Detection and declaration consume the same RTO.
+Two consecutive external failures and platform health signals must open an
+incident within the table's detection bound; supported logical-corruption
+classes are checked at least every 15 minutes. Missing the detection bound or
+the end-to-end RTO fails the objective. RPO is measured against the latest
+acknowledged write present after recovery. Issue
+[#64](https://github.com/ArdurAI/veer/issues/64) must exercise these objectives.
+Until those exercises pass, they are design targets rather than demonstrated
+service claims.
 
 ## Retention and storage assumptions
 
@@ -223,6 +245,17 @@ demonstrated service claims.
 | Platform logs | 14 days small; 30 days target | None by default | Security events belong in the audit stream, not ordinary logs. |
 | Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
 | High-resolution metrics | 15 days | 13 months for SLO rollups | Workspace, resource ID, request ID, and provider object ID are forbidden metric labels. |
+
+Canonical audit events are at most 16 KiB before archive compression and must
+average no more than 3,000 bytes at the full event count. That allocates at most
+6 GB/month small and 60 GB/month target to audit records, leaving 2 GB and 20 GB
+inside the combined 8 GB and 80 GB archive-ingress caps for operations, plans,
+policy decisions, and recovery evidence. The archive writer measures actual
+stored object bytes, including framing and encryption overhead. Over 365 days,
+the combined cap consumes at most 97.34 GB small and 973.34 GB target, fitting
+the worksheet's 100 GB and 1,000 GB primary and recovery copies. Audit records
+are never sampled or dropped: exceeding the bound rejects or backpressures new
+work and surfaces a capacity condition.
 
 Issue [#14](https://github.com/ArdurAI/veer/issues/14) owns data classification
 and handling rules. It may reduce retention where privacy or secret exposure
@@ -238,8 +271,8 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 610.96 | USD 750.00 | USD 139.04 |
-| Target-scale qualification | USD 2,193.73 | USD 2,500.00 | USD 306.27 |
+| Small production | USD 611.21 | USD 750.00 | USD 138.79 |
+| Target-scale qualification | USD 2,196.23 | USD 2,500.00 | USD 303.77 |
 
 These figures cover the Veer control plane only. They exclude taxes, support,
 discount programs, CI minutes, developer workstations, domain registration,
@@ -268,6 +301,10 @@ the exercise continues.
   upper bounds.
 - Trace admission enforces the 10 GiB/month small and 100 GiB/month target
   ceilings. Dropped spans and projected month-end volume are observable.
+- Secret values are fetched through a single-flight, version-aware in-memory
+  cache and never once per provider operation. Cache invalidation follows
+  rotation events and expiry; requests are capped at 50,000/month small and
+  500,000/month target, with cache hits, misses, and projected usage observable.
 - High-cardinality identifiers are logs or traces, never metric dimensions.
 - Nodes stay private. S3 gateway endpoints avoid NAT processing for backup and
   artifact traffic; interface endpoints require a before/after cost comparison.

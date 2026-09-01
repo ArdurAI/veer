@@ -24,6 +24,7 @@ small	recovery_object_archive	recovery	100	GB-month	0.023	aws-s3-recovery	Replic
 small	recovery_object_transfer	recovery	100	GB	0.02	aws-cross-region-transfer	One full-archive equivalent of monthly changed data
 small	encryption_keys	security	3	key-month	1.00	aws-kms	Primary data audit and recovery-region keys
 small	managed_secrets	security	10	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
+small	secret_api_requests	security	50000	API-request	0.000005	aws-secrets-manager	Version-aware single-flight cache request ceiling
 target	eks_control_plane	compute	730	cluster-hour	0.10	aws-eks	One cluster under standard Kubernetes version support
 target	compute_nodes	compute	4380	instance-hour	0.1632	aws-ec2-m7g	Six on-demand m7g.xlarge nodes across three zones
 target	compute_root_storage	compute	180	GB-month	0.08	aws-ec2-ebs	Thirty GiB gp3 root volume for each of six nodes
@@ -48,3 +49,4 @@ target	recovery_object_archive	recovery	1000	GB-month	0.023	aws-s3-recovery	Repl
 target	recovery_object_transfer	recovery	1000	GB	0.02	aws-cross-region-transfer	One full-archive equivalent of monthly changed data
 target	encryption_keys	security	6	key-month	1.00	aws-kms	Separated primary recovery and rotation key set
 target	managed_secrets	security	100	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
+target	secret_api_requests	security	500000	API-request	0.000005	aws-secrets-manager	Version-aware single-flight cache request ceiling
