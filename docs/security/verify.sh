@@ -570,6 +570,11 @@ FNR == NR {
     }
     if (section == "## Attack surface, mitigations, and attacker stories" &&
         $0 ~ /^\| Priority \| Scenario and capability gain \|/) {
+        expected_header = "| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Evidence |"
+        if ($0 != expected_header) {
+            error("unexpected canonical threats table header")
+            next
+        }
         table = "threats"
         table_columns = 7
         table_delimiter_seen = 0
@@ -729,19 +734,35 @@ NF != 14 {
     if (($1 in model_threat) && $3 != model_risk[$1]) {
         error("ledger risk does not match readable priority for " $1)
     }
+    if (trim($4) == "") {
+        error("threat requires at least one asset")
+    }
     asset_count = split($4, asset_refs, "|")
     for (asset_index = 1; asset_index <= asset_count; asset_index++) {
-        if (!(asset_refs[asset_index] in assets)) {
-            error("undeclared asset " asset_refs[asset_index])
+        asset_id = asset_refs[asset_index]
+        asset_key = $1 SUBSEP asset_id
+        if (!(asset_id in assets)) {
+            error("undeclared asset " asset_id)
         }
-        used_assets[asset_refs[asset_index]] = 1
+        if (ledger_asset[asset_key]++) {
+            error("duplicate asset " asset_id " for " $1)
+        }
+        used_assets[asset_id] = 1
+    }
+    if (trim($5) == "") {
+        error("threat requires at least one trust boundary")
     }
     boundary_count = split($5, boundary_refs, "|")
     for (boundary_index = 1; boundary_index <= boundary_count; boundary_index++) {
-        if (!(boundary_refs[boundary_index] in boundaries)) {
-            error("undeclared boundary " boundary_refs[boundary_index])
+        boundary_id = boundary_refs[boundary_index]
+        boundary_key = $1 SUBSEP boundary_id
+        if (!(boundary_id in boundaries)) {
+            error("undeclared boundary " boundary_id)
         }
-        used_boundaries[boundary_refs[boundary_index]] = 1
+        if (ledger_boundary[boundary_key]++) {
+            error("duplicate boundary " boundary_id " for " $1)
+        }
+        used_boundaries[boundary_id] = 1
     }
     attacker_count = split($6, attacker_refs, "|")
     for (attacker_index = 1; attacker_index <= attacker_count; attacker_index++) {
@@ -846,7 +867,7 @@ function error(message) {
     print FILENAME ":" FNR ": " message > "/dev/stderr"
     failed = 1
 }
-function valid_links(value, values, count, link_index) {
+function valid_links(value, record_id, values, count, link_index, issue_key) {
     count = split(value, values, ",")
     if (count < 1) {
         return 0
@@ -856,11 +877,24 @@ function valid_links(value, values, count, link_index) {
             !(values[link_index] in known_issue)) {
             return 0
         }
+        issue_key = record_id SUBSEP values[link_index]
+        ledger_issue[issue_key] = 1
     }
     return 1
 }
-function valid_issue_work(value, work, range_values, range_count, range_start, range_end,
-                          issue_number, remaining, issue_url) {
+function record_model_issue(record_id, issue_url, issue_key) {
+    if (record_id == "") {
+        return 1
+    }
+    issue_key = record_id SUBSEP issue_url
+    if (issue_key in model_issue) {
+        return 0
+    }
+    model_issue[issue_key] = 1
+    return 1
+}
+function valid_issue_work(value, record_id, work, range_values, range_count,
+                          range_start, range_end, issue_number, remaining, issue_url) {
     work = trim(value)
     if (work !~ /^[Ii]ssues? /) {
         return 0
@@ -878,7 +912,7 @@ function valid_issue_work(value, work, range_values, range_count, range_start, r
         }
         for (issue_number = range_start; issue_number <= range_end; issue_number++) {
             issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
-            if (!(issue_url in known_issue)) {
+            if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url)) {
                 return 0
             }
         }
@@ -891,7 +925,7 @@ function valid_issue_work(value, work, range_values, range_count, range_start, r
     while (match(remaining, /#[1-9][0-9]*/)) {
         issue_number = substr(remaining, RSTART + 1, RLENGTH - 1)
         issue_url = "https://github.com/ArdurAI/veer/issues/" issue_number
-        if (!(issue_url in known_issue)) {
+        if (!(issue_url in known_issue) || !record_model_issue(record_id, issue_url)) {
             return 0
         }
         remaining = substr(remaining, RSTART + RLENGTH)
@@ -977,7 +1011,7 @@ FNR == NR {
         if (owners[owner_id]++) {
             error("duplicate control-owner row " owner_id)
         }
-        if (!valid_issue_work(trim(cells[4]))) {
+        if (!valid_issue_work(trim(cells[4]), "")) {
             error("invalid live verification work for control owner " owner_id)
         }
         next
@@ -1008,7 +1042,7 @@ FNR == NR {
             } else {
                 model_class_owner[class_id] = owner_id
             }
-            if (!valid_issue_work(owner_work)) {
+            if (!valid_issue_work(owner_work, class_id)) {
                 error("readable data class has invalid verification work: " class_id)
             }
         }
@@ -1065,8 +1099,18 @@ NF != 11 {
     } else if (($1 in model_class_owner) && $10 != model_class_owner[$1]) {
         error("ledger owner does not match readable data class for " $1)
     }
-    if (!valid_links($11)) {
+    if (!valid_links($11, $1)) {
         error("data-class verification must contain exact Veer issue URLs")
+    }
+    issue_mismatch = 0
+    for (issue_url in known_issue) {
+        issue_key = $1 SUBSEP issue_url
+        if ((issue_key in model_issue) != (issue_key in ledger_issue)) {
+            issue_mismatch = 1
+        }
+    }
+    if (issue_mismatch) {
+        error("ledger verification does not match readable data class for " $1)
     }
 }
 END {
@@ -1109,12 +1153,17 @@ function external_url_docs_occurrence(line, docs_start, prefix) {
     search_from = 1
     while (search_from <= length($0)) {
         candidate = substr($0, search_from)
-        relative_start = index(candidate, "docs/")
+        relative_start = index(tolower(candidate), "docs/")
         if (!relative_start) {
             break
         }
         docs_start = search_from + relative_start - 1
         if (external_url_docs_occurrence($0, docs_start)) {
+            search_from = docs_start + 5
+            continue
+        }
+        if (substr($0, docs_start, 5) != "docs/") {
+            error(docs_start)
             search_from = docs_start + 5
             continue
         }

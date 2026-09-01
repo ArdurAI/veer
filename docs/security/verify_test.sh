@@ -171,6 +171,20 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  !changed && index($0, "docs/architecture/overview.md:99-117") {
+      sub(/docs\/architecture\/overview[.]md:99-117/, "Docs/architecture/does-not-exist.md:99999")
+      changed = 1
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'case-mutated readable source citation' \
+  'readable model contains malformed documentation citation'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / { next }
   { print }
 ' "$model" >"$rewritten_model"
@@ -184,6 +198,16 @@ new_fixture
 rewrite_threat_field TM-001 3 'medium'
 expect_rejection 'readable and ledger risk mismatch' \
   'ledger risk does not match readable priority for TM-001'
+
+new_fixture
+rewrite_threat_field TM-001 4 ''
+expect_rejection 'threat without a protected asset' \
+  'threat requires at least one asset'
+
+new_fixture
+rewrite_threat_field TM-001 5 ''
+expect_rejection 'threat without a trust boundary' \
+  'threat requires at least one trust boundary'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -597,6 +621,33 @@ LC_ALL=C awk '
 mv "$rewritten_model" "$model"
 expect_rejection 'data class with an additional undeclared owner' \
   'readable data class has invalid control owner: DC-PERSONAL'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| DC-PERSONAL \|/ {
+      sub(/issues #22, #27, #28, and #63 \|$/, "Issue #14 |")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'data-class readable and ledger verification mismatch' \
+  'ledger verification does not match readable data class for DC-PERSONAL'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Evidence |" {
+      print "| Priority | Scenario and capability gain | Preconditions | Impact | Existing controls | Mitigation | Proof |"
+      next
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'attacker-story table with renamed columns' \
+  'unexpected canonical threats table header'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"
