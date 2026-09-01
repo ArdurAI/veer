@@ -135,32 +135,40 @@ an explicit quota response; they must not cause silent data loss.
 | Pending reconciliation items | 100 | 10,000 | 100,000 |
 | Oldest ready-item admission threshold | 30 min | 15 min | 15 min |
 | Durable queue 64 KiB billable request units/month | 0 | 20,000,000 | 100,000,000 |
-| Queue baseline send/receive/delete units/month | 0 | 10,506,015 | 52,690,815 |
+| Queue baseline send/receive/delete units/month | 0 | 10,639,935 | 52,824,735 |
 | Queue retry/redelivery reserve units/month | 0 | 5,000,000 | 25,000,000 |
 | Queue empty-poll reserve units/month | 0 | 3,000,000 | 15,000,000 |
-| Queue critical-work reserve units/month | 0 | 1,493,985 | 7,309,185 |
+| Queue critical-work reserve units/month | 0 | 1,360,065 | 7,175,265 |
 | Encoded queue message body, maximum | 2 KiB | 2 KiB | 2 KiB |
 | Aggregate encoded queue body bytes/month, GB | 0 | 40 | 200 |
-| Provider 4 KiB outbound/12 KiB inbound units/minute, all attempts | 20 | 120 | 1,200 |
+| Provider 4 KiB outbound/12 KiB inbound units/minute, steady | 20 | 120 | 1,200 |
+| Provider 4 KiB outbound/12 KiB inbound units/minute, 15-minute peak | 40 | 250 | 1,500 |
 | Provider observation units/minute, reserved | 2 | 40 | 400 |
 | Resources per provider observation page, maximum | 50 | 50 | 50 |
-| Provider mutation transfer units/minute, all attempts | 10 | 60 | 600 |
+| Provider mutation transfer units/minute, steady, all attempts | 10 | 60 | 600 |
+| Provider mutation transfer units/minute, 15-minute peak, all attempts | 20 | 190 | 950 |
 | Telemetry upload wire bytes/month, GB | 0 | 81 | 806 |
 | Queue service wire bytes/month, GB | 0 | 80 | 400 |
 | Other private-node AWS-service wire bytes/month, GB | 0 | 20 | 100 |
 | NAT processed data/month, GB | 0 | 300 | 2,250 |
 | Cross-AZ directional transfer/month, GB | 0 | 200 | 2,000 |
 | Billable database surplus CPU credits/month, vCPU-hours | 0 | 2,976 | 0 |
-| Audit events/month | 100,000 | 7,000,000 | 50,000,000 |
+| Audit events/month | 100,000 | 9,000,000 | 52,000,000 |
 | Archived audit and evidence bytes/31-day month, GB | 0.4 | 16 | 80 |
-| Archive objects written/month | 2,000 | 33,000 | 157,000 |
-| Archive S3 tier-1 requests/month, both regions | 6,000 | 99,000 | 471,000 |
-| Archive KMS requests/month, both regions | 8,000 | 132,000 | 628,000 |
+| Archive objects written/month | 2,000 | 37,000 | 160,000 |
+| Archive S3 tier-1 requests/month, both regions | 6,000 | 111,000 | 480,000 |
+| Archive KMS requests/month, both regions | 8,000 | 148,000 | 640,000 |
+| Normal archive cross-region transfer/month, GB | 0 | 16 | 80 |
+| Retained archive objects/region, maximum | local | 481,000 | 2,080,000 |
+| Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,288,000 each |
+| Full-reseed KMS decrypt plus encrypt requests | 0 | 1,060,000 | 4,576,000 |
+| Full-reseed cross-region transfer, GB | 0 | 229 | 1,144 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Database changed blocks/rolling 7 days, GiB | 1.17 | 11.67 | 116.67 |
 | Database changed blocks/rolling 30 days, GiB | 5 | 50 | 500 |
 | Database changed blocks/rolling 35 days, GiB | 5.84 | 58.34 | 583.34 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
+| Retained platform log storage, GB | 14 | 135 | 1,343 |
 | Accepted trace data/month, GiB | 1 | 10 | 100 |
 | Secrets Manager API requests/month, primary region | 0 | 45,000 | 450,000 |
 | Secrets Manager API requests/month, recovery region | 0 | 5,000 | 50,000 |
@@ -186,15 +194,16 @@ in throttling until each threshold is crossed and verifies this response.
 
 The 744-hour schedule reserves two synthetic calls per minute inside the
 published API rates. The remaining generated request stream produces 3,502,005
-small and 17,563,605 target accepted writes plus operation cancellations. One
-send, receive, and delete unit per accepted action consumes 10,506,015 and
-52,690,815 queue units before retries or empty long polls.
+small and 17,563,605 target accepted writes plus operation cancellations. The
+44,640 synthetic writes also commit outbox work. One send, receive, and delete
+unit per accepted action therefore consumes 10,639,935 and 52,824,735 queue
+units before retries or empty long polls.
 
 A durable profile-scoped meter expands batches into billable 64 KiB units and
 counts every send, receive, delete, retry, redelivery, and empty long poll. It
 partitions the 20/100 million hard caps into the baseline above, 5/25 million
 retry and redelivery units, 3/15 million empty-poll units, and
-1,493,985/7,309,185 units reserved for recovery, deletion, cancellation, and
+1,360,065/7,175,265 units reserved for recovery, deletion, cancellation, and
 security work. At 80% of any non-critical partition, Veer alerts and reduces
 poll frequency. At 90%, it rejects new non-reserved queue-producing mutations
 before persistence and backs off empty polls. Partition exhaustion fences that
@@ -224,21 +233,27 @@ qualify.
 
 Every provider request, response page, observation, retry, and error response
 consumes `max(ceil(outbound wire bytes / 4 KiB), ceil(inbound wire bytes / 12
-KiB), 1)` transfer units, including protocol and TLS overhead. The 120/1,200
-per-minute limits include all attempts. The sum of units consumed by external
-mutation attempts, including retries, is capped at 60/600; because every raw
-attempt costs at least one unit, its raw attempt count cannot exceed that cap.
-At a continuous 744-hour maximum, outbound volume is 21.94/219.42 GB, inbound
-volume is 65.82/658.24 GB, and combined provider NAT processing is 87.77/877.66
-GB. The accepted 60/600 GiB of logs and traces convert to 64.43/644.25 decimal
-GB. Adding 25% for protocol and TLS overhead and rounding up sets telemetry wire
-caps of 81/806 GB. Queue-service wire bytes are capped at 80/400 GB, and other
-private-node AWS-service traffic—including secret, registry, and control API
-calls—is capped at 20/100 GB. Together these fit hard NAT-processing caps of
-300/2,250 GB. S3 archive and artifact traffic uses a gateway endpoint and is
-excluded from NAT; any interface endpoint must replace the worksheet with its
-hourly and data-processing cost before use. Adapters must paginate, stream, or
-reject before crossing the selected profile's unit budget.
+KiB), 1)` transfer units, including protocol and TLS overhead. Steady total caps
+are 120/1,200 units per minute; the 15-minute peak caps are 250/1,500. External
+mutation attempts, including retries and external cancels, consume at most
+60/600 units steady and 190/950 at peak. The fixed mix accepts 45/225 external
+actions per steady minute and 180/900 per peak minute, leaving explicit mutation
+retry headroom. Because every raw attempt costs at least one unit, raw attempt
+counts cannot exceed these schedules.
+
+For each hour's 45 steady and 15 peak minutes, total provider capacity is
+6,807,600/56,916,000 units per 744-hour month. Outbound volume is 27.88/233.13
+GB, inbound volume is 83.65/699.38 GB, and combined provider NAT processing is
+111.54/932.51 GB. The accepted 60/600 GiB of logs and traces convert to
+64.43/644.25 decimal GB. Adding 25% for protocol and TLS overhead and rounding
+up sets telemetry wire caps of 81/806 GB. Queue-service wire bytes are capped at
+80/400 GB, and other private-node AWS-service traffic—including secret,
+registry, and control API calls—is capped at 20/100 GB. The resulting
+292.54/2,238.51 GB fit hard NAT-processing caps of 300/2,250 GB. S3 archive and
+artifact traffic uses a gateway endpoint and is excluded from NAT; any interface
+endpoint must replace the worksheet with its hourly and data-processing cost
+before use. Adapters must paginate, stream, or reject before crossing the
+selected profile's unit budget.
 
 The qualification observation set is the profile's Component count. One page
 contains resources from only one ProviderConnection and at most 50 compact
@@ -248,11 +263,11 @@ protocol and TLS overhead; each canonical observation entry is at most 192 wire
 bytes. With 50/500 connection partitions, a complete small/target sweep needs at
 most `ceil(components / 50) + connections`, or 150/1,500 units. The reserved
 40/400 units per minute provide 200/2,000 units in five minutes, including
-50/500 units for observation retries and errors. The remaining 80/800 units
-cover the 60/600 mutation-unit budget plus 20/200 units of other retry and error
-headroom. A provider that cannot expose this bounded batch observation cannot
-qualify at the selected Component count; a replacement ADR must lower that
-profile.
+50/500 units for observation retries and errors. At steady load, the remaining
+80/800 units cover 60/600 mutation units plus 20/200 other units. At peak, the
+remaining 210/1,100 cover 190/950 mutation units plus 20/150 other units. A
+provider that cannot expose this bounded batch observation cannot qualify at the
+selected Component count; a replacement ADR must lower that profile.
 
 ### Load qualification
 
@@ -272,9 +287,12 @@ target result cannot substitute for the small profile:
    10% for maintenance and recovery work.
 2. Run that profile for 24 hours. In each hour, a 15-minute peak replaces steady
    traffic; the generator yields two calls per minute to the external synthetic.
-   The resulting required audit counts are 215,867 small and 1,507,547 target,
-   before separately labeled injected-fault events. Every raw provider mutation
-   attempt contributes its required per-attempt audit record.
+   The deterministic provider fake completes operations within 30 seconds small
+   or 60 seconds target, including configured retries, so non-terminal operations
+   remain within 100/1,000. The resulting required audit counts are 262,667 small
+   and 1,633,547 target, before separately labeled injected-fault events. Every
+   raw provider mutation attempt contributes its required per-attempt audit
+   record.
 3. In an isolated accounting environment, force queue retries and redeliveries,
    then hold an empty queue under long polling. Drive each queue-unit partition
    through 80%, 90%, and 100% with a deterministic fake and verify alert, poll
@@ -322,7 +340,10 @@ target result cannot substitute for the small profile:
    20/100 new TLS connections per second; and an idle-connection soak at
    2,500/12,000 active connections. Verify processed bytes, billable rule
    evaluations, and every hourly LCU dimension remain inside 1/5 LCUs.
-11. Report every SLI and bounded capacity/cost dimension for the entire run and
+11. Feed deterministic incompressible logs at the ingestion limits and verify
+    retained-byte accounting against two boundary-concentrated 31-day envelopes,
+    14/30-day expiry, and the 14/135/1,343 GB storage caps.
+12. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
 
@@ -374,7 +395,7 @@ steady traffic, the total API envelope is exactly 23,436,000 small and
 At 70% read responses averaging 6.34 KiB, all other response bodies capped at 1
 KiB, and a conservative 1 KiB per-request header and TLS allowance, gross
 egress is 137.70 GB small and 688.52 GB target. Adding bounded outbound provider
-traffic yields 159.64/907.93 GB, fitting the worksheet's rounded 200/1,000 GB
+traffic yields 165.59/921.64 GB, fitting the worksheet's rounded 200/1,000 GB
 limits. Provider calls and cost-incurring cloud fixtures are capped and
 explicitly enabled; public CI uses deterministic fakes.
 
@@ -398,7 +419,7 @@ environments have measurement coverage but no SLO.
 | API read latency | p95 <= 300 ms; p99 <= 750 ms | Server-side duration from accepted request to complete response under the profile's steady load, excluding client network time. |
 | API write acceptance latency | p95 <= 500 ms; p99 <= 1 s | Server-side duration through durable desired-state, integrity-anchor, outbox, and required audit commit. Provider execution is asynchronous and excluded. |
 | Invalid or unauthenticated rejection latency | p99 <= 250 ms | Server receipt of a complete, size-bounded request through the final documented response. Invalid input makes no durable write. An unauthenticated rejection may commit only its required append-only security-audit event, which is included in this duration; no request or business state is written. |
-| Unauthorized or quota rejection latency | p99 <= 500 ms | Server receipt of a complete, authenticated request through the final documented response, including policy and quota evaluation. |
+| Unauthorized or quota rejection latency | p99 <= 500 ms | Server receipt of a complete, authenticated request through the final documented response, including policy and quota evaluation. An unauthorized rejection may commit only its required audit event; quota rejection writes no business state. |
 | Client-cancellation cleanup | p99 <= 100 ms | Time from server observation of request-context cancellation to handler termination, with no partial uncommitted state retained. |
 | Planning start delay | 99% <= 30 s; 99.9% <= 2 min | Time from successful write commit to a worker acquiring the current generation. |
 | Observation freshness | 95% <= 5 min; 99% <= 15 min | Age of the newest successful provider observation for every non-deleted resource that requires observation. Rate-limited and terminally failed resources remain in the denominator; a resource with no successful observation is aged from activation. |
@@ -435,7 +456,8 @@ error budget:
 - authorization and workspace isolation are applied both when work is accepted
   and when it executes;
 - the current-state integrity anchor is updated atomically with accepted state;
-- required security audit events are committed atomically with the state change;
+- required security audit events are durably committed before their response and
+  atomically with any corresponding state change;
 - secrets and provider credentials never appear in resources, plans, logs,
   traces, metrics, or cost reports.
 
@@ -549,6 +571,14 @@ service claims.
 | Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
 | High-resolution metrics | 15 days | 13 months for SLO rollups | Workspace, resource ID, request ID, and provider object ID are forbidden metric labels. |
 
+Platform log storage is priced without a compression assumption. Two complete
+31-day ingestion envelopes can fall inside the 14/30-day retention windows when
+writes concentrate around a boundary. Converting those 10/100/1,000 GiB
+developer/small/target maxima to decimal GB, adding 25% for service framing, and
+rounding up produces hard retained-storage bounds of 14/135/1,343 GB. Expiry and
+the service's stored-byte metric must verify the bounds; compression is only
+unpriced headroom.
+
 Database changed bytes include user data, indexes, engine logs, compaction or
 vacuum, maintenance, and schema-migration amplification. A durable meter uses
 service-reported physical bytes and a conservative pre-acknowledgement reserve
@@ -571,27 +601,27 @@ actual managed-service incremental backups may consume less.
 
 Every externally attempted provider mutation, including a retry, emits one
 required audit record containing the operation and attempt identities, target,
-authorization context, and outcome. Since every attempt consumes at least one
-mutation unit, the continuous 60/600 unit limits allow at most 2,678,400 small
-and 26,784,000 target records in a 744-hour month. The generated API stream's
-17% required-audit share is exactly 10% successful mutations, 5% accepted
-cancellations, 1% unauthenticated requests, and 1% unauthorized requests:
-3,968,939 small and 19,905,419 target records over complete 100-request cycles.
-After 44,640 synthetic writes, the combined totals are 6,691,979 and 46,734,059,
-leaving 308,021 and 3,265,941 records for bounded system events inside the
-7 million and 50 million caps. The provider totals already include every retry,
-and a provider cancel attempt is included even though its accepted API
-cancellation has a separate audit record. Idempotent replays, invalid requests,
-stale conflicts, quota rejections, and request-context cancellations produce no
-external attempt and use bounded metrics or ordinary logs unless issue
+authorization context, and outcome. Applying the 45/15-minute steady/peak
+mutation schedules allows at most 4,129,200 small and 30,690,000 target provider
+records in a 744-hour month. The generated API stream's 17% required-audit share
+is exactly 10% successful mutations, 5% accepted cancellations, 1%
+unauthenticated requests, and 1% unauthorized requests: 3,968,939 small and
+19,905,419 target records over complete 100-request cycles. After 44,640
+synthetic writes, the combined totals are 8,142,779 and 50,640,059, leaving
+857,221 and 1,359,941 records for bounded system events inside the 9 million and
+52 million caps. The provider totals already include every retry, and a provider
+cancel attempt is included even though its accepted API cancellation has a
+separate audit record. Idempotent replays, invalid requests, stale conflicts,
+quota rejections, and request-context cancellations produce no external attempt
+and use bounded metrics or ordinary logs unless issue
 [#14](https://github.com/ArdurAI/veer/issues/14) classifies one as a required
 security audit event.
 
 Canonical audit events are at most 16 KiB before archive compression and must
 average no more than 1,000 bytes at the full event count. This allocates at most
-7 GB/month small and 50 GB/month target to audit records. After the compact
-non-audit records below, 5.26 GB and 11.27 GB remain inside the combined 16 GB
-and 80 GB archive-ingress caps for recovery evidence and framing. The archive
+9 GB/month small and 52 GB/month target to audit records. After the compact
+non-audit records below, 3.26 GB and 9.27 GB remain inside the combined 16 GB and
+80 GB archive-ingress caps for recovery evidence and framing. The archive
 writer measures actual stored object bytes, including framing and encryption
 overhead. A 365-day retention interval can intersect 13 fixed 31-day accounting
 windows when writes are concentrated at their boundaries. Pricing all 13 full
@@ -626,12 +656,22 @@ At 1,000 records per object plus no more than 4,464 timer flushes per stream,
 the fixed non-audit workload requires at most 13,803 and 51,301 objects. Audit
 packing reserves 192 KiB of every 8 MiB object for framing, compression
 expansion, and encryption, so at most 500 maximum-size 16 KiB records share an
-object. Including timer flushes, audit requires at most 18,464 and 104,464
-objects. The combined worst cases are therefore 32,267 and 155,765, fitting
-total caps of 33,000 and 157,000. Each profile budgets three S3 tier-1 requests
-and four KMS requests per object across primary write, recovery replication,
-retries, manifest/list work, and validation. Exceeding the object or request
-cap uses the same non-dropping backpressure path as the byte cap.
+object. Including timer flushes, audit requires at most 22,464 and 108,464
+objects. The combined worst cases are therefore 36,267 and 159,765, fitting
+monthly caps of 37,000 and 160,000. Each profile budgets three S3 tier-1 requests
+and four KMS requests per monthly object across primary write, recovery
+replication, retries, manifest/list work, and validation.
+
+Thirteen retained envelopes contain at most 481,000/2,080,000 objects per
+region. A full reseed reserves at least 10% retry headroom, rounding the small
+allowance up: 530,000/2,288,000 source GETs, the same number of destination PUTs,
+two KMS operations per attempt, and 229/1,144 GB cross-region transfer. The
+source GET uses the pinned Tier-2 rate; the destination PUT uses Tier-1. The
+primary copy remains authoritative while an empty recovery prefix is rebuilt;
+failed partial prefixes are lifecycle-deleted, so the storage model never
+assumes two retained recovery copies. Exhausting a request, KMS, or byte
+allowance stops the reseed before another attempt. Normal archive and reseed
+caps use the same non-dropping backpressure path as the byte cap.
 
 Issue [#14](https://github.com/ArdurAI/veer/issues/14) owns data classification
 and handling rules. It may reduce retention where privacy or secret exposure
@@ -647,10 +687,10 @@ resources, and `us-west-2` recovery storage.
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 961.33 | USD 1,000.00 | USD 38.67 |
-| Target-scale qualification | USD 2,568.60 | USD 2,600.00 | USD 31.40 |
+| Small production | USD 971.97 | USD 1,000.00 | USD 28.03 |
+| Target-scale qualification | USD 2,635.74 | USD 2,650.00 | USD 14.26 |
 
-The target reference consumes 98.79% of its ceiling after conservatively
+The target reference consumes 99.46% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional recurring target resource may be added without
 reducing another input or approving a replacement ADR.
@@ -684,14 +724,17 @@ the exercise continues.
   upper bounds.
 - Trace admission enforces the 10 GiB/month small and 100 GiB/month target
   ceilings. Dropped spans and projected month-end volume are observable.
+- Retained log storage prices two uncompressed boundary-concentrated ingestion
+  envelopes plus 25% framing; compression is not required for cost correctness.
 - Secret values are fetched through a single-flight, version-aware in-memory
   cache and never once per provider operation. Cache invalidation follows
   rotation events and expiry; primary/recovery request caps are 45,000/5,000
   per month small and 450,000/50,000 target, with cache hits, misses, and
   projected usage observable.
-- Recovery-region secret replicas, archive tier-1 requests, and KMS envelope
-  operations are priced without free request allowances. Replication lag,
-  version mismatch, request volume, and restore-time access are alarmed.
+- Recovery-region secret replicas, normal archive transfer and requests, and a
+  full archive reseed with at least 10% byte/request retry headroom are priced
+  without free allowances. Replication lag, version mismatch, request volume,
+  and restore-time access are alarmed.
 - Backup storage includes the current copy and rolling 7/30/35-day changed-byte
   envelopes for recovery retention, transfer, and primary retention. The meter
   includes engine and maintenance amplification, not only accepted payloads.

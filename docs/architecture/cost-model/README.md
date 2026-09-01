@@ -50,6 +50,7 @@ does not contact AWS or read environment credentials.
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
 | Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
 | Modeled 64 KiB queue request units with no free allowance | 20 million | 100 million |
+| Derived queue baseline, including synthetic writes | 10,639,935 units | 52,824,735 units |
 | Encoded queue message body hard limit | 2 KiB | 2 KiB |
 | Aggregate encoded queue body byte limit | 40 GB | 200 GB |
 | New TLS connections/second | 20 | 100 |
@@ -57,21 +58,28 @@ does not contact AWS or read environment credentials.
 | ALB processed bytes/hour | 0.5 GB | 4 GB |
 | Billable rule evaluations/second | 500 | 4,000 |
 | Billable ALB capacity | 1 LCU | 5 LCU |
-| Derived provider traffic through NAT | 87.77 GB | 877.66 GB |
+| Provider total units/minute, steady/15-minute peak | 120/250 | 1,200/1,500 |
+| Derived provider traffic through NAT | 111.54 GB | 932.51 GB |
 | Telemetry/queue/other AWS-service NAT wire caps | 81/80/20 GB | 806/400/100 GB |
 | Billable NAT processed data | 300 GB | 2,250 GB |
-| Derived client plus provider-request egress | 159.64 GB | 907.93 GB |
+| Derived client plus provider-request egress | 165.59 GB | 921.64 GB |
 | Billable internet egress with no free allowance | 200 GB | 1,000 GB |
 | Billable directional cross-AZ transfer | 200 GB | 2,000 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
+| Retained CloudWatch log storage, uncompressed plus framing | 135 GB | 1,343 GB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Stored archive ingress per 31-day month | 16 GB | 80 GB |
-| Archive objects written | 33,000 | 157,000 |
-| S3 tier-1 archive requests, primary plus recovery | 99,000 | 471,000 |
-| KMS archive requests, primary plus recovery | 132,000 | 628,000 |
+| Archive objects written/month | 37,000 | 160,000 |
+| Normal S3 tier-1 archive requests, both regions | 111,000 | 480,000 |
+| Normal KMS archive requests, both regions | 148,000 | 640,000 |
 | Encrypted primary archive/object storage | 208 GB | 1,040 GB |
 | Encrypted recovery archive/object storage | 208 GB | 1,040 GB |
+| Normal archive cross-region transfer | 16 GB | 80 GB |
+| Retained archive objects per region | 481,000 | 2,080,000 |
+| Full-reseed source GET/destination PUT attempts | 530,000 each | 2,288,000 each |
+| Full-reseed KMS decrypt/encrypt requests | 1,060,000 | 4,576,000 |
+| Full-reseed cross-region transfer | 229 GB | 1,144 GB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
 | Secrets Manager API requests, recovery region | 5,000 | 50,000 |
 | Recovery-region secret replicas | 10 | 100 |
@@ -96,11 +104,11 @@ maintenance CPU cannot exceed the accepted ceiling.
 
 Queue units derive from the accepted 15% write-and-cancellation share of the
 generated request schedule after reserving two synthetic calls per minute. One
-send, receive, and delete consumes 10,506,015 units small and 52,690,815 target.
-The remaining units are hard partitions for retries/redeliveries, empty polls,
-and critical work, enforced by the fail-closed meter in the ADR. Encoded bodies
-are capped at 2 KiB even though each request is conservatively priced as a 64
-KiB billable unit.
+send, receive, and delete for every generated and synthetic write consumes
+10,639,935 units small and 52,824,735 target. The remaining units are hard
+partitions for retries/redeliveries, empty polls, and critical work, enforced by
+the fail-closed meter in the ADR. Encoded bodies are capped at 2 KiB even though
+each request is conservatively priced as a 64 KiB billable unit.
 A separate counter expands batches and caps all send, receive, redelivery, and
 recovery body occurrences at 40/200 GB. That queue budget, 140/1,600 GB for
 database and internal service traffic, and 20/200 GB for failover and retries
@@ -108,12 +116,19 @@ form the 200/2,000 GB directional cross-AZ cap. The ADR makes those partitions
 measurable admission limits rather than usage forecasts.
 
 Provider traffic units allow at most 4 KiB outbound and 12 KiB inbound across
-requests, responses, pagination, observations, and retries. The continuous
-120/1,200 unit-per-minute limits derive 21.94/219.42 GB internet egress and
-87.77/877.66 GB combined NAT processing per 744-hour month. Adding bounded
+requests, responses, pagination, observations, and retries. Every hour has 45
+steady minutes capped at 120/1,200 units per minute and 15 peak minutes capped
+at 250/1,500. This schedule derives 27.88/233.13 GB internet egress and
+111.54/932.51 GB combined NAT processing per 744-hour month. Adding bounded
 telemetry, queue-service, and other AWS-service wire traffic produces
-268.77/2,183.66 GB; the worksheet rounds those quantities to 300/2,250 GB and
-does not subtract free allowances.
+292.54/2,238.51 GB; the worksheet prices the 300/2,250 GB hard caps and does not
+subtract free allowances.
+
+Log storage assumes no compression. Two complete boundary-concentrated 31-day
+ingestion envelopes can coexist in the 14/30-day retention windows. Converting
+to decimal GB, adding 25% for service framing, and rounding up produces retained
+storage caps of 135/1,343 GB. Compression is unpriced headroom, and the
+qualification stream uses incompressible input.
 
 ALB limits use the maximum of the four AWS LCU dimensions. Small remains below
 one LCU at 20 new and 2,500 active TLS connections, 0.5 GB/hour, and 500
@@ -130,19 +145,28 @@ smoothing assumption. Cross-region transfer prices the rolling 30-day cap.
 
 The archive quantities price 13 complete 31-day ingress envelopes, or 208/1,040
 GB in each region, because a 365-day retention interval can intersect 13 windows
-under boundary-concentrated traffic. The 7/50 million event limits include one
+under boundary-concentrated traffic. The 9/52 million event limits include one
 record per provider mutation attempt. Worst-case audit packing uses 500 records
-per object to reserve 192 KiB for framing, compression expansion, and encryption.
-Audit and compact non-audit record multiplicity derives the object/request quantities.
-Secret values use a version-aware, single-flight cache; the request rows are
-hard monthly budgets rather than an assumption that every provider operation
-reads Secrets Manager.
+per object to reserve 192 KiB for framing, compression expansion, and
+encryption. Audit and compact non-audit multiplicity yields monthly caps of
+37,000/160,000 objects, 111,000/480,000 normal S3 requests across both regions,
+and 148,000/640,000 normal KMS requests.
+
+Thirteen retained envelopes cap each region at 481,000/2,080,000 objects. A
+normal month prices 16/80 GB of replication transfer. A full recovery reseed
+separately prices 530,000/2,288,000 source GET attempts, the same number of
+destination PUT attempts, two KMS requests per attempt, and 229/1,144 GB
+transferred, all including at least 10% retry headroom and a rounded-up small
+allowance. This separation prevents normal monthly work from hiding recovery
+work. Secret values use a version-aware, single-flight cache; the request rows
+are hard monthly budgets rather than an assumption that every provider
+operation reads Secrets Manager.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
 at no more than 1 KiB, and 1 KiB of header/TLS allowance for every request.
 The 23,436,000/117,180,000 total API envelopes already contain the external
-synthetic. Adding bounded outbound provider traffic yields 159.64/907.93 GB;
+synthetic. Adding bounded outbound provider traffic yields 165.59/921.64 GB;
 the worksheet prices 200/1,000 GB.
 
 The one-minute recovery-region canary uses 44,640 runs in a 744-hour month. Its
@@ -171,7 +195,7 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | Telemetry | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | `S8QGXX5R2BKKMDSJ` at USD 0.50/GB log ingest; `GF9Q9S5QWW3RHMGQ` at USD 0.50/GB OTEL ingest; `6K9ADYQAHV5KX9KZ` at USD 0.03/GB-month; `KG586CTNGQ4VRZKZ` at USD 0.30/metric-month |
 | Recovery monitoring | [AmazonCloudWatch 20260831092148 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-west-2/index.json) | Synthetics `96EA6YQSXFE9MUK5` at USD 0.0012/run; logs `CWY7X4MZ4F3MP5SD` at USD 0.50/GB and `MN45SJANDTCPR9QA` at USD 0.03/GB-month; metrics `CN6TP6ZEVS58RK7M` at USD 0.30/month; alarm `SJTFAZNHSW2WVZB2` at USD 0.10/month |
 | Recovery canary compute | [AWSLambda 20260831092318 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/20260831092318/us-west-2/index.json) | Request `ZWHFK83WS2P4WZR6` at USD 0.0000002/request; tier-one duration `XCU6U9G4FCKZQWG9` at USD 0.0000166667/GB-second |
-| Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one request `E9YHNFENF4XQBZR6` at USD 0.000005/request |
+| Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one PUT request `E9YHNFENF4XQBZR6` at USD 0.000005/request; tier-two GET request `ZWQ6Q48CRJXX4FXE` at USD 0.0000004/request |
 | Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month; tier-one request `D4PMUVH6F64HK2D6` at USD 0.000005/request |
 | Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month; request SKUs `MFEBZPX8NHM5FY7Z` and `SE9KXT6M6JTP7E4W` at USD 0.000003/request |
 | Managed secrets | [AWSSecretsManager 20260831092330 primary](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-east-1/index.json), [recovery](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-west-2/index.json) | Primary `BJ3PQ9BYGU6P632F` and recovery `DWJP9S4V3HP98UNC` at USD 0.40/secret-month; request SKUs `4MDZ5VNEJPMUTG9B` and `AEBQHWFEG8Q4Y7AT` at USD 0.000005/request |
