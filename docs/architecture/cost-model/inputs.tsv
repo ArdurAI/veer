@@ -40,6 +40,12 @@ small	recovery_archive_requests	recovery	55500	API-request	0.000005	aws-s3-recov
 small	full_reseed_source_get_requests	recovery	530000	API-request	0.0000004	aws-s3	Source GET attempts for four hundred eighty-one thousand retained objects plus ten percent retry headroom
 small	full_reseed_destination_put_requests	recovery	530000	API-request	0.000005	aws-s3-recovery	Destination PUT attempts for four hundred eighty-one thousand retained objects plus ten percent retry headroom
 small	full_reseed_kms_requests	recovery	1060000	API-request	0.000003	aws-kms	One decrypt and one encrypt per full-reseed object attempt
+small	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations replication job per modeled full reseed
+small	full_reseed_batch_object_operations	recovery	530000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including rounded-up retry headroom
+small	full_reseed_generated_manifest_scan	recovery	481000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
+small	full_reseed_manifest_storage	recovery	0.26	GB-month	0.023	aws-s3	Eight GiB generated manifest retained for at most twenty-four hours and rounded up
+small	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
+small	full_reseed_destination_head_requests	recovery	530000	API-request	0.0000004	aws-s3-recovery	Destination signed-metadata HEAD validation attempts including rounded-up retry headroom
 small	encryption_keys	security	3	key-month	1.00	aws-kms	Primary data audit and recovery-region keys
 small	archive_kms_requests	security	148000	API-request	0.000003	aws-kms	Four normal envelope and validation requests per monthly archive object
 small	managed_secrets	security	10	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials
@@ -85,6 +91,12 @@ target	recovery_archive_requests	recovery	244500	API-request	0.000005	aws-s3-rec
 target	full_reseed_source_get_requests	recovery	2331000	API-request	0.0000004	aws-s3	Source GET attempts for two million one hundred nineteen thousand retained objects plus ten percent retry headroom
 target	full_reseed_destination_put_requests	recovery	2331000	API-request	0.000005	aws-s3-recovery	Destination PUT attempts for two million one hundred nineteen thousand retained objects plus ten percent retry headroom
 target	full_reseed_kms_requests	recovery	4662000	API-request	0.000003	aws-kms	One decrypt and one encrypt per full-reseed object attempt
+target	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations replication job per modeled full reseed
+target	full_reseed_batch_object_operations	recovery	2331000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including retry headroom
+target	full_reseed_generated_manifest_scan	recovery	2119000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
+target	full_reseed_manifest_storage	recovery	0.26	GB-month	0.023	aws-s3	Eight GiB generated manifest retained for at most twenty-four hours and rounded up
+target	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
+target	full_reseed_destination_head_requests	recovery	2331000	API-request	0.0000004	aws-s3-recovery	Destination signed-metadata HEAD validation attempts including retry headroom
 target	encryption_keys	security	6	key-month	1.00	aws-kms	Separated primary recovery and rotation key set
 target	archive_kms_requests	security	652000	API-request	0.000003	aws-kms	Four normal envelope and validation requests per monthly archive object
 target	managed_secrets	security	100	secret-month	0.40	aws-secrets-manager	Bootstrap and unavoidable third-party credentials

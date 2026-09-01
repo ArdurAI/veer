@@ -83,6 +83,12 @@ does not contact AWS or read environment credentials.
 | Full-reseed source GET/destination PUT attempts | 530,000 each | 2,331,000 each |
 | Full-reseed KMS decrypt/encrypt requests | 1,060,000 | 4,662,000 |
 | Full-reseed cross-region transfer | 229 GB | 1,144 GB |
+| Full-reseed S3 Batch Operations jobs | 1 | 1 |
+| Full-reseed S3 Batch object operations | 530,000 | 2,331,000 |
+| Full-reseed generated-manifest source objects scanned | 481,000 | 2,119,000 |
+| Full-reseed transient manifest objects | 1 | 1 |
+| Full-reseed transient manifest storage | 0.26 GB-month | 0.26 GB-month |
+| Full-reseed destination HEAD validation attempts | 530,000 | 2,331,000 |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
 | Secrets Manager API requests, recovery region | 5,000 | 50,000 |
 | Recovery-region secret replicas | 10 | 100 |
@@ -147,12 +153,22 @@ conservative against the binary-scaled billing unit. See the
 [CloudWatch pricing examples](https://aws.amazon.com/cloudwatch/pricing/).
 
 Custom metric quantities count every unique metric name plus complete dimension
-set first emitted during the billing month. A durable 50/500-identity registry
-does not reclaim identities after deletion or relabeling, freezes new identities
-at 90%, and rejects unknown series at the collector when full or stale. The
-10/100 GiB trace quantities are separate durable accepted-byte caps; threshold
-qualification verifies sampling, dropped-byte observability, seven-day expiry,
-and inclusion in the telemetry wire budget.
+set first emitted during the billing month. A linearizable conditional insert
+and counter increment admits a new identity before emission; concurrent duplicate
+identities are idempotent and distinct identities cannot exceed the durable
+50/500 cap. Deletion or relabeling does not reclaim budget, new identities freeze
+at 90%, and unknown series are rejected when the registry is full or stale.
+
+Log and trace collectors atomically check and reserve exact uncompressed
+serialized batch bytes before any billable ingestion call. Confirmed acceptance
+settles the reservation, confirmed pre-ingestion failure releases it
+idempotently, and an uncertain outcome retains it. The byte caps include settled
+plus outstanding reservations. Missing state, or state whose last confirmed
+durable read is older than two minutes, drops telemetry before ingestion without
+failing business work. The 10/100 GiB trace quantities are separate accepted-
+byte caps; threshold and concurrent-collector qualification verifies sampling,
+dropped-byte observability, seven-day expiry, and inclusion in the telemetry
+wire budget.
 
 ALB limits use the maximum of the four AWS LCU dimensions. Small remains below
 one LCU at 20 new and 2,500 active TLS connections, 0.5 GB/hour, and 500
@@ -176,17 +192,28 @@ encryption. Audit and compact non-audit multiplicity includes both transitions
 for every non-interruptible cancellation and three compact records for every
 synthetic write. It yields monthly maxima of 36,985/162,826 objects inside
 37,000/163,000 caps, 111,000/489,000 normal S3 requests across both regions, and
-148,000/652,000 normal KMS requests.
+148,000/652,000 normal KMS requests. Every data object embeds its signed Veer
+manifest in reserved framing, and the stream root is relational state; there are
+zero separate persistent Veer manifest objects.
 
-Thirteen retained envelopes cap each region at 481,000/2,119,000 objects. A
-normal month prices 16/80 GB of replication transfer. A full recovery reseed
-separately prices 530,000/2,331,000 source GET attempts, the same number of
-destination PUT attempts, two KMS requests per attempt, and 229/1,144 GB
-transferred, all including at least 10% retry headroom and a rounded-up small
-allowance. This separation prevents normal monthly work from hiding recovery
-work. Secret values use a version-aware, single-flight cache; the request rows
-are hard monthly budgets rather than an assumption that every provider
-operation reads Secrets Manager.
+Thirteen retained envelopes cap each region at 481,000/2,119,000 objects. S3
+CRR copies new versions, while one S3 Batch Replication job can rebuild the
+recovery prefix from retained versions. The full reseed prices
+530,000/2,331,000 Batch object operations, source GET attempts, and destination
+PUT attempts; two KMS requests per attempt; 229/1,144 GB transferred; and a
+generated-manifest scan of 481,000/2,119,000 source objects. One generated
+manifest object lives in a source-region recovery-control prefix for at most 24
+hours, is capped at 8 GiB, and is priced as 0.26 GB-month plus one tier-one
+write; completion-report output is disabled. A destination
+[`HEAD` without checksum mode](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html)
+authenticates the bounded signed-digest metadata replicated with each object.
+The 530,000/2,331,000 validation attempts include retry headroom and use the
+destination Tier-2 request rate without a KMS decrypt. The Batch service performs
+the cross-region data path, so Veer's same-region gateway endpoints do not send
+these bytes through NAT. This separation prevents normal monthly work from
+hiding recovery work. Secret values use a version-aware, single-flight cache;
+the request rows are hard monthly budgets rather than an assumption that every
+provider operation reads Secrets Manager.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
@@ -225,8 +252,8 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | Primary alarms | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | Standard-resolution alarm metric `EVETVUGEN3MUTMXM` at USD 0.10/alarm-metric-month |
 | Recovery monitoring | [AmazonCloudWatch 20260831092148 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-west-2/index.json) | Synthetics `96EA6YQSXFE9MUK5` at USD 0.0012/run; logs `CWY7X4MZ4F3MP5SD` at USD 0.50/GB and `MN45SJANDTCPR9QA` at USD 0.03/GB-month; metrics `CN6TP6ZEVS58RK7M` at USD 0.30/month; alarm `SJTFAZNHSW2WVZB2` at USD 0.10/month |
 | Recovery canary compute | [AWSLambda 20260831092318 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/20260831092318/us-west-2/index.json) | Request `ZWHFK83WS2P4WZR6` at USD 0.0000002/request; tier-one duration `XCU6U9G4FCKZQWG9` at USD 0.0000166667/GB-second |
-| Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one PUT request `E9YHNFENF4XQBZR6` at USD 0.000005/request; tier-two GET request `ZWQ6Q48CRJXX4FXE` at USD 0.0000004/request |
-| Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month; tier-one request `D4PMUVH6F64HK2D6` at USD 0.000005/request |
+| Primary object storage and Batch Operations | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one PUT request `E9YHNFENF4XQBZR6` at USD 0.000005/request; tier-two GET request `ZWQ6Q48CRJXX4FXE` at USD 0.0000004/request; Batch job `JS698V37SA2BFFYW` at USD 0.25/job; object operation `VFSW6ADYJ5NS2Z6P` at USD 0.000001/object; generated-manifest scan `VUCQUWK8JADFEN65` at USD 0.000000015/source object |
+| Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month; tier-one request `D4PMUVH6F64HK2D6` at USD 0.000005/request; tier-two HEAD request `E77AQEM2DC4VV3FC` at USD 0.0000004/request |
 | Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month; request SKUs `MFEBZPX8NHM5FY7Z` and `SE9KXT6M6JTP7E4W` at USD 0.000003/request |
 | Managed secrets | [AWSSecretsManager 20260831092330 primary](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-east-1/index.json), [recovery](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSSecretsManager/20260831092330/us-west-2/index.json) | Primary `BJ3PQ9BYGU6P632F` and recovery `DWJP9S4V3HP98UNC` at USD 0.40/secret-month; request SKUs `4MDZ5VNEJPMUTG9B` and `AEBQHWFEG8Q4Y7AT` at USD 0.000005/request |
 
