@@ -101,6 +101,10 @@ flowchart LR
 | A-08 | Service availability, quotas, rate limits, concurrency, telemetry cardinality, and cost budgets | Fairness, bounded consumption, measurable saturation, and fail-safe shedding | `docs/architecture/0001-alpha-operational-bounds.md:665-699` |
 | A-09 | Source, dependencies, CI identities, binaries, images, SBOMs, signatures, and provenance | Integrity, authenticity, reproducibility, least privilege, and consumer verification | `docs/architecture/0002-alpha-implementation-stack.md:395-409`; issues #15 and #66 |
 
+The objectives below specialize the accepted invariants in
+`docs/security/model.md:9-18` and
+`docs/architecture/0001-alpha-operational-bounds.md:665-680`.
+
 ### Security objectives
 
 1. Default-deny every actor, action, resource, workspace, and environment unless
@@ -125,10 +129,6 @@ flowchart LR
    telemetry volume/cardinality, retained bytes, and external cost.
 10. Require retained test or operational evidence before changing a design
     requirement into an implemented security claim.
-
-These objectives specialize the accepted invariants in
-`docs/security/model.md:9-18` and
-`docs/architecture/0001-alpha-operational-bounds.md:665-680`.
 
 ### Actors and realistic starting capabilities
 

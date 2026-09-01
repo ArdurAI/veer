@@ -812,6 +812,21 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  index($0, "[OWASP Threat Modeling Cheat Sheet](") {
+      label_end = index($0, "](")
+      print substr($0, 1, label_end - 1) "\\" substr($0, label_end)
+      next
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'escaped primary-reference label delimiter' \
+  'is missing exact primary reference destination: https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   $0 == "| ID | Asset | Required property | Evidence |" { in_assets = 1; print; next }
   in_assets && $0 == "| --- | --- | --- | --- |" { in_assets = 0; next }
   { print }
@@ -1275,6 +1290,19 @@ expect_rejection 'list-contained canonical section' \
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '- Alternate contract:' \
+  '' \
+  '    ### Control owners' \
+  '    | ID | Accountable surface | Live verification work |' \
+  '    | --- | --- | --- |' \
+  '    | OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'list-continuation canonical section' \
+  'rendered list-contained headings are forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| OWN-CREDENTIALS \|/ {
@@ -1560,6 +1588,14 @@ expect_rejection 'alternate-marker security summary invariant' \
   'unexpected content in security summary invariant section'
 
 new_fixture
+summary="$test_root/docs/security/model.md"
+printf '%s\n' \
+  '' \
+  'Evidence: docs/security/does-not-exist.md:9999' >>"$summary"
+expect_rejection 'missing citation target in security summary' \
+  'citation target does not exist: docs/security/does-not-exist.md:9999'
+
+new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
@@ -1577,7 +1613,22 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  $0 == "These objectives specialize the accepted invariants in" && !changed {
+  $0 == "### Actors and realistic starting capabilities" && !changed {
+      print "Persist raw provider credentials in logs and public resources."
+      print ""
+      changed = 1
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'unexpected prose after security objectives' \
+  'unexpected content after canonical security objectives'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Actors and realistic starting capabilities" && !changed {
       print "11) Persist provider credentials in logs."
       print ""
       changed = 1

@@ -208,6 +208,18 @@ write_visible_markdown() {
         }
         return list_seen && candidate ~ /^#+([[:space:]]|$)/
     }
+    function has_deeply_indented_heading(line, leading_spaces, candidate) {
+        leading_spaces = 0
+        while (substr(line, leading_spaces + 1, 1) == " ") {
+            leading_spaces++
+        }
+        if (leading_spaces < 4 && substr(line, 1, 1) != "\t") {
+            return 0
+        }
+        candidate = line
+        sub(/^[[:space:]]+/, "", candidate)
+        return candidate ~ /^#+([[:space:]]|$)/
+    }
     function normalize_atx_heading(line, normalized, leading_spaces, hashes, content) {
         normalized = line
         leading_spaces = 0
@@ -257,7 +269,7 @@ write_visible_markdown() {
             print FILENAME ":" FNR ": rendered blockquotes are forbidden in verified Markdown" > "/dev/stderr"
             failed = 1
         }
-        if (has_list_contained_heading(line)) {
+        if (has_list_contained_heading(line) || has_deeply_indented_heading(line)) {
             print FILENAME ":" FNR ": rendered list-contained headings are forbidden in verified Markdown" > "/dev/stderr"
             failed = 1
         }
@@ -401,12 +413,42 @@ require_primary_reference() {
   required_destination=$1
   visible_file=$2
   LC_ALL=C awk -v required="$required_destination" '
+    function is_escaped(line, position, slash_count) {
+        slash_count = 0
+        position--
+        while (position > 0 && substr(line, position, 1) == "\\") {
+            slash_count++
+            position--
+        }
+        return slash_count % 2 == 1
+    }
+    function link_destination(line, label_end, closing_parenthesis) {
+        if (substr(line, 1, 3) != "- [") {
+            return ""
+        }
+        for (label_end = 4; label_end < length(line); label_end++) {
+            if (substr(line, label_end, 2) != "](" ||
+                is_escaped(line, label_end)) {
+                continue
+            }
+            closing_parenthesis = length(line)
+            while (closing_parenthesis > label_end &&
+                   substr(line, closing_parenthesis, 1) ~ /^[[:space:]]$/) {
+                closing_parenthesis--
+            }
+            if (substr(line, closing_parenthesis, 1) != ")" ||
+                is_escaped(line, closing_parenthesis)) {
+                return ""
+            }
+            return substr(line, label_end + 2,
+                closing_parenthesis - label_end - 2)
+        }
+        return ""
+    }
     $0 == "### Primary references" { in_references = 1; next }
     in_references && /^##+ / { exit }
-    in_references && /^- \[/ {
-        destination = $0
-        sub(/^.*\]\(/, "", destination)
-        sub(/\)[[:space:]]*$/, "", destination)
+    in_references {
+        destination = link_destination($0)
         if (destination == required) {
             found = 1
         }
@@ -851,7 +893,6 @@ $0 == "### Security objectives" {
         error("duplicate readable security objective section")
     }
     in_objectives = 1
-    list_started = 0
     list_done = 0
     next
 }
@@ -883,7 +924,6 @@ candidate ~ /^[1-9][0-9]*[.] / {
     current_indent = RLENGTH
     current_id = substr(candidate, 1, RLENGTH - 2)
     current_text = substr(candidate, RLENGTH + 1)
-    list_started = 1
     next
 }
 current_id != "" && is_continuation($0, current_indent) {
@@ -898,9 +938,7 @@ $0 == "" {
     next
 }
 list_done {
-    if (candidate ~ /^([1-9][0-9]*[.)]|[-+*]) /) {
-        error("unexpected list item after canonical security objectives")
-    }
+    error("unexpected content after canonical security objectives")
     next
 }
 {
@@ -2417,7 +2455,7 @@ END {
         exit 1
     }
 }
-' "$visible_model_file" >"$model_citations_file" ||
+' "$visible_model_file" "$visible_summary_file" >"$model_citations_file" ||
   fail 'readable model contains malformed documentation citation'
 
 cp "$model_citations_file" "$all_citations_file"
