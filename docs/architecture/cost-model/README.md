@@ -130,6 +130,15 @@ to decimal GB, adding 25% for service framing, and rounding up produces retained
 storage caps of 135/1,343 GB. Compression is unpriced headroom, and the
 qualification stream uses incompressible input.
 
+CloudWatch's pricing unit is labeled GB, but its official tier examples convert
+TB to billed GB with a factor of 1,024. The ingestion rows therefore multiply
+the 50/500 GiB log and 10/100 GiB trace caps by 50/500 and 10/100 AWS-priced GB,
+respectively; converting those quantities to decimal GB first would apply the
+binary-to-decimal factor twice. The operational wire and retained-storage caps
+remain decimal-byte envelopes and are rounded up before pricing, which is
+conservative against the binary-scaled billing unit. See the
+[CloudWatch pricing examples](https://aws.amazon.com/cloudwatch/pricing/).
+
 ALB limits use the maximum of the four AWS LCU dimensions. Small remains below
 one LCU at 20 new and 2,500 active TLS connections, 0.5 GB/hour, and 500
 billable rule evaluations/second. Target caps each dimension at four LCUs and
