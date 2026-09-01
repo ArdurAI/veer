@@ -1,7 +1,8 @@
 # ADR 0001: Alpha operational bounds
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-31
+- Accepted: 2026-09-01
 - Decision owners: ArdurAI maintainers
 - Scope: first operable alpha
 - Tracking issue: [#11](https://github.com/ArdurAI/veer/issues/11)
@@ -1005,11 +1006,11 @@ same recovery and operability bounds with total cost included.
 
 ## Review checklist
 
-- [ ] Architecture reviewers accept the single-region failure boundary.
-- [ ] Security reviewers accept the backup, key, credential, and residual-risk
+- [x] Architecture reviewers accept the single-region failure boundary.
+- [x] Security reviewers accept the backup, key, credential, and residual-risk
       boundaries.
-- [ ] Operators accept the SLO, RTO/RPO, retention, and qualification methods.
-- [ ] The cost worksheet verifies from a clean checkout and remains below both
+- [x] Operators accept the SLO, RTO/RPO, retention, and qualification methods.
+- [x] The cost worksheet verifies from a clean checkout and remains below both
       production ceilings.
-- [ ] Pricing sources, regions, dates, quantities, exclusions, and free-tier
+- [x] Pricing sources, regions, dates, quantities, exclusions, and free-tier
       treatment are explicit.
