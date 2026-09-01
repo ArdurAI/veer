@@ -71,6 +71,7 @@ does not contact AWS or read environment credentials.
 | Retained CloudWatch log storage, uncompressed plus framing | 135 GB | 1,343 GB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
+| Primary-region standard alarm metrics | 64 | 64 |
 | Stored archive ingress per 31-day month | 16 GB | 80 GB |
 | Archive objects written/month | 37,000 | 163,000 |
 | Normal S3 tier-1 archive requests, both regions | 111,000 | 489,000 |
@@ -159,9 +160,10 @@ GB in each region, because a 365-day retention interval can intersect 13 windows
 under boundary-concentrated traffic. The 9/52 million event limits include one
 record per provider mutation attempt. Worst-case audit packing uses 500 records
 per object to reserve 192 KiB for framing, compression expansion, and
-encryption. Audit and compact non-audit multiplicity, including both transitions
-for every non-interruptible cancellation, yields monthly caps of 37,000/163,000
-objects, 111,000/489,000 normal S3 requests across both regions, and
+encryption. Audit and compact non-audit multiplicity includes both transitions
+for every non-interruptible cancellation and three compact records for every
+synthetic write. It yields monthly maxima of 36,985/162,826 objects inside
+37,000/163,000 caps, 111,000/489,000 normal S3 requests across both regions, and
 148,000/652,000 normal KMS requests.
 
 Thirteen retained envelopes cap each region at 481,000/2,119,000 objects. A
@@ -208,6 +210,7 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | Public IPv4 | [AmazonVPC 20260831092232](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/20260831092232/us-east-1/index.json) | `4GQUNXTFWVSGPUZK` at USD 0.005/address-hour |
 | Data transfer | [AWSDataTransfer 20260831121448](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/20260831121448/us-east-1/index.json) | `HQEH3ZWJVT46JHRG` at USD 0.09/GB internet egress; `PNUBVW4CPC8XA46W` at USD 0.01/directional-GB cross-AZ; `XGXYRYWGNXSSEUVT` at USD 0.02/GB cross-region |
 | Telemetry | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | `S8QGXX5R2BKKMDSJ` at USD 0.50/GB log ingest; `GF9Q9S5QWW3RHMGQ` at USD 0.50/GB OTEL ingest; `6K9ADYQAHV5KX9KZ` at USD 0.03/GB-month; `KG586CTNGQ4VRZKZ` at USD 0.30/metric-month |
+| Primary alarms | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | Standard-resolution alarm metric `EVETVUGEN3MUTMXM` at USD 0.10/alarm-metric-month |
 | Recovery monitoring | [AmazonCloudWatch 20260831092148 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-west-2/index.json) | Synthetics `96EA6YQSXFE9MUK5` at USD 0.0012/run; logs `CWY7X4MZ4F3MP5SD` at USD 0.50/GB and `MN45SJANDTCPR9QA` at USD 0.03/GB-month; metrics `CN6TP6ZEVS58RK7M` at USD 0.30/month; alarm `SJTFAZNHSW2WVZB2` at USD 0.10/month |
 | Recovery canary compute | [AWSLambda 20260831092318 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/20260831092318/us-west-2/index.json) | Request `ZWHFK83WS2P4WZR6` at USD 0.0000002/request; tier-one duration `XCU6U9G4FCKZQWG9` at USD 0.0000166667/GB-second |
 | Primary object storage | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one PUT request `E9YHNFENF4XQBZR6` at USD 0.000005/request; tier-two GET request `ZWQ6Q48CRJXX4FXE` at USD 0.0000004/request |

@@ -125,8 +125,8 @@ an explicit quota response; they must not cause silent data loss.
 | API requests/second, steady, including synthetic | 1 | 5 | 25 |
 | API requests/second, 15-minute peak, including synthetic | 2 | 20 | 100 |
 | External synthetic API calls/minute, reserved | 0 | 2 | 2 |
-| Accepted desired-state mutations/minute, steady | 6 | 30 | 150 |
-| Accepted desired-state mutations/minute, 15-minute peak | 12 | 120 | 600 |
+| Accepted desired-state mutations/minute, steady, including synthetic | 6 | 31 | 151 |
+| Accepted desired-state mutations/minute, 15-minute peak, including synthetic | 12 | 121 | 601 |
 | New TLS connections/second | local | 20 | 100 |
 | Encoded server TLS handshake bytes/new connection, maximum | local | 8 KiB | 8 KiB |
 | Server TLS handshake bytes/month, GB | 0 | 14 | 70 |
@@ -155,11 +155,13 @@ an explicit quota response; they must not cause silent data loss.
 | NAT processed data/month, GB | 0 | 300 | 2,250 |
 | Cross-AZ directional transfer/month, GB | 0 | 200 | 2,000 |
 | Billable database surplus CPU credits/month, vCPU-hours | 0 | 2,976 | 0 |
+| Primary-region standard alarm metrics/month | local | 64 | 64 |
 | Audit events/month | 100,000 | 9,000,000 | 52,000,000 |
+| Compact non-audit archive records/month | 750,000 | 10,056,268 | 49,897,468 |
 | Archived audit and evidence bytes/31-day month, GB | 0.4 | 16 | 80 |
-| Archive objects written/month | 2,000 | 37,000 | 163,000 |
-| Archive S3 tier-1 requests/month, both regions | 6,000 | 111,000 | 489,000 |
-| Archive KMS requests/month, both regions | 8,000 | 148,000 | 652,000 |
+| Archive objects written/month | 10,000 | 37,000 | 163,000 |
+| Archive S3 tier-1 requests/month, both regions | 30,000 | 111,000 | 489,000 |
+| Archive KMS requests/month, both regions | 40,000 | 148,000 | 652,000 |
 | Normal archive cross-region transfer/month, GB | 0 | 16 | 80 |
 | Retained archive objects/region, maximum | local | 481,000 | 2,119,000 |
 | Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,331,000 each |
@@ -183,6 +185,8 @@ load claim; its monthly audit and archive limits still apply. Zero billable queu
 units means the local backend creates no cloud request charge, not that it
 processes no messages. The developer profile has no availability commitment and
 must not be used to claim HA or disaster-recovery evidence.
+Its archive uses the same audit and compact non-audit streams with local request
+counters, not S3 or KMS charges.
 
 Pending depth counts ready, delayed, in-flight, retrying, and quarantined work.
 Five percent of queue capacity is reserved for cancellation, deletion, and
@@ -296,7 +300,8 @@ target result cannot substitute for the small profile:
    remain within 100/1,000. The resulting required audit counts are 262,667 small
    and 1,633,547 target, before separately labeled injected-fault events. Every
    raw provider mutation attempt contributes its required per-attempt audit
-   record.
+   record. The 24-hour compact non-audit archive oracle is 324,388 small and
+   1,609,588 target records, including 4,320 records from synthetic writes.
 3. In an isolated accounting environment, force queue retries and redeliveries,
    then hold an empty queue under long polling. Drive each queue-unit partition
    through 80%, 90%, and 100% with a deterministic fake and verify alert, poll
@@ -388,9 +393,10 @@ fake that must finish safely before reporting canceled. Successful mutations
 are 20% creates, 60% updates, and 20% deletes, selected across Workspace,
 Environment, Application, Component, Policy, and ProviderConnection resources
 at 5%, 15%, 20%, 40%, 15%, and 5% respectively. The steady mix therefore
-produces the stated 30 and 150 accepted mutations per minute for the small and
-target profiles; conflicts, replays, and rejections cannot be reclassified as
-cheap reads.
+produces 30 and 150 generated accepted mutations per minute for the small and
+target profiles. One synthetic no-op write per minute raises the admission
+ceilings to 31/151 steady and 121/601 peak without causing a provider mutation;
+conflicts, replays, and rejections cannot be reclassified as cheap reads.
 
 The checked-in seed assigns every generated resource representation, mutation
 body, and read response page to fixed serialized-size buckets: 90% at 1 KiB, 8%
@@ -643,7 +649,7 @@ security audit event.
 Canonical audit events are at most 16 KiB before archive compression and must
 average no more than 1,000 bytes at the full event count. This allocates at most
 9 GB/month small and 52 GB/month target to audit records. After the compact
-non-audit records below, 3.03 GB and 8.09 GB remain inside the combined 16 GB and
+non-audit records below, 2.98 GB and 8.04 GB remain inside the combined 16 GB and
 80 GB archive-ingress caps for recovery evidence and framing. The archive
 writer measures actual stored object bytes, including framing and encryption
 overhead. A 365-day retention interval can intersect 13 fixed 31-day accounting
@@ -660,11 +666,13 @@ directly to `canceled`; every non-interruptible cancellation is conservatively
 budgeted for both `cancel-pending` and terminal `canceled`, with the odd extra
 cancellation assigned to that half. The 1,167,335/5,854,535 monthly
 cancellations therefore add 583,668/2,927,268 transitions beyond the former
-40-record-per-cycle baseline, producing 9,922,348 small and 49,763,548 target
-non-audit records. Their canonical archive representation is capped at 4 KiB
-and must average at most 400 bytes, consuming at most 3.97 GB and 19.91 GB inside
-the non-audit byte allocations. Larger evidence is chunked and every chunk
-counts as another record.
+40-record-per-cycle baseline. Each of the 44,640 synthetic writes adds a compact
+plan, authorization decision, and operation record. The complete workload
+therefore produces 10,056,268 small and 49,897,468 target non-audit records.
+Their canonical archive representation is capped at 4 KiB and must average at
+most 400 bytes, consuming at most 4.03 GB and 19.96 GB inside the non-audit byte
+allocations. Larger evidence is chunked and every chunk counts as another
+record.
 
 The archive writer fills an object until it contains 1,000 records, the next
 record would exceed the 8 MiB compressed-object limit, or the oldest buffered
@@ -679,14 +687,21 @@ with buffering, the archive path completes within 19 minutes, before the
 and fails qualification before the 30-minute hard bound.
 
 At 1,000 records per object plus no more than 4,464 timer flushes per stream,
-the fixed non-audit workload requires at most 14,387 and 54,228 objects. Audit
+the fixed non-audit workload requires at most 14,521 and 54,362 objects. Audit
 packing reserves 192 KiB of every 8 MiB object for framing, compression
 expansion, and encryption, so at most 500 maximum-size 16 KiB records share an
 object. Including timer flushes, audit requires at most 22,464 and 108,464
-objects. The combined worst cases are therefore 36,851 and 162,692, fitting
+objects. The combined worst cases are therefore 36,985 and 162,826, fitting
 monthly caps of 37,000 and 163,000. Each profile budgets three S3 tier-1 requests
 and four KMS requests per monthly object across primary write, recovery
 replication, retries, manifest/list work, and validation.
+
+The developer profile reserves 0.1 GB and 100,000 records for audit plus 0.3 GB
+and 750,000 records for compact non-audit evidence. Dense packing needs at most
+200 and 750 objects respectively; adding one 4,464-object timer-flush allowance
+for each of the two streams yields 9,878 objects inside its 10,000-object local
+cap. Its 30,000 request and 40,000 envelope-operation counters preserve the same
+three/four-per-object qualification contract without creating cloud charges.
 
 Thirteen retained envelopes contain at most 481,000/2,119,000 objects per
 region. A full reseed reserves at least 10% retry headroom, rounding the small
@@ -713,10 +728,10 @@ resources, and `us-west-2` recovery storage.
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 971.97 | USD 1,000.00 | USD 28.03 |
-| Target-scale qualification | USD 2,636.31 | USD 2,650.00 | USD 13.69 |
+| Small production | USD 978.37 | USD 1,000.00 | USD 21.63 |
+| Target-scale qualification | USD 2,642.71 | USD 2,650.00 | USD 7.29 |
 
-The target reference consumes 99.48% of its ceiling after conservatively
+The target reference consumes 99.72% of its ceiling after conservatively
 pricing all retained backup data, the external synthetic, and request
 allowances. No additional recurring target resource may be added without
 reducing another input or approving a replacement ADR.
@@ -737,6 +752,13 @@ the exercise continues.
 - Budget alerts fire at 50%, 80%, 90%, and 100% of the selected profile ceiling.
   Daily anomaly detection must identify an expected month-end run rate above
   the ceiling.
+- Each production profile prices 64 primary-region standard alarm metrics:
+  8 API/SLO, 10 queue/admission, 8 reconciliation/provider, 8 database/backup,
+  10 network/ingress, 10 telemetry/archive, 6 recovery/security/secrets, and
+  4 EKS/budget/cost. This budget counts every metric evaluation used by a
+  standard alarm, including repeated thresholds; the external recovery canary
+  alarm is priced separately. A required alert that cannot fit this allocation
+  requires a replacement worksheet rather than silent omission.
 - The Kubernetes version is upgraded before extended support. At current EKS
   rates, allowing one cluster to enter extended support adds USD 372 per
   744-hour month; an alert fires 60 days before the transition.
