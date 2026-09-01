@@ -119,6 +119,7 @@ an explicit quota response; they must not cause silent data loss.
 | Audit events/month | 100,000 | 2,000,000 | 20,000,000 |
 | Relational data, provisioned GiB | 5 | 50 | 500 |
 | Uncompressed platform logs/month, GiB | 5 | 50 | 500 |
+| Accepted trace data/month, GiB | 1 | 10 | 100 |
 
 The developer profile is a single-machine functional environment. It has no
 availability commitment and must not be used to claim HA or disaster-recovery
@@ -153,7 +154,7 @@ environments have measurement coverage but no SLO.
 | API read latency | p95 <= 300 ms; p99 <= 750 ms | Server-side duration from accepted request to complete response under the profile's steady load, excluding client network time. |
 | API write acceptance latency | p95 <= 500 ms; p99 <= 1 s | Server-side duration through durable desired-state, outbox, and required audit commit. Provider execution is asynchronous and excluded. |
 | Planning start delay | 99% <= 30 s; 99.9% <= 2 min | Time from successful write commit to a worker acquiring the current generation. |
-| Observation freshness | 95% <= 5 min; 99% <= 15 min | Age of the newest successful provider observation for resources not rate-limited or terminally failed. |
+| Observation freshness | 95% <= 5 min; 99% <= 15 min | Age of the newest successful provider observation for every non-deleted resource that requires observation. Rate-limited and terminally failed resources remain in the denominator; a resource with no successful observation is aged from activation. |
 | Audit publication delay | 99.9% <= 60 s | Time from security-relevant commit to availability in the append-only audit query/export path. Missing required audit events are a correctness failure, not error-budget consumption. |
 | Worker recovery | 99% of abandoned leases reacquired <= 2 min | Time from lease expiry or process loss to fenced ownership by a replacement worker. |
 | Cancellation acknowledgment | 99% <= 30 s | Time from accepted cancellation request to a persisted canceled or cancel-pending condition. Provider operations that cannot be interrupted must be identified explicitly. |
@@ -220,7 +221,7 @@ demonstrated service claims.
 | Idempotency records | 24 hours minimum | None | A caller cannot rely on replay safety after expiry. |
 | Database point-in-time recovery | 35 days in primary region | 7 days replicated in recovery region | Monthly restore verification is required. |
 | Platform logs | 14 days small; 30 days target | None by default | Security events belong in the audit stream, not ordinary logs. |
-| Traces | 7 days | None by default | Head and tail sampling must be bounded and must redact sensitive attributes. |
+| Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
 | High-resolution metrics | 15 days | 13 months for SLO rollups | Workspace, resource ID, request ID, and provider object ID are forbidden metric labels. |
 
 Issue [#14](https://github.com/ArdurAI/veer/issues/14) owns data classification
@@ -237,8 +238,8 @@ uses 730 hours/month, on-demand public rates, `us-east-1` primary resources, and
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 596.86 | USD 750.00 | USD 153.14 |
-| Target-scale qualification | USD 2,086.33 | USD 2,500.00 | USD 413.67 |
+| Small production | USD 610.96 | USD 750.00 | USD 139.04 |
+| Target-scale qualification | USD 2,193.73 | USD 2,500.00 | USD 306.27 |
 
 These figures cover the Veer control plane only. They exclude taxes, support,
 discount programs, CI minutes, developer workstations, domain registration,
@@ -265,6 +266,8 @@ the exercise continues.
 - Compute, worker concurrency, provider request rates, queue depth, logs, traces,
   metric cardinality, backup retention, and object storage all have explicit
   upper bounds.
+- Trace admission enforces the 10 GiB/month small and 100 GiB/month target
+  ceilings. Dropped spans and projected month-end volume are observable.
 - High-cardinality identifiers are logs or traces, never metric dimensions.
 - Nodes stay private. S3 gateway endpoints avoid NAT processing for backup and
   artifact traffic; interface endpoints require a before/after cost comparison.
