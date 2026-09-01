@@ -5,6 +5,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../.." && pwd)
 docs_root=$(CDPATH='' cd -- "$repo_root/docs" && pwd -P)
 model_file="$script_dir/threat-model.md"
+model_inventory_file="$script_dir/model-inventory.tsv"
 threat_file="$script_dir/threats.tsv"
 class_file="$script_dir/data-classes.tsv"
 summary_file="$script_dir/model.md"
@@ -68,37 +69,87 @@ write_visible_markdown() {
         }
         return slash_count % 2 == 1
     }
-    function strip_comments(line, character_index, marker, visible, character, run_length) {
+    function spaces(count, value, space_index) {
+        value = ""
+        for (space_index = 0; space_index < count; space_index++) {
+            value = value " "
+        }
+        return value
+    }
+    function matching_tick_end(line, opening_index, opening_length,
+                               scan_index, run_length) {
+        scan_index = opening_index + opening_length
+        while (scan_index <= length(line)) {
+            if (substr(line, scan_index, 1) != "`") {
+                scan_index++
+                continue
+            }
+            run_length = 1
+            while (substr(line, scan_index + run_length, 1) == "`") {
+                run_length++
+            }
+            if (run_length == opening_length) {
+                return scan_index + run_length - 1
+            }
+            scan_index += run_length
+        }
+        return 0
+    }
+    function rendered_contract_text(line, character_index, visible, character,
+                                    run_length, closing_index) {
         visible = ""
         character_index = 1
         while (character_index <= length(line)) {
             if (in_comment) {
-                marker = index(substr(line, character_index), "-->")
-                if (!marker) {
-                    return visible
+                if (substr(line, character_index, 3) == "-->") {
+                    visible = visible "   "
+                    character_index += 3
+                    in_comment = 0
+                } else {
+                    visible = visible " "
+                    character_index++
                 }
-                character_index += marker + 2
-                in_comment = 0
                 continue
             }
-            if (!inline_tick_count && substr(line, character_index, 4) == "<!--") {
+            character = substr(line, character_index, 1)
+            if (inline_tick_count) {
+                if (character == "`") {
+                    run_length = 1
+                    while (substr(line, character_index + run_length, 1) == "`") {
+                        run_length++
+                    }
+                    visible = visible spaces(run_length)
+                    if (run_length == inline_tick_count) {
+                        inline_tick_count = 0
+                    }
+                    character_index += run_length
+                } else {
+                    visible = visible " "
+                    character_index++
+                }
+                continue
+            }
+            if (substr(line, character_index, 4) == "<!--") {
+                visible = visible "    "
                 in_comment = 1
                 character_index += 4
                 continue
             }
-            character = substr(line, character_index, 1)
             if (character == "`" && !is_escaped(line, character_index)) {
                 run_length = 1
                 while (substr(line, character_index + run_length, 1) == "`") {
                     run_length++
                 }
-                visible = visible substr(line, character_index, run_length)
-                if (!inline_tick_count) {
+                closing_index = matching_tick_end(line, character_index, run_length)
+                if (closing_index) {
+                    visible = visible substr(line, character_index,
+                        closing_index - character_index + 1)
+                    character_index = closing_index + 1
+                } else {
+                    visible = visible spaces(run_length)
                     inline_tick_count = run_length
-                } else if (run_length == inline_tick_count) {
-                    inline_tick_count = 0
+                    character_index += run_length
                 }
-                character_index += run_length
                 continue
             }
             visible = visible character
@@ -112,6 +163,26 @@ write_visible_markdown() {
     }
     function has_entity_reference(line) {
         return line ~ /&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/
+    }
+    function has_list_contained_heading(line, candidate, list_seen, matched_length) {
+        candidate = line
+        sub(/^[[:space:]]*/, "", candidate)
+        while (candidate != "") {
+            if (match(candidate, /^>[[:space:]]*/)) {
+                matched_length = RLENGTH
+            } else if (match(candidate, /^[-+*][[:space:]]+/)) {
+                matched_length = RLENGTH
+                list_seen = 1
+            } else if (match(candidate, /^[0-9]+[.)][[:space:]]+/)) {
+                matched_length = RLENGTH
+                list_seen = 1
+            } else {
+                break
+            }
+            candidate = substr(candidate, matched_length + 1)
+            sub(/^[[:space:]]*/, "", candidate)
+        }
+        return list_seen && candidate ~ /^#+([[:space:]]|$)/
     }
     function normalize_atx_heading(line, normalized, leading_spaces, hashes, content) {
         normalized = line
@@ -152,15 +223,13 @@ write_visible_markdown() {
             print ""
             next
         }
-        inline_was_open = inline_tick_count
-        line = strip_comments(line)
-        if (!inline_tick_count && fence_transition(line)) {
-            inline_tick_count = 0
-            print ""
-            next
-        }
-        if (!inline_was_open && line ~ /^[[:space:]]*>/) {
+        line = rendered_contract_text(line)
+        if (line ~ /^[[:space:]]*>/) {
             print FILENAME ":" FNR ": rendered blockquotes are forbidden in verified Markdown" > "/dev/stderr"
+            failed = 1
+        }
+        if (has_list_contained_heading(line)) {
+            print FILENAME ":" FNR ": rendered list-contained headings are forbidden in verified Markdown" > "/dev/stderr"
             failed = 1
         }
         if (has_rendered_raw_html(line)) {
@@ -310,6 +379,7 @@ require_primary_reference() {
 
 for checked_file in \
   "$model_file" \
+  "$model_inventory_file" \
   "$threat_file" \
   "$class_file" \
   "$summary_file" \
@@ -529,22 +599,28 @@ require_markdown_link \
   "$summary_file" \
   "$visible_summary_file"
 require_markdown_link \
-  "\`threats.tsv\`" \
+  'model-inventory.tsv' \
+  'model-inventory.tsv' \
+  "$model_file" \
+  "$visible_model_file"
+require_markdown_link \
+  'threats.tsv' \
   'threats.tsv' \
   "$model_file" \
   "$visible_model_file"
 require_markdown_link \
-  "\`data-classes.tsv\`" \
+  'data-classes.tsv' \
   'data-classes.tsv' \
   "$model_file" \
   "$visible_model_file"
 require_markdown_link \
-  "\`issue-inventory.txt\`" \
+  'issue-inventory.txt' \
   'issue-inventory.txt' \
   "$model_file" \
   "$visible_model_file"
 
-LC_ALL=C awk -F '\t' -v issue_inventory="$issue_inventory_file" '
+LC_ALL=C awk -F '\t' -v issue_inventory="$issue_inventory_file" \
+  -v model_inventory="$model_inventory_file" '
 function trim(value) {
     sub(/^[[:space:]]+/, "", value)
     sub(/[[:space:]]+$/, "", value)
@@ -552,6 +628,10 @@ function trim(value) {
 }
 function error(message) {
     print FILENAME ":" FNR ": " message > "/dev/stderr"
+    failed = 1
+}
+function inventory_error(message) {
+    print model_inventory ":" inventory_line_number ": " message > "/dev/stderr"
     failed = 1
 }
 function valid_links(value, record_id, role, values, count, link_index, issue_key) {
@@ -810,6 +890,119 @@ BEGIN {
     for (required_threat_index = 1; required_threat_index <= 21; required_threat_index++) {
         required_threat[sprintf("TM-%03d", required_threat_index)] = 1
     }
+    inventory_line_number = 1
+    inventory_status = getline inventory_line < model_inventory
+    expected_inventory_header = "kind\tid_or_name\tdescription\trequirement_or_exclusion\taccountability_or_evidence"
+    if (inventory_status <= 0) {
+        inventory_error("model inventory is empty or unreadable")
+    } else if (inventory_line != expected_inventory_header) {
+        inventory_error("unexpected model inventory header")
+    }
+    while ((inventory_status = getline inventory_line < model_inventory) > 0) {
+        inventory_line_number++
+        inventory_field_count = split(inventory_line, inventory_fields, "\t")
+        if (inventory_field_count != 5) {
+            inventory_error("expected 5 tab-separated model inventory fields")
+            continue
+        }
+        inventory_kind = trim(inventory_fields[1])
+        inventory_id = trim(inventory_fields[2])
+        inventory_description_value = trim(inventory_fields[3])
+        inventory_requirement_value = trim(inventory_fields[4])
+        inventory_accountability_value = trim(inventory_fields[5])
+        if (inventory_kind == "" || inventory_id == "" ||
+            inventory_description_value == "" || inventory_requirement_value == "" ||
+            inventory_accountability_value == "") {
+            inventory_error("model inventory fields must be nonempty")
+            continue
+        }
+        inventory_key = inventory_kind SUBSEP inventory_id
+        if (model_inventory_seen[inventory_key]++) {
+            inventory_error("duplicate model inventory row " inventory_kind "/" inventory_id)
+        }
+        inventory_kind_rows[inventory_kind]++
+        model_inventory_description[inventory_key] = inventory_description_value
+        model_inventory_requirement[inventory_key] = inventory_requirement_value
+        model_inventory_accountability[inventory_key] = inventory_accountability_value
+        if (inventory_kind == "component") {
+            if (!(inventory_id in required_component)) {
+                inventory_error("unexpected model inventory component " inventory_id)
+            }
+            if (inventory_requirement_value != "-" ||
+                !has_complete_citation(inventory_accountability_value)) {
+                inventory_error("invalid model inventory component contract " inventory_id)
+            }
+        } else if (inventory_kind == "asset") {
+            if (!(inventory_id in required_asset)) {
+                inventory_error("unexpected model inventory asset " inventory_id)
+            }
+            if (inventory_requirement_value == "-" ||
+                !has_complete_citation(inventory_accountability_value)) {
+                inventory_error("invalid model inventory asset contract " inventory_id)
+            }
+        } else if (inventory_kind == "attacker") {
+            if (!(inventory_id in required_attacker)) {
+                inventory_error("unexpected model inventory attacker " inventory_id)
+            }
+            if (inventory_requirement_value == "-" || inventory_accountability_value != "-") {
+                inventory_error("invalid model inventory attacker contract " inventory_id)
+            }
+        } else if (inventory_kind == "boundary") {
+            if (!(inventory_id in required_boundary)) {
+                inventory_error("unexpected model inventory boundary " inventory_id)
+            }
+            if (inventory_requirement_value == "-" ||
+                !(inventory_accountability_value in required_owner)) {
+                inventory_error("invalid model inventory boundary contract " inventory_id)
+            }
+        } else if (inventory_kind == "owner") {
+            if (!(inventory_id in required_owner)) {
+                inventory_error("unexpected model inventory owner " inventory_id)
+            }
+            if (inventory_requirement_value != "-" ||
+                !valid_issue_work(inventory_accountability_value, "", "")) {
+                inventory_error("invalid model inventory owner contract " inventory_id)
+            }
+        } else {
+            inventory_error("unexpected model inventory kind " inventory_kind)
+        }
+    }
+    if (inventory_status < 0) {
+        inventory_error("cannot read model inventory")
+    }
+    close(model_inventory)
+    if (inventory_kind_rows["component"] != required_component_count ||
+        inventory_kind_rows["asset"] != required_asset_count ||
+        inventory_kind_rows["attacker"] != required_attacker_count ||
+        inventory_kind_rows["boundary"] != required_boundary_count ||
+        inventory_kind_rows["owner"] != required_owner_count) {
+        inventory_error("model inventory kind counts do not match the canonical baseline")
+    }
+    for (inventory_required_id in required_component) {
+        if (!("component" SUBSEP inventory_required_id in model_inventory_seen)) {
+            inventory_error("missing model inventory component " inventory_required_id)
+        }
+    }
+    for (inventory_required_id in required_asset) {
+        if (!("asset" SUBSEP inventory_required_id in model_inventory_seen)) {
+            inventory_error("missing model inventory asset " inventory_required_id)
+        }
+    }
+    for (inventory_required_id in required_attacker) {
+        if (!("attacker" SUBSEP inventory_required_id in model_inventory_seen)) {
+            inventory_error("missing model inventory attacker " inventory_required_id)
+        }
+    }
+    for (inventory_required_id in required_boundary) {
+        if (!("boundary" SUBSEP inventory_required_id in model_inventory_seen)) {
+            inventory_error("missing model inventory boundary " inventory_required_id)
+        }
+    }
+    for (inventory_required_id in required_owner) {
+        if (!("owner" SUBSEP inventory_required_id in model_inventory_seen)) {
+            inventory_error("missing model inventory owner " inventory_required_id)
+        }
+    }
 }
 FNR == NR {
     if ($0 ~ /^##+ /) {
@@ -946,6 +1139,13 @@ FNR == NR {
             error("duplicate canonical component " component_name)
         }
         component_rows++
+        inventory_key = "component" SUBSEP component_name
+        if (trim(cells[3]) != model_inventory_description[inventory_key]) {
+            error("canonical component description does not match model inventory: " component_name)
+        }
+        if (trim(cells[4]) != model_inventory_accountability[inventory_key]) {
+            error("canonical component evidence does not match model inventory: " component_name)
+        }
         if (!has_complete_citation(trim(cells[4]))) {
             error("component row lacks a complete source citation")
         }
@@ -968,6 +1168,16 @@ FNR == NR {
             error("duplicate protected-asset row " asset_id)
         }
         asset_rows++
+        inventory_key = "asset" SUBSEP asset_id
+        if (trim(cells[3]) != model_inventory_description[inventory_key]) {
+            error("canonical asset description does not match model inventory: " asset_id)
+        }
+        if (trim(cells[4]) != model_inventory_requirement[inventory_key]) {
+            error("canonical asset required property does not match model inventory: " asset_id)
+        }
+        if (trim(cells[5]) != model_inventory_accountability[inventory_key]) {
+            error("canonical asset evidence does not match model inventory: " asset_id)
+        }
         if (!has_complete_citation(trim(cells[5]))) {
             error("protected asset lacks a complete source citation: " asset_id)
         }
@@ -991,6 +1201,13 @@ FNR == NR {
             error("duplicate attacker row " attacker_id)
         }
         attacker_rows++
+        inventory_key = "attacker" SUBSEP attacker_id
+        if (trim(cells[3]) != model_inventory_description[inventory_key]) {
+            error("canonical attacker capability does not match model inventory: " attacker_id)
+        }
+        if (trim(cells[4]) != model_inventory_requirement[inventory_key]) {
+            error("canonical attacker exclusion does not match model inventory: " attacker_id)
+        }
         next
     }
     if (table == "boundaries" && $0 ~ /^\| TB-[0-9][0-9] \|/) {
@@ -1011,6 +1228,16 @@ FNR == NR {
         }
         boundary_rows++
         boundary_owner[boundary_id] = trim(cells[5])
+        inventory_key = "boundary" SUBSEP boundary_id
+        if (trim(cells[3]) != model_inventory_description[inventory_key]) {
+            error("canonical boundary crossing does not match model inventory: " boundary_id)
+        }
+        if (trim(cells[4]) != model_inventory_requirement[inventory_key]) {
+            error("canonical boundary enforcement does not match model inventory: " boundary_id)
+        }
+        if (trim(cells[5]) != model_inventory_accountability[inventory_key]) {
+            error("canonical boundary owner does not match model inventory: " boundary_id)
+        }
         next
     }
     if (table == "owners" && $0 ~ /^\| OWN-[A-Z]+(-[A-Z]+)* \|/) {
@@ -1030,6 +1257,13 @@ FNR == NR {
             error("duplicate control-owner row " owner_id)
         }
         owner_rows++
+        inventory_key = "owner" SUBSEP owner_id
+        if (trim(cells[3]) != model_inventory_description[inventory_key]) {
+            error("canonical owner surface does not match model inventory: " owner_id)
+        }
+        if (trim(cells[4]) != model_inventory_accountability[inventory_key]) {
+            error("canonical owner accountability does not match model inventory: " owner_id)
+        }
         if (!valid_issue_work(trim(cells[4]), "", "")) {
             error("invalid live verification work for control owner " owner_id)
         }

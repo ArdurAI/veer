@@ -52,6 +52,27 @@ rewrite_threat_field() {
   mv "$rewritten" "$ledger"
 }
 
+rewrite_model_inventory_text() {
+  target=$1
+  replacement=$2
+  inventory="$test_root/docs/security/model-inventory.tsv"
+  rewritten="$test_root/model-inventory.tsv"
+
+  LC_ALL=C awk -v target="$target" -v replacement="$replacement" '
+    {
+        position = index($0, target)
+        if (position) {
+            $0 = substr($0, 1, position - 1) replacement \
+                substr($0, position + length(target))
+            changed = 1
+        }
+        print
+    }
+    END { exit changed ? 0 : 1 }
+  ' "$inventory" >"$rewritten" || fail "model inventory fixture target was not found: $target"
+  mv "$rewritten" "$inventory"
+}
+
 escape_required_link() {
   checked_file=$1
   required_link=$2
@@ -218,6 +239,9 @@ LC_ALL=C awk '
   { print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
+rewrite_model_inventory_text \
+  'docs/architecture/overview.md:5-24' \
+  'docs/alias/overview.md:5-24'
 expect_rejection 'citation through an intermediate symbolic link' \
   'citation path contains a symbolic link: docs/alias/overview.md:5-24'
 
@@ -231,6 +255,9 @@ LC_ALL=C awk '
   { print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
+rewrite_model_inventory_text \
+  'docs/architecture/overview.md:5-24' \
+  'docs/architecture/overview.md:5-24%20bogus'
 expect_rejection 'documentation citation with a noncanonical suffix' \
   'readable model contains malformed documentation citation'
 
@@ -1102,21 +1129,27 @@ expect_rejection 'escaped formal-model reference' \
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
-escape_required_link "$model" "[\`threats.tsv\`](threats.tsv)"
+escape_required_link "$model" '[model-inventory.tsv](model-inventory.tsv)'
+expect_rejection 'escaped model-inventory reference' \
+  'is missing unescaped Markdown link: [model-inventory.tsv](model-inventory.tsv)'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+escape_required_link "$model" '[threats.tsv](threats.tsv)'
 expect_rejection 'escaped threat-ledger reference' \
-  "is missing unescaped Markdown link: [\`threats.tsv\`](threats.tsv)"
+  'is missing unescaped Markdown link: [threats.tsv](threats.tsv)'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
-escape_required_link "$model" "[\`data-classes.tsv\`](data-classes.tsv)"
+escape_required_link "$model" '[data-classes.tsv](data-classes.tsv)'
 expect_rejection 'escaped data-class-ledger reference' \
-  "is missing unescaped Markdown link: [\`data-classes.tsv\`](data-classes.tsv)"
+  'is missing unescaped Markdown link: [data-classes.tsv](data-classes.tsv)'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
-escape_required_link "$model" "[\`issue-inventory.txt\`](issue-inventory.txt)"
+escape_required_link "$model" '[issue-inventory.txt](issue-inventory.txt)'
 expect_rejection 'escaped issue-inventory reference' \
-  "is missing unescaped Markdown link: [\`issue-inventory.txt\`](issue-inventory.txt)"
+  'is missing unescaped Markdown link: [issue-inventory.txt](issue-inventory.txt)'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -1185,6 +1218,18 @@ expect_rejection 'fence marker inside multiline inline code cannot hide a canoni
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Control owners" { print "``" }
+  $0 == "### Workspace isolation assumptions" { print "``" }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'canonical section wrapped in multiline inline code' \
+  'is missing visible heading: ### Control owners'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
 printf '%s\n' \
   '' \
   'Issue &#35;9999 is visible work.' >>"$model"
@@ -1201,6 +1246,91 @@ printf '%s\n' \
   '> | OWN-FAKE | Conflicting contract | Issue #9999 |' >>"$model"
 expect_rejection 'blockquote-contained canonical section' \
   'rendered blockquotes are forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '- ### Control owners' \
+  '  | ID | Accountable surface | Live verification work |' \
+  '  | --- | --- | --- |' \
+  '  | OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'list-contained canonical section' \
+  'rendered list-contained headings are forbidden in verified Markdown'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| OWN-CREDENTIALS \|/ {
+      sub(/Issues #25, #39, #45, and #52 \|$/, "Issue #14 |")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'owner verification work redirected to another surface' \
+  'canonical owner accountability does not match model inventory: OWN-CREDENTIALS'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| A-03 \|/ {
+      sub(/Confidentiality, minimum scope and lifetime, revocability, and non-serialization/, "Plaintext credentials may be serialized and retained")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'weakened protected-asset property' \
+  'canonical asset required property does not match model inventory: A-03'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| API and GitOps edge \|/ {
+      sub(/Bound request size and destination, authenticate, authorize, validate, admit, and atomically record accepted intent/, "Accept unbounded unauthenticated requests")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'changed canonical component responsibility' \
+  'canonical component description does not match model inventory: API and GitOps edge'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| ACT-NET \|/ {
+      sub(/Valid Veer principal, internal network identity, database access, provider credential, or CI authority/, "Valid Veer principal and provider administrator authority")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'changed canonical attacker exclusion' \
+  'canonical attacker exclusion does not match model inventory: ACT-NET'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| TB-06 \|/ {
+      sub(/Connection ownership, recipient binding, minimum duration\/scope, no caller credential, memory-only handling, refresh\/revocation, and canary tests/, "No credential boundary enforcement")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'changed canonical boundary enforcement' \
+  'canonical boundary enforcement does not match model inventory: TB-06'
+
+new_fixture
+inventory="$test_root/docs/security/model-inventory.tsv"
+rewritten="$test_root/model-inventory.tsv"
+LC_ALL=C awk -F '\t' '!($1 == "asset" && $2 == "A-01") { print }' \
+  "$inventory" >"$rewritten"
+mv "$rewritten" "$inventory"
+expect_rejection 'contracted machine-readable model inventory' \
+  'missing model inventory asset A-01'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"

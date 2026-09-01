@@ -16,10 +16,12 @@ on realistic capability gain, impact, reachability, and remaining controls.
 
 The architecture input was resolved from `main` at
 `108f8e846710f19e156797346fe4a16db6331c34`. This document becomes authoritative
-at its own merge commit. The machine-readable scenario and handling contracts
-are [`threats.tsv`](threats.tsv) and
-[`data-classes.tsv`](data-classes.tsv); [`verify.sh`](verify.sh) fails when their
-required coverage, ownership, or links drift.
+at its own merge commit. The machine-readable canonical inventory, scenario,
+and handling contracts are [model-inventory.tsv](model-inventory.tsv),
+[threats.tsv](threats.tsv), and [data-classes.tsv](data-classes.tsv);
+[`verify.sh`](verify.sh) fails when their required coverage, semantics,
+ownership, or links drift. The inventory binds each readable component, asset,
+attacker, trust-boundary, and control-owner field to one compact review surface.
 
 ### Supported deployment and workflow boundary
 
@@ -250,7 +252,7 @@ evidence. Until they pass, this flow is a requirement, not a security claim.
 ### Data classification
 
 The complete handling contract is in
-[`data-classes.tsv`](data-classes.tsv). A value inherits the most restrictive
+[data-classes.tsv](data-classes.tsv). A value inherits the most restrictive
 applicable class. Derived data, copies, exports, backups, and error text retain
 the source classification; encoding, hashing, or moving data does not lower it.
 
@@ -316,7 +318,7 @@ review; a reduction must preserve legal, recovery, and audit evidence.
 
 ## Attack surface, mitigations, and attacker stories
 
-The authoritative row contract is [`threats.tsv`](threats.tsv). Every row is a
+The authoritative row contract is [threats.tsv](threats.tsv). Every row is a
 hypothesis to drive a control and verification issue; no row is a claim that
 the current repository contains an exploitable implementation. The `assets`,
 `boundary`, and `attackers` ledger fields use `|`-separated stable-ID sets; the
@@ -378,7 +380,7 @@ The review must:
 1. update the architecture/effective-resource facts and source citations;
 2. add, change, or retire ledger rows without deleting historical Git evidence;
 3. live-verify every referenced Veer issue and update the reviewed offline
-   [`issue-inventory.txt`](issue-inventory.txt) before linking it from either
+   [issue-inventory.txt](issue-inventory.txt) before linking it from any
    ledger;
 4. link each high/critical scenario to an owned mitigation and live verification;
 5. update data handling for every derived copy, export, backup, log, and error;

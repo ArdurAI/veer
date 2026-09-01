@@ -75,7 +75,8 @@ The [formal threat model and data classification](threat-model.md) defines the
 alpha actors, assets, trust boundaries, abuse cases, credential blast radius,
 workspace isolation assumptions, handling rules, owners, residual risks, and
 unsupported deployment modes. Its machine-checked ledgers are
-[`threats.tsv`](threats.tsv) and [`data-classes.tsv`](data-classes.tsv).
+[model-inventory.tsv](model-inventory.tsv), [threats.tsv](threats.tsv), and
+[data-classes.tsv](data-classes.tsv).
 
 Security claims require tests or operational evidence. A configuration being
 intended as secure is not evidence that the effective system is secure. Runtime
