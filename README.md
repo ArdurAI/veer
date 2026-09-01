@@ -1,0 +1,63 @@
+# Veer
+
+Veer is a cloud-native application delivery control plane for teams operating
+workloads across cloud infrastructure and Kubernetes.
+
+It provides a consistent, declarative model for environments, applications,
+infrastructure, identity, policy, and day-two operations. Provider-specific
+details remain behind adapters so application teams can work with stable
+platform concepts while operators retain control over security, cost, and
+reliability.
+
+## Status
+
+Veer is in the pre-alpha architecture phase. APIs, storage formats, and
+deployment topology are not yet stable.
+
+## Design principles
+
+- **Application focused:** expose the concepts application teams use rather
+  than raw provider APIs.
+- **Declarative:** persist desired state and reconcile it continuously.
+- **Secure by default:** use least-privilege identities, explicit policy, and
+  auditable actions.
+- **Provider independent:** isolate cloud and cluster behavior behind typed
+  adapters.
+- **GitOps ready:** make every material change reviewable, reproducible, and
+  observable.
+- **Operationally honest:** surface drift, partial failure, cost, and provider
+  limits instead of hiding them.
+
+## Core model
+
+| Concept | Purpose |
+| --- | --- |
+| Workspace | Administrative and policy boundary |
+| Environment | Isolated runtime and infrastructure boundary |
+| Application | Deployable product or service group |
+| Component | Workload or managed-service unit |
+| Policy | Authorization, security, and operational constraints |
+| Reconciliation | Convergence from desired state to observed state |
+
+## Initial scope
+
+The first implementation slice targets AWS and Kubernetes:
+
+1. Versioned resource schemas and validation.
+2. A durable desired-state store with an append-only audit trail.
+3. Policy-backed identity and authorization.
+4. Kubernetes and AWS provider adapters.
+5. Idempotent reconciliation with explicit plans, retries, and drift status.
+6. A CLI and API suitable for automation and GitOps workflows.
+
+## Documentation
+
+- [Architecture overview](docs/architecture/overview.md)
+- [Security model](docs/security/model.md)
+- [Roadmap](docs/roadmap.md)
+
+## License
+
+An open-source license has not yet been selected. Public visibility alone does
+not grant permission to copy, modify, or redistribute this repository. License
+selection is required before the first source release or external contribution.

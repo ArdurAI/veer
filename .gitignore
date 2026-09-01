@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local credentials, raw captures, and customer-specific evidence never belong in git.
+.private/
+evidence/private/
+artifacts/private/
+
+# Generated discovery context and scratch output.
+.context/
+tmp/
+dist/
+coverage/
