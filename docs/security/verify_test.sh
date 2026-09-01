@@ -115,6 +115,20 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  !changed && index($0, "docs/architecture/overview.md:99-117") {
+      sub(/docs\/architecture\/overview[.]md:99-117/, "docs/architecture/does-not-exist.md")
+      changed = 1
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'malformed readable source citation' \
+  'readable model contains malformed documentation citation'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / { next }
   { print }
 ' "$model" >"$rewritten_model"
@@ -168,6 +182,18 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { print; skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'required section with empty body' \
+  'has no visible section content: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   $0 == "### Workspace isolation assumptions" { skip = 1; next }
   $0 == "### Provider credential flow and blast radius" { skip = 0 }
   !skip { print }
@@ -176,6 +202,23 @@ printf '%s\n' '<!-- ### Workspace isolation assumptions -->' \
   >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'required heading hidden in a comment' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '<pre>' \
+  '### Workspace isolation assumptions' \
+  'This content is raw HTML, not a rendered Markdown section.' \
+  '</pre>' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'required heading hidden in a raw HTML block' \
   'is missing visible heading: ### Workspace isolation assumptions'
 
 new_fixture
@@ -210,6 +253,24 @@ printf '%s\n' \
   '   ```' >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'owner table hidden in an indented fence' \
+  'undeclared owner OWN-SECURITY'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| OWN-SECURITY \|/ { next }
+  { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '<pre>' \
+  '### Control owners' \
+  '| ID | Accountable surface | Live verification work |' \
+  '| --- | --- | --- |' \
+  '| OWN-SECURITY | fake surface | fake verification |' \
+  '</pre>' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'owner table hidden in a raw HTML block' \
   'undeclared owner OWN-SECURITY'
 
 new_fixture
@@ -257,7 +318,69 @@ LC_ALL=C awk -v source="$required_source" '
 printf '%s\n' "<!-- $required_source -->" >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'required source hidden in a comment' \
-  'is missing visible text: https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+  'is missing exact primary reference destination: https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+required_source='https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+LC_ALL=C awk -v source="$required_source" '
+  { sub(source, source "-broken"); print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'primary source URL accepted as a prefix' \
+  'is missing exact primary reference destination: https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "| ID | Asset | Required property | Evidence |" { in_assets = 1; print; next }
+  in_assets && $0 == "| --- | --- | --- | --- |" { in_assets = 0; next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'protected-assets table without delimiter' \
+  'canonical assets row appears before a valid delimiter'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "| ID | Class | Central rule | Retention boundary | Owner and verification |" {
+      in_classes = 1
+      print
+      next
+  }
+  in_classes && $0 == "| --- | --- | --- | --- | --- |" { in_classes = 0; next }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'data-class table without delimiter' \
+  'canonical classes row appears before a valid delimiter'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| TB-01 \|/ {
+      sub(/OWN-IDENTITY \|$/, "OWN-DOES-NOT-EXIST |")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'undeclared trust-boundary verification owner' \
+  'undeclared trust-boundary owner OWN-DOES-NOT-EXIST for TB-01'
+
+new_fixture
+rewrite_threat_field TM-001 11 'https://github.com/ArdurAI/veer/issues/0'
+expect_rejection 'zero issue target' \
+  'follow_up must contain exact Veer issue URLs'
+
+new_fixture
+rewrite_threat_field TM-001 11 'https://github.com/ArdurAI/veer/issues/9999'
+expect_rejection 'unknown issue target' \
+  'follow_up must contain exact Veer issue URLs'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -340,4 +463,4 @@ mv "$rewritten" "$ledger"
 expect_rejection 'missing terminal newline' \
   'docs/security/threats.tsv must end with a newline'
 
-printf '%s\n' 'security threat-model negative fixtures passed'
+printf 'security threat-model negative fixtures passed (%s cases)\n' "$fixture_count"

@@ -8,6 +8,7 @@ model_file="$script_dir/threat-model.md"
 threat_file="$script_dir/threats.tsv"
 class_file="$script_dir/data-classes.tsv"
 summary_file="$script_dir/model.md"
+issue_inventory_file="$script_dir/issue-inventory.txt"
 
 fail() {
   printf '%s\n' "security threat-model verification failed: $*" >&2
@@ -24,11 +25,10 @@ validate_regular_file() {
     fail "${checked_file#"$repo_root/"} must end with a newline"
 }
 
-visible_markdown_has() {
-  required_content=$1
-  match_mode=$2
-  checked_file=$3
-  LC_ALL=C awk -v required="$required_content" -v mode="$match_mode" '
+write_visible_markdown() {
+  source_file=$1
+  destination_file=$2
+  LC_ALL=C awk '
     function fence_transition(line, stripped, marker, marker_length, tail) {
         stripped = line
         sub(/^[ ]?[ ]?[ ]?/, "", stripped)
@@ -59,16 +59,107 @@ visible_markdown_has() {
         }
         return 0
     }
+    function html_transition(line, stripped, lower, tag) {
+        stripped = line
+        sub(/^[ ]?[ ]?[ ]?/, "", stripped)
+        lower = tolower(stripped)
+        if (in_html_literal) {
+            if (index(lower, html_close)) {
+                in_html_literal = 0
+                html_close = ""
+            }
+            return 1
+        }
+        if (in_html_until_blank) {
+            if (line ~ /^[[:space:]]*$/) {
+                in_html_until_blank = 0
+            }
+            return 1
+        }
+        if (in_processing_instruction) {
+            if (index(line, "?>")) {
+                in_processing_instruction = 0
+            }
+            return 1
+        }
+        if (in_declaration) {
+            if (index(line, ">")) {
+                in_declaration = 0
+            }
+            return 1
+        }
+        if (in_cdata) {
+            if (index(line, "]]>") ) {
+                in_cdata = 0
+            }
+            return 1
+        }
+        if (lower ~ /^<(pre|script|style|textarea)([[:space:]>]|$)/) {
+            tag = lower
+            sub(/^</, "", tag)
+            sub(/[[:space:]>].*$/, "", tag)
+            html_close = "</" tag ">"
+            if (!index(lower, html_close)) {
+                in_html_literal = 1
+            }
+            return 1
+        }
+        if (substr(stripped, 1, 9) == "<![CDATA[") {
+            if (!index(stripped, "]]>") ) {
+                in_cdata = 1
+            }
+            return 1
+        }
+        if (substr(stripped, 1, 2) == "<?") {
+            if (!index(stripped, "?>")) {
+                in_processing_instruction = 1
+            }
+            return 1
+        }
+        if (stripped ~ /^<![A-Z]/) {
+            if (!index(stripped, ">")) {
+                in_declaration = 1
+            }
+            return 1
+        }
+        if (substr(lower, 1, 1) == "<") {
+            tag = lower
+            sub(/^<\//, "", tag)
+            sub(/^</, "", tag)
+            sub(/[[:space:]\/>].*$/, "", tag)
+            if (tag in block_tag ||
+                lower ~ /^<\/?[a-z][a-z0-9-]*([[:space:]][^>]*)?\/?>[[:space:]]*$/) {
+                in_html_until_blank = 1
+                return 1
+            }
+        }
+        return 0
+    }
+    BEGIN {
+        tags = "address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option p param search section summary table tbody td tfoot th thead title tr track ul"
+        tag_count = split(tags, tag_values, " ")
+        for (tag_index = 1; tag_index <= tag_count; tag_index++) {
+            block_tag[tag_values[tag_index]] = 1
+        }
+    }
     {
         line = $0
         if (in_fence) {
             fence_transition(line)
+            print ""
+            next
+        }
+        if (in_html_literal || in_html_until_blank || in_processing_instruction ||
+            in_declaration || in_cdata) {
+            html_transition(line)
+            print ""
             next
         }
         if (in_comment) {
             if (index(line, "-->")) {
                 in_comment = 0
             }
+            print ""
             next
         }
         if (index(line, "<!--")) {
@@ -76,37 +167,145 @@ visible_markdown_has() {
             if (!index(comment_tail, "-->")) {
                 in_comment = 1
             }
+            print ""
             next
         }
-        if (fence_transition(line)) {
+        if (fence_transition(line) || html_transition(line)) {
+            print ""
             next
         }
-        if ((mode == "exact" && line == required) ||
-            (mode == "contains" && index(line, required))) {
-            found = 1
-        }
+        print line
     }
-    END { exit found ? 0 : 1 }
-  ' "$checked_file"
+  ' "$source_file" >"$destination_file"
 }
 
-require_visible_heading() {
+visible_markdown_has() {
+  required_content=$1
+  match_mode=$2
+  visible_file=$3
+  LC_ALL=C awk -v required="$required_content" -v mode="$match_mode" '
+    (mode == "exact" && $0 == required) ||
+    (mode == "contains" && index($0, required)) { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$visible_file"
+}
+
+visible_section_has_content() {
+  required_heading=$1
+  visible_file=$2
+  LC_ALL=C awk -v required="$required_heading" '
+    function heading_level(line, level) {
+        if (line !~ /^##+ /) {
+            return 0
+        }
+        level = 1
+        while (substr(line, level + 1, 1) == "#") {
+            level++
+        }
+        return level
+    }
+    $0 == required {
+        in_section = 1
+        target_level = heading_level($0)
+        next
+    }
+    in_section {
+        current_level = heading_level($0)
+        if (current_level > 0 && current_level <= target_level) {
+            exit
+        }
+        if (current_level == 0 && $0 !~ /^[[:space:]]*$/) {
+            found_content = 1
+        }
+    }
+    END { exit found_content ? 0 : 1 }
+  ' "$visible_file"
+}
+
+require_visible_section() {
   required_heading=$1
   checked_file=$2
-  visible_markdown_has "$required_heading" exact "$checked_file" ||
+  visible_file=$3
+  visible_markdown_has "$required_heading" exact "$visible_file" ||
     fail "${checked_file#"$repo_root/"} is missing visible heading: $required_heading"
+  visible_section_has_content "$required_heading" "$visible_file" ||
+    fail "${checked_file#"$repo_root/"} has no visible section content: $required_heading"
 }
 
 require_visible_text() {
   required_text=$1
   checked_file=$2
-  visible_markdown_has "$required_text" contains "$checked_file" ||
+  visible_file=$3
+  visible_markdown_has "$required_text" contains "$visible_file" ||
     fail "${checked_file#"$repo_root/"} is missing visible text: $required_text"
 }
 
-for checked_file in "$model_file" "$threat_file" "$class_file" "$summary_file"; do
+require_primary_reference() {
+  required_destination=$1
+  visible_file=$2
+  LC_ALL=C awk -v required="$required_destination" '
+    $0 == "### Primary references" { in_references = 1; next }
+    in_references && /^##+ / { exit }
+    in_references && /^- \[/ {
+        destination = $0
+        sub(/^.*\]\(/, "", destination)
+        sub(/\)[[:space:]]*$/, "", destination)
+        if (destination == required) {
+            found = 1
+        }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$visible_file" ||
+    fail "${model_file#"$repo_root/"} is missing exact primary reference destination: $required_destination"
+}
+
+for checked_file in \
+  "$model_file" \
+  "$threat_file" \
+  "$class_file" \
+  "$summary_file" \
+  "$issue_inventory_file"; do
   validate_regular_file "$checked_file"
 done
+
+LC_ALL=C awk '
+  !/^https:\/\/github[.]com\/ArdurAI\/veer\/issues\/[1-9][0-9]*$/ {
+      print FILENAME ":" FNR ": invalid issue inventory entry" > "/dev/stderr"
+      failed = 1
+      next
+  }
+  seen[$0]++ {
+      print FILENAME ":" FNR ": duplicate issue inventory entry " $0 > "/dev/stderr"
+      failed = 1
+  }
+  { rows++ }
+  END {
+      if (rows == 0) {
+          print FILENAME ": issue inventory has no entries" > "/dev/stderr"
+          failed = 1
+      }
+      if (failed) {
+          exit 1
+      }
+  }
+' "$issue_inventory_file" || fail 'issue inventory contract is invalid'
+
+verification_tmp_base=${TMPDIR:-/tmp}
+verification_tmp=$(mktemp -d "$verification_tmp_base/veer-security-verify.XXXXXX") ||
+  fail 'cannot create verification workspace'
+case "$verification_tmp" in
+  "$verification_tmp_base"/veer-security-verify.*) ;;
+  *) fail "unsafe verification workspace: $verification_tmp" ;;
+esac
+cleanup() {
+  rm -rf -- "$verification_tmp"
+}
+trap cleanup 0 1 2 15
+
+visible_model_file="$verification_tmp/threat-model.visible.md"
+visible_summary_file="$verification_tmp/model.visible.md"
+write_visible_markdown "$model_file" "$visible_model_file"
+write_visible_markdown "$summary_file" "$visible_summary_file"
 
 for required_heading in \
   '## Overview' \
@@ -118,7 +317,7 @@ for required_heading in \
   '## Attack surface, mitigations, and attacker stories' \
   '### Review and maintenance' \
   '## Severity calibration'; do
-  require_visible_heading "$required_heading" "$model_file"
+  require_visible_section "$required_heading" "$model_file" "$visible_model_file"
 done
 
 for required_source in \
@@ -130,14 +329,27 @@ for required_source in \
   'https://kubernetes.io/docs/concepts/security/multi-tenancy/' \
   'https://kubernetes.io/docs/concepts/security/service-accounts/' \
   'https://www.postgresql.org/docs/18/ddl-rowsecurity.html'; do
-  require_visible_text "$required_source" "$model_file"
+  require_primary_reference "$required_source" "$visible_model_file"
 done
 
-require_visible_text '[formal threat model and data classification](threat-model.md)' "$summary_file"
-require_visible_text "[\`threats.tsv\`](threats.tsv)" "$model_file"
-require_visible_text "[\`data-classes.tsv\`](data-classes.tsv)" "$model_file"
+require_visible_text \
+  '[formal threat model and data classification](threat-model.md)' \
+  "$summary_file" \
+  "$visible_summary_file"
+require_visible_text \
+  "[\`threats.tsv\`](threats.tsv)" \
+  "$model_file" \
+  "$visible_model_file"
+require_visible_text \
+  "[\`data-classes.tsv\`](data-classes.tsv)" \
+  "$model_file" \
+  "$visible_model_file"
+require_visible_text \
+  "[\`issue-inventory.txt\`](issue-inventory.txt)" \
+  "$model_file" \
+  "$visible_model_file"
 
-LC_ALL=C awk -F '\t' '
+LC_ALL=C awk -F '\t' -v issue_inventory="$issue_inventory_file" '
 function trim(value) {
     sub(/^[[:space:]]+/, "", value)
     sub(/[[:space:]]+$/, "", value)
@@ -153,7 +365,8 @@ function valid_links(value, values, count, link_index) {
         return 0
     }
     for (link_index = 1; link_index <= count; link_index++) {
-        if (values[link_index] !~ /^https:\/\/github[.]com\/ArdurAI\/veer\/issues\/[0-9][0-9]*$/) {
+        if (values[link_index] !~ /^https:\/\/github[.]com\/ArdurAI\/veer\/issues\/[1-9][0-9]*$/ ||
+            !(values[link_index] in known_issue)) {
             return 0
         }
     }
@@ -165,7 +378,7 @@ function valid_evidence(value, values, count, citation_index) {
         return 0
     }
     for (citation_index = 1; citation_index <= count; citation_index++) {
-        if (values[citation_index] !~ /^docs\/[A-Za-z0-9_.\/-]+:[0-9][0-9]*(-[0-9][0-9]*)?$/) {
+        if (values[citation_index] !~ /^docs\/[A-Za-z0-9_.\/-]+:[1-9][0-9]*(-[1-9][0-9]*)?$/) {
             return 0
         }
     }
@@ -184,99 +397,85 @@ function valid_readable_row(line, expected_columns, cells, count, cell_index, va
     }
     return 1
 }
-function fence_transition(line, stripped, marker, marker_length, tail) {
-    stripped = line
-    sub(/^[ ]?[ ]?[ ]?/, "", stripped)
-    marker = substr(stripped, 1, 1)
-    if (marker != "`" && marker != "~") {
+function valid_delimiter_row(line, expected_columns, cells, count, cell_index, value) {
+    count = split(line, cells, "|")
+    if (count != expected_columns + 2 || trim(cells[1]) != "" || trim(cells[count]) != "") {
         return 0
     }
-    marker_length = 0
-    while (substr(stripped, marker_length + 1, 1) == marker) {
-        marker_length++
+    for (cell_index = 2; cell_index < count; cell_index++) {
+        value = trim(cells[cell_index])
+        if (value !~ /^:?-{3,}:?$/) {
+            return 0
+        }
     }
-    if (marker_length < 3) {
-        return 0
+    return 1
+}
+function finish_table() {
+    if (table != "" && !table_delimiter_seen) {
+        error("canonical " table " table is missing a valid delimiter")
     }
-    tail = substr(stripped, marker_length + 1)
-    if (!in_fence) {
-        in_fence = 1
-        opening_marker = marker
-        opening_length = marker_length
-        return 1
+    table = ""
+    table_columns = 0
+    table_delimiter_seen = 0
+}
+BEGIN {
+    while ((getline inventory_entry < issue_inventory) > 0) {
+        known_issue[inventory_entry] = 1
     }
-    if (marker == opening_marker && marker_length >= opening_length &&
-        tail ~ /^[[:space:]]*$/) {
-        in_fence = 0
-        opening_marker = ""
-        opening_length = 0
-        return 1
-    }
-    return 0
+    close(issue_inventory)
 }
 FNR == NR {
-    if (in_fence) {
-        fence_transition($0)
-        next
-    }
-    if (in_model_comment) {
-        if (index($0, "-->")) {
-            in_model_comment = 0
-        }
-        next
-    }
-    if (index($0, "<!--")) {
-        comment_tail = substr($0, index($0, "<!--") + 4)
-        if (!index(comment_tail, "-->")) {
-            in_model_comment = 1
-        }
-        next
-    }
-    if (fence_transition($0)) {
-        next
-    }
     if ($0 ~ /^##+ /) {
+        finish_table()
         section = $0
-        table = ""
     }
     if (section == "### Protected assets" &&
         $0 == "| ID | Asset | Required property | Evidence |") {
         table = "assets"
         table_columns = 4
+        table_delimiter_seen = 0
         next
     }
     if (section == "### Actors and realistic starting capabilities" &&
         $0 == "| ID | Actor and starting capability | Capability not assumed |") {
         table = "attackers"
         table_columns = 3
+        table_delimiter_seen = 0
         next
     }
     if (section == "### Trust boundaries" &&
         $0 == "| ID | Crossing and transferred authority | Required enforcement | Verification owner |") {
         table = "boundaries"
         table_columns = 4
+        table_delimiter_seen = 0
         next
     }
     if (section == "### Control owners" &&
         $0 == "| ID | Accountable surface | Live verification work |") {
         table = "owners"
         table_columns = 3
+        table_delimiter_seen = 0
         next
     }
     if (section == "## Attack surface, mitigations, and attacker stories" &&
         $0 ~ /^\| Priority \| Scenario and capability gain \|/) {
         table = "threats"
         table_columns = 7
+        table_delimiter_seen = 0
         next
     }
-    if (table != "" && $0 ~ /^\| ---/) {
-        separator_count = split($0, separator_cells, "|")
-        if (separator_count != table_columns + 2) {
-            error("unexpected column count in canonical " table " separator")
+    if (table != "" && valid_delimiter_row($0, table_columns, delimiter_cells)) {
+        if (table_delimiter_seen) {
+            error("duplicate delimiter in canonical " table " table")
         }
+        table_delimiter_seen = 1
         next
     }
     if (table == "assets" && $0 ~ /^\| A-[0-9][0-9] \|/) {
+        if (!table_delimiter_seen) {
+            error("canonical assets row appears before a valid delimiter")
+            next
+        }
         if (!valid_readable_row($0, table_columns, cells)) {
             error("invalid required cells in canonical assets row")
             next
@@ -288,6 +487,10 @@ FNR == NR {
         next
     }
     if (table == "attackers" && $0 ~ /^\| ACT-[A-Z0-9-][A-Z0-9-]* \|/) {
+        if (!table_delimiter_seen) {
+            error("canonical attackers row appears before a valid delimiter")
+            next
+        }
         if (!valid_readable_row($0, table_columns, cells)) {
             error("invalid required cells in canonical attackers row")
             next
@@ -299,6 +502,10 @@ FNR == NR {
         next
     }
     if (table == "boundaries" && $0 ~ /^\| TB-[0-9][0-9] \|/) {
+        if (!table_delimiter_seen) {
+            error("canonical boundaries row appears before a valid delimiter")
+            next
+        }
         if (!valid_readable_row($0, table_columns, cells)) {
             error("invalid required cells in canonical boundaries row")
             next
@@ -307,9 +514,14 @@ FNR == NR {
         if (boundaries[boundary_id]++) {
             error("duplicate trust-boundary row " boundary_id)
         }
+        boundary_owner[boundary_id] = trim(cells[5])
         next
     }
     if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
+        if (!table_delimiter_seen) {
+            error("canonical owners row appears before a valid delimiter")
+            next
+        }
         if (!valid_readable_row($0, table_columns, cells)) {
             error("invalid required cells in canonical owners row")
             next
@@ -322,6 +534,10 @@ FNR == NR {
     }
     if (table == "threats" &&
         $0 ~ /^\| (Critical|High|Medium|Low) \| \*\*TM-[0-9][0-9][0-9] /) {
+        if (!table_delimiter_seen) {
+            error("canonical threats row appears before a valid delimiter")
+            next
+        }
         if (!valid_readable_row($0, table_columns, cells)) {
             error("invalid required cells in canonical threats row")
             next
@@ -339,12 +555,19 @@ FNR == NR {
         next
     }
     if (table != "" && $0 !~ /^\|/) {
-        table = ""
-        table_columns = 0
+        finish_table()
     }
     next
 }
 FNR == 1 {
+    finish_table()
+    for (boundary_id in boundary_owner) {
+        if (!(boundary_owner[boundary_id] in owners)) {
+            error("undeclared trust-boundary owner " boundary_owner[boundary_id] " for " boundary_id)
+        } else {
+            used_owners[boundary_owner[boundary_id]] = 1
+        }
+    }
     expected = "id\tstride\trisk\tassets\tboundary\tattacker\tscenario\texisting_controls\tmitigation\towner\tfollow_up\tverification\tresidual_risk\tevidence"
     if ($0 != expected) {
         error("unexpected threat ledger header")
@@ -459,9 +682,9 @@ END {
         exit 1
     }
 }
-' "$model_file" "$threat_file" || fail 'threat ledger contract is invalid'
+' "$visible_model_file" "$threat_file" || fail 'threat ledger contract is invalid'
 
-LC_ALL=C awk -F '\t' '
+LC_ALL=C awk -F '\t' -v issue_inventory="$issue_inventory_file" '
 function trim(value) {
     sub(/^[[:space:]]+/, "", value)
     sub(/[[:space:]]+$/, "", value)
@@ -477,7 +700,8 @@ function valid_links(value, values, count, link_index) {
         return 0
     }
     for (link_index = 1; link_index <= count; link_index++) {
-        if (values[link_index] !~ /^https:\/\/github[.]com\/ArdurAI\/veer\/issues\/[0-9][0-9]*$/) {
+        if (values[link_index] !~ /^https:\/\/github[.]com\/ArdurAI\/veer\/issues\/[1-9][0-9]*$/ ||
+            !(values[link_index] in known_issue)) {
             return 0
         }
     }
@@ -496,81 +720,64 @@ function valid_readable_row(line, expected_columns, cells, count, cell_index, va
     }
     return 1
 }
-function fence_transition(line, stripped, marker, marker_length, tail) {
-    stripped = line
-    sub(/^[ ]?[ ]?[ ]?/, "", stripped)
-    marker = substr(stripped, 1, 1)
-    if (marker != "`" && marker != "~") {
+function valid_delimiter_row(line, expected_columns, cells, count, cell_index, value) {
+    count = split(line, cells, "|")
+    if (count != expected_columns + 2 || trim(cells[1]) != "" || trim(cells[count]) != "") {
         return 0
     }
-    marker_length = 0
-    while (substr(stripped, marker_length + 1, 1) == marker) {
-        marker_length++
+    for (cell_index = 2; cell_index < count; cell_index++) {
+        value = trim(cells[cell_index])
+        if (value !~ /^:?-{3,}:?$/) {
+            return 0
+        }
     }
-    if (marker_length < 3) {
-        return 0
+    return 1
+}
+function finish_table() {
+    if (table != "" && !table_delimiter_seen) {
+        error("canonical " table " table is missing a valid delimiter")
     }
-    tail = substr(stripped, marker_length + 1)
-    if (!in_fence) {
-        in_fence = 1
-        opening_marker = marker
-        opening_length = marker_length
-        return 1
+    table = ""
+    table_columns = 0
+    table_delimiter_seen = 0
+}
+BEGIN {
+    while ((getline inventory_entry < issue_inventory) > 0) {
+        known_issue[inventory_entry] = 1
     }
-    if (marker == opening_marker && marker_length >= opening_length &&
-        tail ~ /^[[:space:]]*$/) {
-        in_fence = 0
-        opening_marker = ""
-        opening_length = 0
-        return 1
-    }
-    return 0
+    close(issue_inventory)
 }
 FNR == NR {
-    if (in_fence) {
-        fence_transition($0)
-        next
-    }
-    if (in_model_comment) {
-        if (index($0, "-->")) {
-            in_model_comment = 0
-        }
-        next
-    }
-    if (index($0, "<!--")) {
-        comment_tail = substr($0, index($0, "<!--") + 4)
-        if (!index(comment_tail, "-->")) {
-            in_model_comment = 1
-        }
-        next
-    }
-    if (fence_transition($0)) {
-        next
-    }
     if ($0 ~ /^##+ /) {
+        finish_table()
         section = $0
-        table = ""
     }
     if (section == "### Control owners" &&
         $0 == "| ID | Accountable surface | Live verification work |") {
         table = "owners"
         table_columns = 3
+        table_delimiter_seen = 0
         next
     }
     if (section == "### Data classification" &&
         $0 == "| ID | Class | Central rule | Retention boundary | Owner and verification |") {
         table = "classes"
         table_columns = 5
+        table_delimiter_seen = 0
         next
     }
-    if (table != "" && $0 ~ /^\| ---/) {
-        separator_count = split($0, separator_cells, "|")
-        if (separator_count != table_columns + 2) {
-            error("unexpected column count in canonical " table " separator")
+    if (table != "" && valid_delimiter_row($0, table_columns, delimiter_cells)) {
+        if (table_delimiter_seen) {
+            error("duplicate delimiter in canonical " table " table")
         }
+        table_delimiter_seen = 1
         next
     }
     if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
+        if (!table_delimiter_seen) {
+            error("canonical owners row appears before a valid delimiter")
+            next
+        }
         if (!valid_readable_row($0, table_columns, cells)) {
             error("invalid required cells in canonical owners row")
             next
@@ -582,6 +789,10 @@ FNR == NR {
         next
     }
     if (table == "classes" && $0 ~ /^\| DC-[A-Z][A-Z-]* \|/) {
+        if (!table_delimiter_seen) {
+            error("canonical classes row appears before a valid delimiter")
+            next
+        }
         if (!valid_readable_row($0, table_columns, cells)) {
             error("invalid required cells in canonical classes row")
             next
@@ -603,12 +814,12 @@ FNR == NR {
         next
     }
     if (table != "" && $0 !~ /^\|/) {
-        table = ""
-        table_columns = 0
+        finish_table()
     }
     next
 }
 FNR == 1 {
+    finish_table()
     expected = "id\tname\texamples\tat_rest\tin_transit\taccess\tlogging\tretention\tdisposal\towner\tverification"
     if ($0 != expected) {
         error("unexpected data-class ledger header")
@@ -671,54 +882,106 @@ END {
         exit 1
     }
 }
-' "$model_file" "$class_file" || fail 'data-class ledger contract is invalid'
+' "$visible_model_file" "$class_file" || fail 'data-class ledger contract is invalid'
+
+model_citations_file="$verification_tmp/model-citations.txt"
+all_citations_file="$verification_tmp/all-citations.txt"
+unique_citations_file="$verification_tmp/unique-citations.txt"
 
 LC_ALL=C awk '
+function error(column) {
+    print FILENAME ":" FNR ": malformed documentation citation at column " column > "/dev/stderr"
+    failed = 1
+}
+function token_character(character) {
+    return character ~ /[A-Za-z0-9_.\/:\-]/
+}
 {
-    remaining = $0
-    while (match(remaining, /docs\/[A-Za-z0-9_.\/-]+:[0-9][0-9]*(-[0-9][0-9]*)?/)) {
-        citation = substr(remaining, RSTART, RLENGTH)
+    search_from = 1
+    while (search_from <= length($0)) {
+        candidate = substr($0, search_from)
+        relative_start = index(candidate, "docs/")
+        if (!relative_start) {
+            break
+        }
+        citation_start = search_from + relative_start - 1
+        preceding = citation_start > 1 ? substr($0, citation_start - 1, 1) : ""
+        if (preceding != "" && token_character(preceding)) {
+            search_from = citation_start + 5
+            continue
+        }
+        candidate = substr($0, citation_start)
+        if (!match(candidate, /^docs\/[A-Za-z0-9_.\/-]+:[1-9][0-9]*(-[1-9][0-9]*)?/)) {
+            error(citation_start)
+            search_from = citation_start + 5
+            continue
+        }
+        citation = substr(candidate, RSTART, RLENGTH)
+        following = substr(candidate, RLENGTH + 1, 1)
+        if (following != "" && token_character(following)) {
+            error(citation_start)
+            search_from = citation_start + RLENGTH
+            continue
+        }
         if (!seen[citation]++) {
             print citation
         }
-        remaining = substr(remaining, RSTART + RLENGTH)
+        search_from = citation_start + RLENGTH
     }
 }
-' "$model_file" "$threat_file" |
-  while IFS= read -r citation; do
-    citation_path=${citation%:*}
-    citation_location=${citation##*:}
-    case "$citation_location" in
-      *-*)
-        citation_start=${citation_location%-*}
-        citation_end=${citation_location#*-}
-        ;;
-      *)
-        citation_start=$citation_location
-        citation_end=$citation_location
-        ;;
-    esac
-    case "$citation_path" in
-      docs/*)
-        case "/$citation_path/" in
-          */../* | */./* | *//*) fail "unsafe citation path: $citation" ;;
-        esac
-        ;;
-      *) fail "unsafe citation path: $citation" ;;
-    esac
-    citation_file="$repo_root/$citation_path"
-    [ -f "$citation_file" ] || fail "citation target does not exist: $citation"
-    [ ! -L "$citation_file" ] || fail "citation target must not be a symbolic link: $citation"
-    citation_dir=$(CDPATH='' cd -- "$(dirname -- "$citation_file")" && pwd -P)
-    case "$citation_dir/" in
-      "$docs_root"/*) ;;
-      *) fail "citation target resolves outside docs: $citation" ;;
-    esac
-    line_count=$(wc -l <"$citation_file" | LC_ALL=C awk '{ print $1 }')
-    [ "$citation_start" -ge 1 ] &&
-      [ "$citation_end" -ge "$citation_start" ] &&
-      [ "$citation_end" -le "$line_count" ] ||
-      fail "citation range is outside the target: $citation"
-  done
+END {
+    if (failed) {
+        exit 1
+    }
+}
+' "$visible_model_file" >"$model_citations_file" ||
+  fail 'readable model contains malformed documentation citation'
+
+cp "$model_citations_file" "$all_citations_file"
+LC_ALL=C awk -F '\t' '
+  FNR > 1 {
+      citation_count = split($14, citations, ";")
+      for (citation_index = 1; citation_index <= citation_count; citation_index++) {
+          print citations[citation_index]
+      }
+  }
+' "$threat_file" >>"$all_citations_file"
+LC_ALL=C sort -u "$all_citations_file" >"$unique_citations_file"
+
+while IFS= read -r citation; do
+  citation_path=${citation%:*}
+  citation_location=${citation##*:}
+  case "$citation_location" in
+    *-*)
+      citation_start=${citation_location%-*}
+      citation_end=${citation_location#*-}
+      ;;
+    *)
+      citation_start=$citation_location
+      citation_end=$citation_location
+      ;;
+  esac
+  case "$citation_path" in
+    docs/*)
+      case "/$citation_path/" in
+        */../* | */./* | *//*) fail "unsafe citation path: $citation" ;;
+      esac
+      ;;
+    *) fail "unsafe citation path: $citation" ;;
+  esac
+  citation_file="$repo_root/$citation_path"
+  [ -f "$citation_file" ] || fail "citation target does not exist: $citation"
+  [ ! -L "$citation_file" ] || fail "citation target must not be a symbolic link: $citation"
+  citation_dir=$(CDPATH='' cd -- "$(dirname -- "$citation_file")" && pwd -P)
+  case "$citation_dir/" in
+    "$docs_root"/*) ;;
+    *) fail "citation target resolves outside docs: $citation" ;;
+  esac
+  line_count=$(wc -l <"$citation_file" | LC_ALL=C awk '{ print $1 }')
+  [ "$citation_start" -ge 1 ] &&
+    [ "$citation_end" -ge "$citation_start" ] &&
+    [ "$citation_end" -le "$line_count" ] ||
+    fail "citation range is outside the target: $citation"
+done <"$unique_citations_file"
 
 printf '%s\n' 'security threat-model verification passed'

@@ -375,12 +375,15 @@ The review must:
 
 1. update the architecture/effective-resource facts and source citations;
 2. add, change, or retire ledger rows without deleting historical Git evidence;
-3. link each high/critical scenario to an owned mitigation and live verification;
-4. update data handling for every derived copy, export, backup, log, and error;
-5. run `./hack/dev docs`, including
+3. live-verify every referenced Veer issue and update the reviewed offline
+   [`issue-inventory.txt`](issue-inventory.txt) before linking it from either
+   ledger;
+4. link each high/critical scenario to an owned mitigation and live verification;
+5. update data handling for every derived copy, export, backup, log, and error;
+6. run `./hack/dev docs`, including
    `./docs/security/verify_test.sh`, and the implementation tests owned by each
    follow-up; and
-6. record unresolved prerequisites as assumptions, not passing controls.
+7. record unresolved prerequisites as assumptions, not passing controls.
 
 ## Severity calibration
 
