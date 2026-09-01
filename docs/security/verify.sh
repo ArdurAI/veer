@@ -186,6 +186,56 @@ write_visible_markdown() {
         }
         return 0
     }
+    function comment_transition(line, remaining, marker, saw_comment) {
+        remaining = line
+        saw_comment = in_comment
+        while (1) {
+            if (in_comment) {
+                marker = index(remaining, "-->")
+                if (!marker) {
+                    return 1
+                }
+                remaining = substr(remaining, marker + 3)
+                in_comment = 0
+                saw_comment = 1
+                continue
+            }
+            marker = index(remaining, "<!--")
+            if (!marker) {
+                return saw_comment
+            }
+            remaining = substr(remaining, marker + 4)
+            in_comment = 1
+            saw_comment = 1
+        }
+    }
+    function normalize_atx_heading(line, normalized, leading_spaces, hashes, content) {
+        normalized = line
+        leading_spaces = 0
+        while (leading_spaces < 3 && substr(normalized, 1, 1) == " ") {
+            normalized = substr(normalized, 2)
+            leading_spaces++
+        }
+        if (substr(normalized, 1, 1) == " ") {
+            return line
+        }
+        hashes = 0
+        while (substr(normalized, hashes + 1, 1) == "#") {
+            hashes++
+        }
+        if (hashes < 1 || hashes > 6) {
+            return line
+        }
+        content = substr(normalized, hashes + 1)
+        if (content != "" && substr(content, 1, 1) !~ /^[[:space:]]$/) {
+            return line
+        }
+        sub(/^[[:space:]]+/, "", content)
+        sub(/[[:space:]]+#+[[:space:]]*$/, "", content)
+        sub(/[[:space:]]+$/, "", content)
+        normalized = substr(normalized, 1, hashes)
+        return content == "" ? normalized : normalized " " content
+    }
     BEGIN {
         single_quote = sprintf("%c", 39)
         tags = "address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option p param search section summary table tbody td tfoot th thead title tr track ul"
@@ -207,26 +257,15 @@ write_visible_markdown() {
             print ""
             next
         }
-        if (in_comment) {
-            if (index(line, "-->")) {
-                in_comment = 0
-            }
-            print ""
-            next
-        }
-        if (index(line, "<!--")) {
-            comment_tail = substr(line, index(line, "<!--") + 4)
-            if (!index(comment_tail, "-->")) {
-                in_comment = 1
-            }
-            print ""
-            next
-        }
         if (fence_transition(line) || html_transition(line)) {
             print ""
             next
         }
-        print line
+        if (comment_transition(line)) {
+            print ""
+            next
+        }
+        print normalize_atx_heading(line)
     }
   ' "$source_file" >"$destination_file"
 }
@@ -378,6 +417,12 @@ LC_ALL=C awk -v issue_inventory="$issue_inventory_file" '
   BEGIN {
       while ((getline inventory_entry < issue_inventory) > 0) {
           known_issue[inventory_entry] = 1
+          inventory_number = inventory_entry
+          sub(/^.*\//, "", inventory_number)
+          if (length(inventory_number) > max_issue_digits) {
+              max_issue_digits = length(inventory_number)
+          }
+          known_issue_count++
       }
       close(issue_inventory)
   }
@@ -386,12 +431,28 @@ LC_ALL=C awk -v issue_inventory="$issue_inventory_file" '
       while (match(remaining, /#[1-9][0-9]* through #[1-9][0-9]*/)) {
           range = substr(remaining, RSTART, RLENGTH)
           split(range, endpoints, " through ")
-          range_start = substr(endpoints[1], 2) + 0
-          range_end = substr(endpoints[2], 2) + 0
-          if (range_start > range_end) {
-              print FILENAME ":" FNR ": invalid readable issue range " range > "/dev/stderr"
+          range_start_text = substr(endpoints[1], 2)
+          range_end_text = substr(endpoints[2], 2)
+          if (length(range_start_text) > max_issue_digits ||
+              length(range_end_text) > max_issue_digits) {
+              print FILENAME ":" FNR ": readable issue range exceeds offline inventory bound " range > "/dev/stderr"
               failed = 1
           } else {
+              range_start = range_start_text + 0
+              range_end = range_end_text + 0
+          }
+          if (length(range_start_text) <= max_issue_digits &&
+              length(range_end_text) <= max_issue_digits &&
+              range_start > range_end) {
+              print FILENAME ":" FNR ": invalid readable issue range " range > "/dev/stderr"
+              failed = 1
+          } else if (length(range_start_text) <= max_issue_digits &&
+              length(range_end_text) <= max_issue_digits &&
+              range_end - range_start + 1 > known_issue_count) {
+              print FILENAME ":" FNR ": readable issue range exceeds offline inventory bound " range > "/dev/stderr"
+              failed = 1
+          } else if (length(range_start_text) <= max_issue_digits &&
+              length(range_end_text) <= max_issue_digits) {
               for (issue_number = range_start; issue_number <= range_end; issue_number++) {
                   validate_issue(issue_number)
               }
@@ -498,7 +559,8 @@ function record_model_issue(record_id, issue_url, issue_key) {
     return 1
 }
 function valid_issue_work(value, record_id, work, range_values, range_count,
-                          range_start, range_end, issue_number, remaining, issue_url) {
+                          range_start_text, range_end_text, range_start, range_end,
+                          issue_number, remaining, issue_url) {
     work = trim(value)
     if (work !~ /^[Ii]ssues? /) {
         return 0
@@ -509,9 +571,16 @@ function valid_issue_work(value, record_id, work, range_values, range_count,
         if (range_count != 2) {
             return 0
         }
-        range_start = substr(range_values[1], 2) + 0
-        range_end = substr(range_values[2], 2) + 0
-        if (range_start > range_end) {
+        range_start_text = substr(range_values[1], 2)
+        range_end_text = substr(range_values[2], 2)
+        if (length(range_start_text) > max_issue_digits ||
+            length(range_end_text) > max_issue_digits) {
+            return 0
+        }
+        range_start = range_start_text + 0
+        range_end = range_end_text + 0
+        if (range_start > range_end ||
+            range_end - range_start + 1 > known_issue_count) {
             return 0
         }
         for (issue_number = range_start; issue_number <= range_end; issue_number++) {
@@ -604,6 +673,13 @@ function valid_delimiter_row(line, expected_columns, cells, count, cell_index, v
     }
     return 1
 }
+function markdown_heading_level(line, level) {
+    level = 0
+    while (substr(line, level + 1, 1) == "#") {
+        level++
+    }
+    return level
+}
 function finish_table() {
     if (table != "" && !table_delimiter_seen) {
         error("canonical " table " table is missing a valid delimiter")
@@ -615,51 +691,115 @@ function finish_table() {
 BEGIN {
     while ((getline inventory_entry < issue_inventory) > 0) {
         known_issue[inventory_entry] = 1
+        inventory_number = inventory_entry
+        sub(/^.*\//, "", inventory_number)
+        if (length(inventory_number) > max_issue_digits) {
+            max_issue_digits = length(inventory_number)
+        }
+        known_issue_count++
     }
     close(issue_inventory)
 }
 FNR == NR {
     if ($0 ~ /^##+ /) {
+        current_heading_level = markdown_heading_level($0)
+        leaves_canonical_section = canonical_section_table == "" ||
+            current_heading_level <= canonical_section_level
         finish_table()
         section = $0
+        if (leaves_canonical_section) {
+            canonical_section_table = ""
+            canonical_section_level = 0
+            canonical_header_seen = 0
+            if (section == "### Components and source evidence") {
+                canonical_section_table = "components"
+            } else if (section == "### Protected assets") {
+                canonical_section_table = "assets"
+            } else if (section == "### Actors and realistic starting capabilities") {
+                canonical_section_table = "attackers"
+            } else if (section == "### Trust boundaries") {
+                canonical_section_table = "boundaries"
+            } else if (section == "### Control owners") {
+                canonical_section_table = "owners"
+            } else if (section == "## Attack surface, mitigations, and attacker stories") {
+                canonical_section_table = "threats"
+            }
+            if (canonical_section_table != "") {
+                canonical_section_level = current_heading_level
+            }
+        }
+    }
+    if (canonical_header_seen && table == "" &&
+        canonical_section_table != "" && $0 ~ /^\|/) {
+        error("unexpected table in canonical " canonical_section_table " section")
+        next
     }
     if (section == "### Components and source evidence" &&
         $0 == "| Component | Security-relevant responsibility | Source evidence |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical components table header")
+            next
+        }
         table = "components"
         table_columns = 3
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (section == "### Protected assets" &&
         $0 == "| ID | Asset | Required property | Evidence |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical assets table header")
+            next
+        }
         table = "assets"
         table_columns = 4
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (section == "### Actors and realistic starting capabilities" &&
         $0 == "| ID | Actor and starting capability | Capability not assumed |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical attackers table header")
+            next
+        }
         table = "attackers"
         table_columns = 3
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (section == "### Trust boundaries" &&
         $0 == "| ID | Crossing and transferred authority | Required enforcement | Verification owner |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical boundaries table header")
+            next
+        }
         table = "boundaries"
         table_columns = 4
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (section == "### Control owners" &&
         $0 == "| ID | Accountable surface | Live verification work |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical owners table header")
+            next
+        }
         table = "owners"
         table_columns = 3
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (section == "## Attack surface, mitigations, and attacker stories" &&
         $0 ~ /^\| Priority \| Scenario and capability gain \|/) {
+        if (canonical_header_seen) {
+            error("duplicate canonical threats table header")
+            next
+        }
         expected_header = "| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Evidence |"
         if ($0 != expected_header) {
             error("unexpected canonical threats table header")
@@ -668,6 +808,7 @@ FNR == NR {
         table = "threats"
         table_columns = 7
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (table != "" && valid_delimiter_row($0, table_columns, delimiter_cells)) {
@@ -792,6 +933,9 @@ FNR == NR {
     }
     if (table != "" && $0 !~ /^\|/) {
         finish_table()
+    }
+    if (table == "" && canonical_section_table != "" && $0 ~ /^\|/) {
+        error("unexpected table in canonical " canonical_section_table " section")
     }
     next
 }
@@ -1013,7 +1157,8 @@ function record_model_issue(record_id, issue_url, issue_key) {
     return 1
 }
 function valid_issue_work(value, record_id, work, range_values, range_count,
-                          range_start, range_end, issue_number, remaining, issue_url) {
+                          range_start_text, range_end_text, range_start, range_end,
+                          issue_number, remaining, issue_url) {
     work = trim(value)
     if (work !~ /^[Ii]ssues? /) {
         return 0
@@ -1024,9 +1169,16 @@ function valid_issue_work(value, record_id, work, range_values, range_count,
         if (range_count != 2) {
             return 0
         }
-        range_start = substr(range_values[1], 2) + 0
-        range_end = substr(range_values[2], 2) + 0
-        if (range_start > range_end) {
+        range_start_text = substr(range_values[1], 2)
+        range_end_text = substr(range_values[2], 2)
+        if (length(range_start_text) > max_issue_digits ||
+            length(range_end_text) > max_issue_digits) {
+            return 0
+        }
+        range_start = range_start_text + 0
+        range_end = range_end_text + 0
+        if (range_start > range_end ||
+            range_end - range_start + 1 > known_issue_count) {
             return 0
         }
         for (issue_number = range_start; issue_number <= range_end; issue_number++) {
@@ -1077,6 +1229,13 @@ function valid_delimiter_row(line, expected_columns, cells, count, cell_index, v
     }
     return 1
 }
+function markdown_heading_level(line, level) {
+    level = 0
+    while (substr(line, level + 1, 1) == "#") {
+        level++
+    }
+    return level
+}
 function finish_table() {
     if (table != "" && !table_delimiter_seen) {
         error("canonical " table " table is missing a valid delimiter")
@@ -1088,26 +1247,63 @@ function finish_table() {
 BEGIN {
     while ((getline inventory_entry < issue_inventory) > 0) {
         known_issue[inventory_entry] = 1
+        inventory_number = inventory_entry
+        sub(/^.*\//, "", inventory_number)
+        if (length(inventory_number) > max_issue_digits) {
+            max_issue_digits = length(inventory_number)
+        }
+        known_issue_count++
     }
     close(issue_inventory)
 }
 FNR == NR {
     if ($0 ~ /^##+ /) {
+        current_heading_level = markdown_heading_level($0)
+        leaves_canonical_section = canonical_section_table == "" ||
+            current_heading_level <= canonical_section_level
         finish_table()
         section = $0
+        if (leaves_canonical_section) {
+            canonical_section_table = ""
+            canonical_section_level = 0
+            canonical_header_seen = 0
+            if (section == "### Control owners") {
+                canonical_section_table = "owners"
+            } else if (section == "### Data classification") {
+                canonical_section_table = "classes"
+            }
+            if (canonical_section_table != "") {
+                canonical_section_level = current_heading_level
+            }
+        }
+    }
+    if (canonical_header_seen && table == "" &&
+        canonical_section_table != "" && $0 ~ /^\|/) {
+        error("unexpected table in canonical " canonical_section_table " section")
+        next
     }
     if (section == "### Control owners" &&
         $0 == "| ID | Accountable surface | Live verification work |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical owners table header")
+            next
+        }
         table = "owners"
         table_columns = 3
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (section == "### Data classification" &&
-        $0 == "| ID | Class | Central rule | Retention boundary | Owner and verification |") {
+        $0 == "| ID | Class | Examples | At rest | In transit | Access | Logging | Retention | Disposal | Owner | Verification |") {
+        if (canonical_header_seen) {
+            error("duplicate canonical classes table header")
+            next
+        }
         table = "classes"
-        table_columns = 5
+        table_columns = 11
         table_delimiter_seen = 0
+        canonical_header_seen = 1
         next
     }
     if (table != "" && valid_delimiter_row($0, table_columns, delimiter_cells)) {
@@ -1149,21 +1345,21 @@ FNR == NR {
             error("duplicate readable data-class row " class_id)
         }
         model_class[class_id] = trim(cells[3])
-        owner_and_work = trim(cells[6])
-        owner_separator = index(owner_and_work, "; ")
-        if (!owner_separator) {
-            error("readable data class has invalid owner and verification: " class_id)
+        model_class_examples[class_id] = trim(cells[4])
+        model_class_at_rest[class_id] = trim(cells[5])
+        model_class_in_transit[class_id] = trim(cells[6])
+        model_class_access[class_id] = trim(cells[7])
+        model_class_logging[class_id] = trim(cells[8])
+        model_class_retention[class_id] = trim(cells[9])
+        model_class_disposal[class_id] = trim(cells[10])
+        owner_id = trim(cells[11])
+        if (owner_id !~ /^OWN-[A-Z]+(-[A-Z]+)*$/) {
+            error("readable data class has invalid control owner: " class_id)
         } else {
-            owner_id = substr(owner_and_work, 1, owner_separator - 1)
-            owner_work = substr(owner_and_work, owner_separator + 2)
-            if (owner_id !~ /^OWN-[A-Z]+(-[A-Z]+)*$/) {
-                error("readable data class has invalid control owner: " class_id)
-            } else {
-                model_class_owner[class_id] = owner_id
-            }
-            if (!valid_issue_work(owner_work, class_id)) {
-                error("readable data class has invalid verification work: " class_id)
-            }
+            model_class_owner[class_id] = owner_id
+        }
+        if (!valid_issue_work(trim(cells[12]), class_id)) {
+            error("readable data class has invalid verification work: " class_id)
         }
         next
     }
@@ -1173,6 +1369,9 @@ FNR == NR {
     }
     if (table != "" && $0 !~ /^\|/) {
         finish_table()
+    }
+    if (table == "" && canonical_section_table != "" && $0 ~ /^\|/) {
+        error("unexpected table in canonical " canonical_section_table " section")
     }
     next
 }
@@ -1207,6 +1406,27 @@ NF != 11 {
         error("data class is absent from readable model: " $1)
     } else if ($2 != model_class[$1]) {
         error("ledger name does not match readable data class for " $1)
+    }
+    if (($1 in model_class) && $3 != model_class_examples[$1]) {
+        error("ledger examples do not match readable data class for " $1)
+    }
+    if (($1 in model_class) && $4 != model_class_at_rest[$1]) {
+        error("ledger at-rest rule does not match readable data class for " $1)
+    }
+    if (($1 in model_class) && $5 != model_class_in_transit[$1]) {
+        error("ledger in-transit rule does not match readable data class for " $1)
+    }
+    if (($1 in model_class) && $6 != model_class_access[$1]) {
+        error("ledger access rule does not match readable data class for " $1)
+    }
+    if (($1 in model_class) && $7 != model_class_logging[$1]) {
+        error("ledger logging rule does not match readable data class for " $1)
+    }
+    if (($1 in model_class) && $8 != model_class_retention[$1]) {
+        error("ledger retention rule does not match readable data class for " $1)
+    }
+    if (($1 in model_class) && $9 != model_class_disposal[$1]) {
+        error("ledger disposal rule does not match readable data class for " $1)
     }
     for (field_index = 1; field_index <= 10; field_index++) {
         if (trim($field_index) == "" || trim($field_index) == "-") {
@@ -1360,6 +1580,23 @@ while IFS= read -r citation; do
   citation_file="$repo_root/$citation_path"
   [ -f "$citation_file" ] || fail "citation target does not exist: $citation"
   [ ! -L "$citation_file" ] || fail "citation target must not be a symbolic link: $citation"
+  citation_cursor=$repo_root
+  citation_remaining=$citation_path
+  while [ -n "$citation_remaining" ]; do
+    case "$citation_remaining" in
+      */*)
+        citation_component=${citation_remaining%%/*}
+        citation_remaining=${citation_remaining#*/}
+        ;;
+      *)
+        citation_component=$citation_remaining
+        citation_remaining=''
+        ;;
+    esac
+    citation_cursor="$citation_cursor/$citation_component"
+    [ ! -L "$citation_cursor" ] ||
+      fail "citation path contains a symbolic link: $citation"
+  done
   citation_dir=$(CDPATH='' cd -- "$(dirname -- "$citation_file")" && pwd -P)
   case "$citation_dir/" in
     "$docs_root"/*) ;;

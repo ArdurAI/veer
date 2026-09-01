@@ -184,6 +184,20 @@ expect_rejection 'case-mutated readable source citation' \
 new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
+ln -s architecture "$test_root/docs/alias"
+LC_ALL=C awk '
+  /^\| API and GitOps edge \|/ {
+      sub(/docs\/architecture\/overview[.]md:5-24/, "docs/alias/overview.md:5-24")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'citation through an intermediate symbolic link' \
+  'citation path contains a symbolic link: docs/alias/overview.md:5-24'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / { next }
   { print }
@@ -338,6 +352,58 @@ printf '%s\n' '<!-- ### Workspace isolation assumptions -->' \
   >>"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'required heading hidden in a comment' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '<!-- first hidden block' \
+  '--> <!-- second hidden block' \
+  '### Workspace isolation assumptions' \
+  'This heading remains inside the second comment.' \
+  '-->' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'chained comment transitions cannot expose a heading' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '```text <!-- -->' \
+  '### Workspace isolation assumptions' \
+  'This heading remains inside the fenced code block.' \
+  '```' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'comment text in a fence opener cannot expose a heading' \
+  'is missing visible heading: ### Workspace isolation assumptions'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '<pre title="<!-- -->">' \
+  '### Workspace isolation assumptions' \
+  'This heading remains inside the raw HTML block.' \
+  '</pre>' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'comment text in an HTML opener cannot expose a heading' \
   'is missing visible heading: ### Workspace isolation assumptions'
 
 new_fixture
@@ -530,6 +596,19 @@ expect_rejection 'unknown issue reference in readable prose' \
 new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| OWN-RECONCILIATION \|/ {
+      sub(/Issues #29 through #37/, "Issues #29 through #999999999")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable issue range exceeds the inventory work bound' \
+  'readable issue range exceeds offline inventory bound #29 through #999999999'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
 required_source='https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html'
 LC_ALL=C awk -v source="$required_source" '
   index($0, source) { next }
@@ -566,12 +645,12 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  $0 == "| ID | Class | Central rule | Retention boundary | Owner and verification |" {
+  $0 == "| ID | Class | Examples | At rest | In transit | Access | Logging | Retention | Disposal | Owner | Verification |" {
       in_classes = 1
       print
       next
   }
-  in_classes && $0 == "| --- | --- | --- | --- | --- |" { in_classes = 0; next }
+  in_classes && $0 == "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |" { in_classes = 0; next }
   { print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
@@ -681,7 +760,7 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  /^\| DC-PERSONAL \|/ { print "| DC-PERSONAL | Personal | | | |"; next }
+  /^\| DC-PERSONAL \|/ { print "| DC-PERSONAL | Personal | | | | | | | | | |"; next }
   { print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
@@ -692,8 +771,34 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  /^\| DC-CREDENTIAL \|/ {
+      sub(/Raw values exist only in process memory or an external secret manager; Veer persists opaque references versions and non-secret destination metadata; every unavoidable store is encrypted/, "Persist plaintext credentials at rest")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger at-rest handling mismatch' \
+  'ledger at-rest rule does not match readable data class for DC-CREDENTIAL'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| DC-CREDENTIAL \|/ {
+      sub(/Raw session material only until operation completion expiry revocation cancellation or lost ownership; references follow ProviderConnection lifetime and independent rotation/, "Retain raw credentials forever")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'readable and ledger retention handling mismatch' \
+  'ledger retention rule does not match readable data class for DC-CREDENTIAL'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| DC-PERSONAL \|/ {
-      sub(/OWN-IDENTITY;/, "OWN-IDENTITY and OWN-NONEXISTENT;")
+      sub(/\| OWN-IDENTITY \|/, "| OWN-IDENTITY and OWN-NONEXISTENT |")
   }
   { print }
 ' "$model" >"$rewritten_model"
@@ -706,7 +811,7 @@ model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| DC-PERSONAL \|/ {
-      sub(/issues #22, #27, #28, and #63 \|$/, "Issue #14 |")
+      sub(/Issues #22, #27, #28, and #63 \|$/, "Issue #14 |")
   }
   { print }
 ' "$model" >"$rewritten_model"
@@ -742,6 +847,57 @@ expect_rejection 'missing assumptions and unresolved evidence section' \
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" {
+      print "| ID | Conflicting responsibility | Alternate work |"
+      print "| --- | --- | --- |"
+      print "| OWN-FAKE | Conflicting contract | Issue #14 |"
+      print ""
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'additional table inside a canonical section' \
+  'unexpected table in canonical owners section'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" {
+      print "#### Alternate ownership"
+      print ""
+      print "| ID | Conflicting responsibility | Alternate work |"
+      print "| --- | --- | --- |"
+      print "| OWN-FAKE | Conflicting contract | Issue #14 |"
+      print ""
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'nested heading cannot end a canonical section' \
+  'unexpected table in canonical owners section'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| Build and release path \|/ {
+      print
+      print "| Component | Security-relevant responsibility | Source evidence |"
+      print "| --- | --- | --- |"
+      print "| Conflicting component | Alternate security contract | `docs/security/model.md:1` |"
+      next
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'adjacent duplicate canonical table header' \
+  'duplicate canonical components table header'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
 printf '%s\n' \
   '' \
   '### Control owners' \
@@ -749,6 +905,17 @@ printf '%s\n' \
   '| --- | --- | --- |' \
   '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
 expect_rejection 'duplicate canonical control-owner section' \
+  'duplicate visible heading: ### Control owners'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  ' ### Control owners ###' \
+  '| ID | Conflicting responsibility | Alternate work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'indented ATX duplicate canonical section' \
   'duplicate visible heading: ### Control owners'
 
 new_fixture
