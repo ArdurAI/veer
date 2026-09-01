@@ -90,10 +90,10 @@ does not contact AWS or read environment credentials.
 The database and queue rows are price proxies so issue #12 can compare
 alternatives on equal assumptions. They do not select the final implementation.
 RDS Multi-AZ rates include the standby instance. Database storage uses the
-Multi-AZ gp3 rate. Database recovery storage and transfer model one provisioned
-copy plus one full-dataset equivalent of rolling 30-day changed data. Relational
-occupancy includes one bounded current-state integrity anchor per resource and
-its index. Archive rows
+Multi-AZ gp3 rate. Database recovery storage models one provisioned copy plus a
+full-dataset equivalent of rolling 7-day changed data; recovery transfer uses
+the rolling 30-day changed-data bound. Relational occupancy includes one bounded
+current-state integrity anchor per resource and its index. Archive rows
 retain 13 ingress envelopes in each region and price one full retained-archive
 reseed; incremental replication may cost less.
 
