@@ -27,3 +27,7 @@ rumdl	0.2.62	darwin	amd64	tar.gz	rumdl	3cb4e17fda2703860f75a5ee1d1c08ee0bab04571
 rumdl	0.2.62	darwin	arm64	tar.gz	rumdl	3fd051ccb75e790635a7eb19585b4060c4c78bd3e7362daa98fa55dc46626b41	https://github.com/rvben/rumdl/releases/download/v0.2.62/rumdl-v0.2.62-aarch64-apple-darwin.tar.gz
 rumdl	0.2.62	linux	amd64	tar.gz	rumdl	12058de9ab5e0078a468d11bd1a8c5b79f69768a15c06832cebde715075ed893	https://github.com/rvben/rumdl/releases/download/v0.2.62/rumdl-v0.2.62-x86_64-unknown-linux-gnu.tar.gz
 rumdl	0.2.62	linux	arm64	tar.gz	rumdl	e0ad6d61afb9f4f734b297674e562846ee29b33f21618ce0678c9ea151d5d73a	https://github.com/rvben/rumdl/releases/download/v0.2.62/rumdl-v0.2.62-aarch64-unknown-linux-gnu.tar.gz
+vacuum	0.30.1	darwin	amd64	tar.gz	vacuum	ae6c5a4116cf4c8541de5f469d8fbf9a13b2c06e8c7149a18cf5afe220e23a21	https://github.com/daveshanley/vacuum/releases/download/v0.30.1/vacuum_0.30.1_darwin_x86_64.tar.gz
+vacuum	0.30.1	darwin	arm64	tar.gz	vacuum	3101425ee2983bb5d4b6ae2d101bc266b9c69bc4a510b816df2c98deafa42ab8	https://github.com/daveshanley/vacuum/releases/download/v0.30.1/vacuum_0.30.1_darwin_arm64.tar.gz
+vacuum	0.30.1	linux	amd64	tar.gz	vacuum	7e104d44c0987d95cd6499d2517175d7a7bba93be3ac5eb402aff0fbe7df8917	https://github.com/daveshanley/vacuum/releases/download/v0.30.1/vacuum_0.30.1_linux_x86_64.tar.gz
+vacuum	0.30.1	linux	arm64	tar.gz	vacuum	5f48c76266192f6e50cc58080d54e76f2a70924e5028ec692cda2a591a0c0c19	https://github.com/daveshanley/vacuum/releases/download/v0.30.1/vacuum_0.30.1_linux_arm64.tar.gz

@@ -1,0 +1,1763 @@
+{
+  "openapi": "3.1.2",
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "info": {
+    "title": "Veer Control Plane API",
+    "summary": "Versioned desired-state and operation API for Veer.",
+    "description": "This baseline defines Veer's first-alpha HTTP, error, concurrency, idempotency, pagination, and evolution conventions. It is a transport contract, not evidence that every route is implemented.",
+    "version": "v1alpha1"
+  },
+  "externalDocs": {
+    "description": "HTTP API and resource evolution decision",
+    "url": "https://github.com/ArdurAI/veer/blob/main/docs/architecture/0003-http-api-and-resource-evolution.md"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The deployment-selected TLS origin. The contract never embeds an environment hostname."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Workspaces",
+      "description": "Administrative and policy boundaries. The schemas are a transport baseline; issue #17 owns the common resource implementation."
+    },
+    {
+      "name": "Operations",
+      "description": "Asynchronous desired-state operation receipts and status."
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "x-veer-evolution": {
+    "transportVersion": "v1alpha1",
+    "routePrefix": "/api/v1alpha1",
+    "fieldNaming": "lowerCamelCase",
+    "successMediaType": "application/json",
+    "errorMediaType": "application/problem+json",
+    "unknownRequestFields": "reject",
+    "unknownResponseFields": "ignore",
+    "timestampFormat": "RFC3339-UTC-milliseconds",
+    "timestampPattern": "^\\d{4}-(0[1-9]|1[0-2])-([0-2]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+    "maximumRequestBytes": 262144,
+    "maximumResponsePageBytes": 262144,
+    "maximumNonReadResponseBytes": 1024,
+    "correlationHeader": "Veer-Request-Id",
+    "generation": {
+      "initial": 1,
+      "advance": "once-per-semantic-spec-change",
+      "unchanged": [
+        "metadata-only-write",
+        "status-only-write",
+        "idempotent-replay"
+      ]
+    },
+    "resourceVersion": {
+      "representation": "opaque",
+      "advance": "every-persisted-observable-write",
+      "compare": "strong-etag-if-match",
+      "missingPreconditionStatus": 428,
+      "stalePreconditionStatus": 412
+    },
+    "idempotency": {
+      "header": "Idempotency-Key",
+      "requiredOn": [
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ],
+      "minimumRetentionHours": 24,
+      "scope": "principal-method-canonical-target",
+      "replay": "original-status-headers-body",
+      "mismatchStatus": 409
+    },
+    "pagination": {
+      "strategy": "opaque-keyset-token",
+      "ordering": [
+        "createdAt",
+        "id"
+      ],
+      "defaultPageSize": 50,
+      "maximumPageSize": 100,
+      "tokenLifetimeSeconds": 900,
+      "snapshot": false,
+      "tokenBinding": [
+        "principal",
+        "workspace",
+        "route",
+        "filter",
+        "ordering"
+      ]
+    },
+    "deprecation": {
+      "minimumNoticeDays": 90,
+      "headers": [
+        "Deprecation",
+        "Sunset",
+        "Link"
+      ],
+      "breakingChange": "new-route-version"
+    }
+  },
+  "paths": {
+    "/api/v1alpha1/workspaces": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/VeerRequestId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Workspaces"
+        ],
+        "summary": "List workspaces",
+        "description": "Returns a deterministically ordered keyset page. Tokens are opaque, authenticated, scoped, and short lived; a sequence of pages is not a snapshot.",
+        "operationId": "listWorkspaces",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/PageToken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkspaceList"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailure"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationDenied"
+          },
+          "429": {
+            "$ref": "#/components/responses/Throttled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Workspaces"
+        ],
+        "summary": "Create a workspace",
+        "description": "Atomically accepts desired state, generation 1, the idempotency result, required audit data, integrity metadata, and outbox work. The response does not claim provider convergence.",
+        "operationId": "createWorkspace",
+        "x-veer-write-class": "spec",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Strict desired-state create payload. Unknown and server-owned fields are rejected.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCreate"
+              },
+              "example": {
+                "apiVersion": "v1alpha1",
+                "kind": "Workspace",
+                "metadata": {
+                  "displayName": "payments",
+                  "labels": {
+                    "team": "platform"
+                  }
+                },
+                "spec": {
+                  "suspendReconciliation": false
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/MutationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailure"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationDenied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/Throttled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1alpha1/workspaces/{workspaceId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/VeerRequestId"
+        },
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Workspaces"
+        ],
+        "summary": "Get a workspace",
+        "description": "Returns one workspace with a strong ETag derived from its opaque resource version.",
+        "operationId": "getWorkspace",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Workspace"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/Throttled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Workspaces"
+        ],
+        "summary": "Replace workspace intent",
+        "description": "Requires the current strong ETag. A semantic spec change advances generation once; metadata-only and replay writes do not.",
+        "operationId": "replaceWorkspace",
+        "x-veer-write-class": "spec",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Strict complete replacement of caller-owned metadata and desired spec.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceReplace"
+              },
+              "example": {
+                "apiVersion": "v1alpha1",
+                "kind": "Workspace",
+                "metadata": {
+                  "displayName": "payments-production",
+                  "labels": {
+                    "team": "platform"
+                  }
+                },
+                "spec": {
+                  "suspendReconciliation": false
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/MutationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailure"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "428": {
+            "$ref": "#/components/responses/PreconditionRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/Throttled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Workspaces"
+        ],
+        "summary": "Delete a workspace",
+        "description": "Accepts a generation-fenced deletion intent. The asynchronous operation owns finalization and provider cleanup evidence.",
+        "operationId": "deleteWorkspace",
+        "x-veer-write-class": "delete",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/MutationAccepted"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "428": {
+            "$ref": "#/components/responses/PreconditionRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/Throttled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1alpha1/workspaces/{workspaceId}/status": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/VeerRequestId"
+        },
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Workspaces"
+        ],
+        "summary": "Replace workspace status",
+        "description": "Controller-only status write. It advances resourceVersion but never generation and cannot modify desired spec or metadata.",
+        "operationId": "replaceWorkspaceStatus",
+        "x-veer-write-class": "status",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Strict controller-owned status payload with no desired-state fields.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceStatusWrite"
+              },
+              "example": {
+                "apiVersion": "v1alpha1",
+                "kind": "Workspace",
+                "status": {
+                  "observedGeneration": 3,
+                  "conditions": [
+                    {
+                      "type": "Ready",
+                      "status": "True",
+                      "reason": "Reconciled",
+                      "message": "The current generation is reconciled.",
+                      "observedGeneration": 3,
+                      "lastTransitionAt": "2026-09-01T21:00:00.000Z"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Workspace"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailure"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "428": {
+            "$ref": "#/components/responses/PreconditionRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/Throttled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1alpha1/operations/{operationId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/VeerRequestId"
+        },
+        {
+          "$ref": "#/components/parameters/OperationId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get an operation",
+        "description": "Returns the durable state of an accepted asynchronous operation without exposing provider response bodies.",
+        "operationId": "getOperation",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Operation"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/Throttled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "OIDC access token. Tokens are never stored in resources, logs, traces, errors, or audit payloads."
+      }
+    },
+    "parameters": {
+      "VeerRequestId": {
+        "name": "Veer-Request-Id",
+        "in": "header",
+        "required": false,
+        "description": "Optional opaque client correlation value. Invalid values are rejected; a server-generated value is used when absent and echoed on every response.",
+        "schema": {
+          "$ref": "#/components/schemas/RequestId"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Opaque retry identity scoped to principal, method, and canonical target. Reuse with a different normalized request returns 409.",
+        "schema": {
+          "$ref": "#/components/schemas/IdempotencyKey"
+        }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "description": "Strong ETag returned by the latest read. Absence returns 428 and a stale value returns 412.",
+        "schema": {
+          "$ref": "#/components/schemas/StrongETag"
+        }
+      },
+      "WorkspaceId": {
+        "name": "workspaceId",
+        "in": "path",
+        "required": true,
+        "description": "Stable opaque workspace identifier. Display-name changes never alter it.",
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "OperationId": {
+        "name": "operationId",
+        "in": "path",
+        "required": true,
+        "description": "Stable opaque operation identifier.",
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "PageSize": {
+        "name": "pageSize",
+        "in": "query",
+        "required": false,
+        "description": "Requested page size. The server defaults to 50 and caps the value at 100.",
+        "schema": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "PageToken": {
+        "name": "pageToken",
+        "in": "query",
+        "required": false,
+        "description": "Opaque authenticated keyset token bound to the original principal, scope, route, filter, and ordering. Tokens expire after 900 seconds.",
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 1024,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "headers": {
+      "VeerRequestId": {
+        "description": "Opaque bounded request correlation value.",
+        "schema": {
+          "$ref": "#/components/schemas/RequestId"
+        }
+      },
+      "ETag": {
+        "description": "Strong validator containing the opaque resource version.",
+        "schema": {
+          "$ref": "#/components/schemas/StrongETag"
+        }
+      },
+      "Location": {
+        "description": "Relative path of the accepted operation.",
+        "schema": {
+          "type": "string",
+          "pattern": "^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        }
+      },
+      "RetryAfter": {
+        "description": "Bounded delta seconds before retry. Clients still apply jitter and an overall retry deadline.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,4}$"
+        }
+      },
+      "WWWAuthenticate": {
+        "description": "Bearer challenge without token material or sensitive validation detail.",
+        "schema": {
+          "type": "string",
+          "pattern": "^Bearer($| )"
+        }
+      },
+      "Deprecation": {
+        "description": "RFC 9745 structured-field date identifying when this operation became deprecated.",
+        "schema": {
+          "type": "string",
+          "pattern": "^@[0-9]{10,12}$"
+        }
+      },
+      "Sunset": {
+        "description": "RFC 8594 HTTP date after which the deprecated operation may become unavailable.",
+        "schema": {
+          "type": "string",
+          "pattern": "^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$"
+        }
+      },
+      "DeprecationLink": {
+        "description": "Link to migration documentation with rel=deprecation; a sunset link is also included when applicable.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "responses": {
+      "WorkspaceList": {
+        "description": "A bounded deterministic workspace page.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "Deprecation": {
+            "$ref": "#/components/headers/Deprecation"
+          },
+          "Sunset": {
+            "$ref": "#/components/headers/Sunset"
+          },
+          "Link": {
+            "$ref": "#/components/headers/DeprecationLink"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WorkspaceList"
+            },
+            "example": {
+              "items": [],
+              "nextPageToken": "eyJjdXJzb3IiOiJvcGFxdWUifQ"
+            }
+          }
+        }
+      },
+      "Workspace": {
+        "description": "Current workspace representation.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "ETag": {
+            "$ref": "#/components/headers/ETag"
+          },
+          "Deprecation": {
+            "$ref": "#/components/headers/Deprecation"
+          },
+          "Sunset": {
+            "$ref": "#/components/headers/Sunset"
+          },
+          "Link": {
+            "$ref": "#/components/headers/DeprecationLink"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Workspace"
+            },
+            "example": {
+              "apiVersion": "v1alpha1",
+              "kind": "Workspace",
+              "metadata": {
+                "id": "wsp_01J00000000000000000000000",
+                "displayName": "payments",
+                "labels": {
+                  "team": "platform"
+                },
+                "generation": 3,
+                "resourceVersion": "rv_01J00000000000000000000000",
+                "createdAt": "2026-09-01T20:00:00.000Z",
+                "updatedAt": "2026-09-01T21:00:00.000Z"
+              },
+              "spec": {
+                "suspendReconciliation": false
+              },
+              "status": {
+                "observedGeneration": 3,
+                "conditions": []
+              }
+            }
+          }
+        }
+      },
+      "Operation": {
+        "description": "Current asynchronous operation representation.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "ETag": {
+            "$ref": "#/components/headers/ETag"
+          },
+          "Deprecation": {
+            "$ref": "#/components/headers/Deprecation"
+          },
+          "Sunset": {
+            "$ref": "#/components/headers/Sunset"
+          },
+          "Link": {
+            "$ref": "#/components/headers/DeprecationLink"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Operation"
+            },
+            "example": {
+              "id": "op_01J000000000000000000000000",
+              "resourceId": "wsp_01J00000000000000000000000",
+              "generation": 3,
+              "resourceVersion": "rv_01J00000000000000000000001",
+              "phase": "Running",
+              "reason": "Reconciling",
+              "message": "The current generation is being reconciled.",
+              "createdAt": "2026-09-01T21:00:00.000Z",
+              "updatedAt": "2026-09-01T21:00:01.000Z"
+            }
+          }
+        }
+      },
+      "MutationAccepted": {
+        "description": "Desired state was durably accepted; asynchronous convergence is not implied.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "Location": {
+            "$ref": "#/components/headers/Location"
+          },
+          "Deprecation": {
+            "$ref": "#/components/headers/Deprecation"
+          },
+          "Sunset": {
+            "$ref": "#/components/headers/Sunset"
+          },
+          "Link": {
+            "$ref": "#/components/headers/DeprecationLink"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MutationReceipt"
+            },
+            "example": {
+              "resourceId": "wsp_01J00000000000000000000000",
+              "operationId": "op_01J000000000000000000000000",
+              "generation": 3,
+              "resourceVersion": "rv_01J00000000000000000000001",
+              "acceptedAt": "2026-09-01T21:00:00.000Z"
+            }
+          }
+        }
+      },
+      "ValidationFailure": {
+        "description": "The request is syntactically or semantically invalid and caused no mutation.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "examples": {
+              "validation": {
+                "$ref": "#/components/examples/ValidationFailure"
+              }
+            }
+          }
+        }
+      },
+      "AuthenticationRequired": {
+        "description": "Authentication is missing or invalid.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "WWW-Authenticate": {
+            "$ref": "#/components/headers/WWWAuthenticate"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "examples": {
+              "authentication": {
+                "$ref": "#/components/examples/AuthenticationRequired"
+              }
+            }
+          }
+        }
+      },
+      "AuthorizationDenied": {
+        "description": "The authenticated principal lacks the required action in the resolved scope.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "examples": {
+              "authorization": {
+                "$ref": "#/components/examples/AuthorizationDenied"
+              }
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The resource does not exist in the caller-visible scope.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "example": {
+              "type": "urn:veer:problem:not-found",
+              "title": "Resource not found",
+              "status": 404,
+              "detail": "The resource does not exist in the caller-visible scope.",
+              "instance": "urn:veer:request:req_01J00000000000000000000006",
+              "code": "not-found",
+              "requestId": "req_01J00000000000000000000006"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The request conflicts with a current invariant or reuses an idempotency key with a different request.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "examples": {
+              "conflict": {
+                "$ref": "#/components/examples/Conflict"
+              }
+            }
+          }
+        }
+      },
+      "PreconditionFailed": {
+        "description": "If-Match does not equal the current strong ETag.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "ETag": {
+            "$ref": "#/components/headers/ETag"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "example": {
+              "type": "urn:veer:problem:precondition-failed",
+              "title": "Resource version is stale",
+              "status": 412,
+              "detail": "Reload the resource and retry with its current ETag.",
+              "instance": "urn:veer:request:req_01J00000000000000000000007",
+              "code": "precondition-failed",
+              "requestId": "req_01J00000000000000000000007"
+            }
+          }
+        }
+      },
+      "PreconditionRequired": {
+        "description": "A required If-Match header is absent.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "example": {
+              "type": "urn:veer:problem:precondition-required",
+              "title": "Mutation precondition required",
+              "status": 428,
+              "detail": "Supply the latest strong ETag in If-Match.",
+              "instance": "urn:veer:request:req_01J00000000000000000000008",
+              "code": "precondition-required",
+              "requestId": "req_01J00000000000000000000008"
+            }
+          }
+        }
+      },
+      "RequestTooLarge": {
+        "description": "The encoded request exceeds 262144 bytes.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "example": {
+              "type": "urn:veer:problem:request-too-large",
+              "title": "Request body is too large",
+              "status": 413,
+              "detail": "The encoded request body exceeds 262144 bytes.",
+              "instance": "urn:veer:request:req_01J00000000000000000000009",
+              "code": "request-too-large",
+              "requestId": "req_01J00000000000000000000009"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "A request body is not application/json.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "example": {
+              "type": "urn:veer:problem:unsupported-media-type",
+              "title": "Unsupported request media type",
+              "status": 415,
+              "detail": "Request bodies must use application/json.",
+              "instance": "urn:veer:request:req_01J00000000000000000000010",
+              "code": "unsupported-media-type",
+              "requestId": "req_01J00000000000000000000010"
+            }
+          }
+        }
+      },
+      "Throttled": {
+        "description": "The caller or scoped admission budget is temporarily exhausted.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "examples": {
+              "throttling": {
+                "$ref": "#/components/examples/Throttled"
+              }
+            }
+          }
+        }
+      },
+      "InternalFailure": {
+        "description": "The request failed without exposing internal or provider details.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "examples": {
+              "internal": {
+                "$ref": "#/components/examples/InternalFailure"
+              }
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "A system-wide safety or availability boundary temporarily prevents service.",
+        "headers": {
+          "Veer-Request-Id": {
+            "$ref": "#/components/headers/VeerRequestId"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "example": {
+              "type": "urn:veer:problem:unavailable",
+              "title": "Service temporarily unavailable",
+              "status": 503,
+              "detail": "A system-wide safety boundary temporarily prevents service.",
+              "instance": "urn:veer:request:req_01J00000000000000000000011",
+              "code": "unavailable",
+              "requestId": "req_01J00000000000000000000011",
+              "retryAfterSeconds": 10
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "RequestId": {
+        "type": "string",
+        "description": "Opaque correlation value safe for bounded logs and response headers.",
+        "example": "req_01J00000000000000000000000",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+      },
+      "IdempotencyKey": {
+        "type": "string",
+        "description": "Opaque caller-selected retry identity. It is not a credential and must not contain personal or secret data.",
+        "minLength": 16,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._~:+/-]{15,127}$"
+      },
+      "StrongETag": {
+        "type": "string",
+        "description": "Quoted opaque strong entity tag; weak validators are rejected for mutation preconditions.",
+        "minLength": 3,
+        "maxLength": 130,
+        "pattern": "^\"[A-Za-z0-9_-]{1,128}\"$"
+      },
+      "OpaqueId": {
+        "type": "string",
+        "description": "Stable opaque identifier with no embedded tenant, provider, or personal information.",
+        "example": "wsp_01J00000000000000000000000",
+        "minLength": 16,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$"
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "UTC RFC 3339 timestamp serialized with exactly millisecond precision.",
+        "example": "2026-09-01T21:00:00.000Z",
+        "pattern": "^\\d{4}-(0[1-9]|1[0-2])-([0-2]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$"
+      },
+      "Labels": {
+        "type": "object",
+        "description": "Explicit bounded string map; this is the only free-form request object in the baseline.",
+        "example": {
+          "team": "platform"
+        },
+        "maxProperties": 64,
+        "propertyNames": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9.-]*$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "x-veer-free-form-map": true
+      },
+      "ResourceMetadata": {
+        "type": "object",
+        "description": "Server-owned identity and lifecycle metadata plus bounded caller labels.",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "displayName",
+          "generation",
+          "resourceVersion",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "readOnly": true
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "readOnly": true,
+            "description": "Starts at 1 and advances once per semantic desired-spec change only."
+          },
+          "resourceVersion": {
+            "type": "string",
+            "example": "rv_01J00000000000000000000001",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "readOnly": true,
+            "description": "Opaque version that changes on every persisted observable write and has no ordering semantics."
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp",
+            "type": "string",
+            "readOnly": true
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp",
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "example": {
+          "id": "wsp_01J00000000000000000000000",
+          "displayName": "payments",
+          "labels": {
+            "team": "platform"
+          },
+          "generation": 3,
+          "resourceVersion": "rv_01J00000000000000000000000",
+          "createdAt": "2026-09-01T20:00:00.000Z",
+          "updatedAt": "2026-09-01T21:00:00.000Z"
+        }
+      },
+      "WritableMetadata": {
+        "type": "object",
+        "description": "Caller-owned metadata; server identity and version fields are intentionally absent.",
+        "example": {
+          "displayName": "payments",
+          "labels": {
+            "team": "platform"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "displayName"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          }
+        }
+      },
+      "WorkspaceSpec": {
+        "type": "object",
+        "description": "Minimal baseline desired state. Issue #17 owns the implemented common envelope and later resource issues own richer specs.",
+        "additionalProperties": false,
+        "required": [
+          "suspendReconciliation"
+        ],
+        "properties": {
+          "suspendReconciliation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly pauses new reconciliation admission without discarding durable intent."
+          }
+        }
+      },
+      "Condition": {
+        "type": "object",
+        "description": "Bounded machine-readable status condition with a safe human message.",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "status",
+          "reason",
+          "message",
+          "observedGeneration",
+          "lastTransitionAt"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "True",
+              "False",
+              "Unknown"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Safe summary without credentials, raw provider bodies, or personal data."
+          },
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "lastTransitionAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "WorkspaceStatus": {
+        "type": "object",
+        "description": "Observed status written only by authorized controllers.",
+        "example": {
+          "observedGeneration": 3,
+          "conditions": []
+        },
+        "additionalProperties": false,
+        "required": [
+          "observedGeneration",
+          "conditions"
+        ],
+        "properties": {
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "conditions": {
+            "type": "array",
+            "maxItems": 32,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            }
+          }
+        }
+      },
+      "Workspace": {
+        "type": "object",
+        "description": "Representative versioned resource used to make the HTTP conventions executable.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Workspace"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/WorkspaceSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceStatus"
+          }
+        }
+      },
+      "WorkspaceCreate": {
+        "type": "object",
+        "description": "Strict create payload. Unknown fields and server-owned lifecycle fields are rejected.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Workspace"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/WorkspaceSpec"
+          }
+        }
+      },
+      "WorkspaceReplace": {
+        "type": "object",
+        "description": "Strict replacement payload. Concurrency is carried by If-Match, never by a writable resourceVersion field.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Workspace"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/WorkspaceSpec"
+          }
+        }
+      },
+      "WorkspaceStatusWrite": {
+        "type": "object",
+        "description": "Strict controller status payload. Desired spec and caller metadata are not writable through this route.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Workspace"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceStatus"
+          }
+        }
+      },
+      "WorkspaceList": {
+        "type": "object",
+        "description": "A deterministic bounded page ordered by createdAt and stable id.",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Workspace"
+            }
+          },
+          "nextPageToken": {
+            "type": "string",
+            "example": "eyJjdXJzb3IiOiJvcGFxdWUifQ",
+            "minLength": 16,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "MutationReceipt": {
+        "type": "object",
+        "description": "Bounded receipt returned for a durably accepted asynchronous mutation.",
+        "additionalProperties": false,
+        "required": [
+          "resourceId",
+          "operationId",
+          "generation",
+          "resourceVersion",
+          "acceptedAt"
+        ],
+        "properties": {
+          "resourceId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "example": 3,
+            "minimum": 1
+          },
+          "resourceVersion": {
+            "type": "string",
+            "example": "rv_01J00000000000000000000001",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "acceptedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "Operation": {
+        "type": "object",
+        "description": "Durable state of one accepted asynchronous operation.",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "resourceId",
+          "generation",
+          "resourceVersion",
+          "phase",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "example": "op_01J000000000000000000000000"
+          },
+          "resourceId": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "example": "wsp_01J00000000000000000000000"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "example": 3,
+            "minimum": 1
+          },
+          "resourceVersion": {
+            "type": "string",
+            "example": "rv_01J00000000000000000000001",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "phase": {
+            "type": "string",
+            "example": "Running",
+            "enum": [
+              "Pending",
+              "Running",
+              "Succeeded",
+              "Failed",
+              "Canceled"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "example": "Reconciling",
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          },
+          "message": {
+            "type": "string",
+            "example": "The current generation is being reconciled.",
+            "maxLength": 512,
+            "description": "Safe summary without raw provider response data."
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "FieldViolation": {
+        "type": "object",
+        "description": "Stable validation detail with a JSON Pointer and safe bounded message.",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "example": "/spec/unknownField",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(/([^~/]|~0|~1)*)+$"
+          },
+          "code": {
+            "type": "string",
+            "example": "unknown-field",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "message": {
+            "type": "string",
+            "example": "The field is not defined for v1alpha1.",
+            "maxLength": 512
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 9457 problem details with stable Veer extensions. Raw tokens, SQL, provider bodies, and secret-bearing values are prohibited.",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "requestId"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "example": "urn:veer:problem:validation-failed",
+            "pattern": "^urn:veer:problem:[a-z][a-z0-9-]*$"
+          },
+          "title": {
+            "type": "string",
+            "example": "Request validation failed",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "example": 400,
+            "minimum": 400,
+            "maximum": 599
+          },
+          "detail": {
+            "type": "string",
+            "example": "One request field is not accepted.",
+            "maxLength": 512
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri",
+            "example": "urn:veer:request:req_01J00000000000000000000000",
+            "pattern": "^urn:veer:request:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "code": {
+            "type": "string",
+            "example": "validation-failed",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          },
+          "errors": {
+            "type": "array",
+            "example": [],
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/FieldViolation"
+            }
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "example": 5,
+            "minimum": 1,
+            "maximum": 86400
+          }
+        }
+      }
+    },
+    "examples": {
+      "ValidationFailure": {
+        "summary": "Unknown request field",
+        "description": "A strict request object rejected a field that is not declared for this route version.",
+        "value": {
+          "type": "urn:veer:problem:validation-failed",
+          "title": "Request validation failed",
+          "status": 400,
+          "detail": "One request field is not accepted.",
+          "instance": "urn:veer:request:req_01J00000000000000000000000",
+          "code": "validation-failed",
+          "requestId": "req_01J00000000000000000000000",
+          "errors": [
+            {
+              "field": "/spec/unknownField",
+              "code": "unknown-field",
+              "message": "The field is not defined for v1alpha1."
+            }
+          ]
+        }
+      },
+      "AuthenticationRequired": {
+        "summary": "Missing bearer token",
+        "description": "The request did not carry an acceptable bearer credential; no token detail is echoed.",
+        "value": {
+          "type": "urn:veer:problem:authentication-required",
+          "title": "Authentication required",
+          "status": 401,
+          "detail": "A valid bearer token is required.",
+          "instance": "urn:veer:request:req_01J00000000000000000000001",
+          "code": "authentication-required",
+          "requestId": "req_01J00000000000000000000001"
+        }
+      },
+      "AuthorizationDenied": {
+        "summary": "Action denied in visible scope",
+        "description": "The principal is authenticated but lacks the required action in a caller-visible scope.",
+        "value": {
+          "type": "urn:veer:problem:authorization-denied",
+          "title": "Authorization denied",
+          "status": 403,
+          "detail": "The principal is not permitted to perform this action.",
+          "instance": "urn:veer:request:req_01J00000000000000000000002",
+          "code": "authorization-denied",
+          "requestId": "req_01J00000000000000000000002"
+        }
+      },
+      "Conflict": {
+        "summary": "Idempotency key reused with different intent",
+        "description": "A scoped idempotency key is already bound to a different normalized request fingerprint.",
+        "value": {
+          "type": "urn:veer:problem:idempotency-key-reused",
+          "title": "Request conflicts with a prior mutation",
+          "status": 409,
+          "detail": "The idempotency key was already used with a different normalized request.",
+          "instance": "urn:veer:request:req_01J00000000000000000000003",
+          "code": "idempotency-key-reused",
+          "requestId": "req_01J00000000000000000000003"
+        }
+      },
+      "Throttled": {
+        "summary": "Scoped admission budget exhausted",
+        "description": "The request crossed a bounded caller or resource admission budget and can be retried later.",
+        "value": {
+          "type": "urn:veer:problem:rate-limited",
+          "title": "Request rate limited",
+          "status": 429,
+          "detail": "The scoped admission budget is temporarily exhausted.",
+          "instance": "urn:veer:request:req_01J00000000000000000000004",
+          "code": "rate-limited",
+          "requestId": "req_01J00000000000000000000004",
+          "retryAfterSeconds": 5
+        }
+      },
+      "InternalFailure": {
+        "summary": "Safe internal failure",
+        "description": "An internal failure is reported without stack, SQL, provider, credential, or topology detail.",
+        "value": {
+          "type": "urn:veer:problem:internal-failure",
+          "title": "Internal failure",
+          "status": 500,
+          "detail": "The request could not be completed.",
+          "instance": "urn:veer:request:req_01J00000000000000000000005",
+          "code": "internal-failure",
+          "requestId": "req_01J00000000000000000000005"
+        }
+      }
+    }
+  }
+}

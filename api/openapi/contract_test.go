@@ -1,0 +1,456 @@
+package openapi
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestBaselineContract(t *testing.T) {
+	t.Parallel()
+	data, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := Validate(data); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestContractRejectsSemanticDrift(t *testing.T) {
+	t.Parallel()
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		message string
+	}{
+		{
+			name: "OpenAPI version",
+			mutate: func(root map[string]any) {
+				root["openapi"] = "3.2.0"
+			},
+			message: "openapi must be 3.1.2",
+		},
+		{
+			name: "schema dialect",
+			mutate: func(root map[string]any) {
+				root["jsonSchemaDialect"] = "https://json-schema.org/draft/2020-12/schema"
+			},
+			message: "jsonSchemaDialect",
+		},
+		{
+			name: "anonymous root security",
+			mutate: func(root map[string]any) {
+				root["security"] = []any{}
+			},
+			message: "root security",
+		},
+		{
+			name: "anonymous operation security override",
+			mutate: func(root map[string]any) {
+				post := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "post")
+				post["security"] = []any{}
+			},
+			message: "security override: must contain exactly one BearerAuth requirement",
+		},
+		{
+			name: "BearerAuth reclassified",
+			mutate: func(root map[string]any) {
+				bearer := nestedMap(t, root, "components", "securitySchemes", "BearerAuth")
+				bearer["type"] = "apiKey"
+				bearer["in"] = "header"
+				bearer["name"] = "Authorization"
+			},
+			message: "BearerAuth must remain an HTTP bearer scheme",
+		},
+		{
+			name: "absolute deployment server",
+			mutate: func(root map[string]any) {
+				root["servers"] = []any{map[string]any{"url": "https://developer.example.invalid"}}
+			},
+			message: "server URL must remain relative",
+		},
+		{
+			name: "path server override",
+			mutate: func(root map[string]any) {
+				item := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces")
+				item["servers"] = []any{map[string]any{"url": "https://example.invalid"}}
+			},
+			message: "must inherit the root-relative server",
+		},
+		{
+			name: "operation server override",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "get")
+				operation["servers"] = []any{map[string]any{"url": "https://example.invalid"}}
+			},
+			message: "must not define servers",
+		},
+		{
+			name: "webhook surface",
+			mutate: func(root map[string]any) {
+				root["webhooks"] = map[string]any{}
+			},
+			message: "webhooks are not selected for v1alpha1",
+		},
+		{
+			name: "external reference",
+			mutate: func(root map[string]any) {
+				properties := nestedMap(t, root, "components", "schemas", "Problem", "properties")
+				properties["requestId"] = map[string]any{"$ref": "https://example.invalid/request-id.json"}
+			},
+			message: "external or malformed reference",
+		},
+		{
+			name: "referenced path item",
+			mutate: func(root map[string]any) {
+				item := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces")
+				item["$ref"] = "#/components/pathItems/Workspaces"
+			},
+			message: "must define its operations directly",
+		},
+		{
+			name: "unversioned route",
+			mutate: func(root map[string]any) {
+				paths := nestedMap(t, root, "paths")
+				paths["/workspaces"] = paths["/api/v1alpha1/workspaces"]
+				delete(paths, "/api/v1alpha1/workspaces")
+			},
+			message: "outside /api/v1alpha1",
+		},
+		{
+			name: "duplicate operation ID",
+			mutate: func(root map[string]any) {
+				get := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get")
+				get["operationId"] = "listWorkspaces"
+			},
+			message: "operationId",
+		},
+		{
+			name: "missing baseline operation",
+			mutate: func(root map[string]any) {
+				paths := nestedMap(t, root, "paths")
+				delete(paths, "/api/v1alpha1/operations/{operationId}")
+			},
+			message: `operationId "getOperation" must remain at GET /api/v1alpha1/operations/{operationId}`,
+		},
+		{
+			name: "unselected trace method",
+			mutate: func(root map[string]any) {
+				item := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces")
+				item["trace"] = map[string]any{}
+			},
+			message: "TRACE /api/v1alpha1/workspaces is not selected for v1alpha1",
+		},
+		{
+			name: "wrong success response reference",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get", "responses")
+				responses["200"] = map[string]any{"$ref": "#/components/responses/WorkspaceList"}
+			},
+			message: `operationId "getWorkspace" must use 200 response Workspace`,
+		},
+		{
+			name: "unexpected second success response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get", "responses")
+				responses["204"] = map[string]any{"description": "No content"}
+			},
+			message: "declares unexpected success response 204",
+		},
+		{
+			name: "missing idempotency header",
+			mutate: func(root map[string]any) {
+				post := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "post")
+				post["parameters"] = []any{}
+			},
+			message: "omits IdempotencyKey",
+		},
+		{
+			name: "missing optimistic concurrency header",
+			mutate: func(root map[string]any) {
+				put := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "put")
+				put["parameters"] = []any{
+					map[string]any{"$ref": "#/components/parameters/IdempotencyKey"},
+				}
+			},
+			message: "omits IfMatch",
+		},
+		{
+			name: "missing stale precondition response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "put", "responses")
+				delete(responses, "412")
+			},
+			message: "omits precondition response 412",
+		},
+		{
+			name: "delete request body",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "delete")
+				operation["requestBody"] = map[string]any{}
+			},
+			message: "must not define a request body",
+		},
+		{
+			name: "status route reclassified",
+			mutate: func(root map[string]any) {
+				put := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put")
+				put["x-veer-write-class"] = "spec"
+			},
+			message: "status route is not classified",
+		},
+		{
+			name: "status payload can mutate spec",
+			mutate: func(root map[string]any) {
+				properties := nestedMap(t, root, "components", "schemas", "WorkspaceStatusWrite", "properties")
+				properties["spec"] = map[string]any{"$ref": "#/components/schemas/WorkspaceSpec"}
+			},
+			message: "WorkspaceStatusWrite exposes spec",
+		},
+		{
+			name: "status payload loses object type",
+			mutate: func(root map[string]any) {
+				statusWrite := nestedMap(t, root, "components", "schemas", "WorkspaceStatusWrite")
+				delete(statusWrite, "type")
+			},
+			message: "schema with properties must declare type object",
+		},
+		{
+			name: "status route uses desired-state schema",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "requestBody", "content", "application/json", "schema")
+				schema["$ref"] = "#/components/schemas/WorkspaceReplace"
+			},
+			message: `operationId "replaceWorkspaceStatus" must use request schema WorkspaceStatusWrite`,
+		},
+		{
+			name: "generation status semantics",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "x-veer-evolution", "generation")
+				generation["unchanged"] = []any{"metadata-only-write", "idempotent-replay"}
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "resource version stale status",
+			mutate: func(root map[string]any) {
+				version := nestedMap(t, root, "x-veer-evolution", "resourceVersion")
+				version["stalePreconditionStatus"] = json.Number("409")
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "unbounded pagination",
+			mutate: func(root map[string]any) {
+				pagination := nestedMap(t, root, "x-veer-evolution", "pagination")
+				pagination["maximumPageSize"] = json.Number("1000")
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "unbounded page token",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "parameters", "PageToken", "schema")
+				schema["maxLength"] = json.Number("4096")
+			},
+			message: "PageToken parameter contract drifted",
+		},
+		{
+			name: "missing page token",
+			mutate: func(root map[string]any) {
+				list := nestedMap(t, root, "components", "schemas", "WorkspaceList", "properties")
+				delete(list, "nextPageToken")
+			},
+			message: "WorkspaceList omits nextPageToken",
+		},
+		{
+			name: "deprecation notice shortened",
+			mutate: func(root map[string]any) {
+				deprecation := nestedMap(t, root, "x-veer-evolution", "deprecation")
+				deprecation["minimumNoticeDays"] = json.Number("30")
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "missing deprecation response header",
+			mutate: func(root map[string]any) {
+				headers := nestedMap(t, root, "components", "responses", "Workspace", "headers")
+				delete(headers, "Link")
+			},
+			message: "success response Workspace: Link is missing",
+		},
+		{
+			name: "wrong request ID response header reference",
+			mutate: func(root map[string]any) {
+				headers := nestedMap(t, root, "components", "responses", "Conflict", "headers")
+				headers["Veer-Request-Id"] = map[string]any{"$ref": "#/components/headers/Sunset"}
+			},
+			message: "Veer-Request-Id must reference #/components/headers/VeerRequestId",
+		},
+		{
+			name: "wrong retry response header reference",
+			mutate: func(root map[string]any) {
+				headers := nestedMap(t, root, "components", "responses", "Throttled", "headers")
+				headers["Retry-After"] = map[string]any{"$ref": "#/components/headers/Sunset"}
+			},
+			message: "Retry-After must reference #/components/headers/RetryAfter",
+		},
+		{
+			name: "missing validation example",
+			mutate: func(root map[string]any) {
+				examples := nestedMap(t, root, "components", "examples")
+				delete(examples, "ValidationFailure")
+			},
+			message: "canonical problem examples",
+		},
+		{
+			name: "detached validation example",
+			mutate: func(root map[string]any) {
+				media := nestedMap(t, root, "components", "responses", "ValidationFailure", "content", "application/problem+json")
+				delete(media, "examples")
+			},
+			message: "error response ValidationFailure: examples is missing",
+		},
+		{
+			name: "mismatched authentication example",
+			mutate: func(root map[string]any) {
+				value := nestedMap(t, root, "components", "examples", "AuthenticationRequired", "value")
+				value["status"] = json.Number("403")
+			},
+			message: "status or code drifted",
+		},
+		{
+			name: "unknown problem members allowed",
+			mutate: func(root map[string]any) {
+				problem := nestedMap(t, root, "components", "schemas", "Problem")
+				problem["additionalProperties"] = true
+			},
+			message: "permits unconstrained additional properties",
+		},
+		{
+			name: "map marker removed",
+			mutate: func(root map[string]any) {
+				labels := nestedMap(t, root, "components", "schemas", "Labels")
+				delete(labels, "x-veer-free-form-map")
+			},
+			message: "map schema lacks x-veer-free-form-map",
+		},
+		{
+			name: "error media type",
+			mutate: func(root map[string]any) {
+				content := nestedMap(t, root, "components", "responses", "Conflict", "content")
+				content["application/json"] = content["application/problem+json"]
+				delete(content, "application/problem+json")
+			},
+			message: "must use application/problem+json",
+		},
+		{
+			name: "error response schema",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "responses", "Conflict", "content", "application/problem+json", "schema")
+				schema["$ref"] = "#/components/schemas/Workspace"
+			},
+			message: "error response Conflict must reference Problem",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, marshalErr := json.Marshal(root)
+			if marshalErr != nil {
+				t.Fatalf("json.Marshal() error = %v", marshalErr)
+			}
+			err := Validate(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want message containing %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestContractRejectsDuplicateKeysAndTrailingData(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		data    string
+		message string
+	}{
+		{
+			name:    "duplicate key",
+			data:    `{"openapi":"3.1.2","openapi":"3.0.0"}`,
+			message: `duplicate object key "openapi"`,
+		},
+		{
+			name:    "trailing object",
+			data:    `{}` + `{}`,
+			message: "more than one JSON value",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := Validate([]byte(test.data))
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want message containing %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestContractSizeAndFileTypeBounds(t *testing.T) {
+	t.Parallel()
+	oversized := make([]byte, maxContractBytes+1)
+	if err := Validate(oversized); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Validate(oversized) error = %v, want size error", err)
+	}
+
+	temporary := t.TempDir()
+	target := filepath.Join(temporary, "target.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+	link := filepath.Join(temporary, "contract.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("os.Symlink() error = %v", err)
+	}
+	if _, err := Load(link); err == nil || !strings.Contains(err.Error(), "non-symlink") {
+		t.Fatalf("Load(symlink) error = %v, want file-type error", err)
+	}
+}
+
+func decodeForMutation(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	var root map[string]any
+	if err := decoder.Decode(&root); err != nil {
+		t.Fatalf("json.Decode() error = %v", err)
+	}
+	return root
+}
+
+func nestedMap(t *testing.T, root map[string]any, path ...string) map[string]any {
+	t.Helper()
+	current := root
+	for _, part := range path {
+		next, ok := current[part].(map[string]any)
+		if !ok {
+			t.Fatalf("path %s is not an object", strings.Join(path, "/"))
+		}
+		current = next
+	}
+	return current
+}
