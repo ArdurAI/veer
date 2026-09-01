@@ -182,12 +182,47 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "omits IdempotencyKey",
 		},
 		{
+			name: "mutation header inherited by GET",
+			mutate: func(root map[string]any) {
+				item := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces")
+				parameters := item["parameters"].([]any)
+				item["parameters"] = append(parameters, map[string]any{
+					"$ref": "#/components/parameters/IdempotencyKey",
+				})
+			},
+			message: "GET /api/v1alpha1/workspaces carries mutation headers",
+		},
+		{
 			name: "missing validation response",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/operations/{operationId}", "get", "responses")
 				delete(responses, "400")
 			},
 			message: "omits required response 400",
+		},
+		{
+			name: "create omits request too large response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "post", "responses")
+				delete(responses, "413")
+			},
+			message: "POST /api/v1alpha1/workspaces omits request-body response 413",
+		},
+		{
+			name: "replace omits unsupported media response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "put", "responses")
+				delete(responses, "415")
+			},
+			message: "PUT /api/v1alpha1/workspaces/{workspaceId} omits request-body response 415",
+		},
+		{
+			name: "status write omits request too large response",
+			mutate: func(root map[string]any) {
+				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "responses")
+				delete(responses, "413")
+			},
+			message: "PUT /api/v1alpha1/workspaces/{workspaceId}/status omits request-body response 413",
 		},
 		{
 			name: "unreviewed error response",
@@ -352,6 +387,46 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "Retry-After must reference #/components/headers/RetryAfter",
 		},
 		{
+			name: "ETag header schema reference",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "ETag", "schema")
+				schema["$ref"] = "#/components/schemas/RequestId"
+			},
+			message: "ETag header contract drifted",
+		},
+		{
+			name: "response request ID header schema reference",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "VeerRequestId", "schema")
+				schema["$ref"] = "#/components/schemas/StrongETag"
+			},
+			message: "VeerRequestId header contract drifted",
+		},
+		{
+			name: "retry after header pattern",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "RetryAfter", "schema")
+				delete(schema, "pattern")
+			},
+			message: "RetryAfter header contract drifted",
+		},
+		{
+			name: "deprecation header pattern",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "Deprecation", "schema")
+				delete(schema, "pattern")
+			},
+			message: "Deprecation header contract drifted",
+		},
+		{
+			name: "sunset header pattern",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "Sunset", "schema")
+				delete(schema, "pattern")
+			},
+			message: "Sunset header contract drifted",
+		},
+		{
 			name: "short operation Location ID",
 			mutate: func(root map[string]any) {
 				schema := nestedMap(t, root, "components", "headers", "Location", "schema")
@@ -398,6 +473,94 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				value["status"] = json.Number("403")
 			},
 			message: "status or code drifted",
+		},
+		{
+			name: "mismatched inline not found example",
+			mutate: func(root map[string]any) {
+				example := nestedMap(t, root, "components", "responses", "NotFound", "content", "application/problem+json", "example")
+				example["status"] = json.Number("500")
+			},
+			message: "example NotFound status or code drifted",
+		},
+		{
+			name: "detached inline unavailable request ID",
+			mutate: func(root map[string]any) {
+				example := nestedMap(t, root, "components", "responses", "Unavailable", "content", "application/problem+json", "example")
+				example["instance"] = "urn:veer:request:req_01J00000000000000000000012"
+			},
+			message: "example Unavailable requestId and instance are not bound",
+		},
+		{
+			name: "idempotency key loses bound",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "IdempotencyKey")
+				delete(schema, "maxLength")
+			},
+			message: "IdempotencyKey schema contract drifted",
+		},
+		{
+			name: "request ID grammar relaxed",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "RequestId")
+				delete(schema, "pattern")
+			},
+			message: "RequestId schema contract drifted",
+		},
+		{
+			name: "strong ETag bound relaxed",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "StrongETag")
+				schema["maxLength"] = json.Number("1024")
+			},
+			message: "StrongETag schema contract drifted",
+		},
+		{
+			name: "opaque ID minimum relaxed",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "OpaqueId")
+				schema["minLength"] = json.Number("1")
+			},
+			message: "OpaqueId schema contract drifted",
+		},
+		{
+			name: "problem field violations become unbounded aggregate",
+			mutate: func(root map[string]any) {
+				errors := nestedMap(t, root, "components", "schemas", "Problem", "properties", "errors")
+				errors["maxItems"] = json.Number("64")
+			},
+			message: "problem.errors aggregate bound drifted",
+		},
+		{
+			name: "field violation message exceeds problem budget",
+			mutate: func(root map[string]any) {
+				message := nestedMap(t, root, "components", "schemas", "FieldViolation", "properties", "message")
+				message["maxLength"] = json.Number("512")
+			},
+			message: "FieldViolation.message bound drifted",
+		},
+		{
+			name: "problem encoded byte ceiling removed",
+			mutate: func(root map[string]any) {
+				problem := nestedMap(t, root, "components", "schemas", "Problem")
+				delete(problem, "x-veer-maximum-json-bytes")
+			},
+			message: "problem encoded-size contract drifted",
+		},
+		{
+			name: "timestamp calendar assertion removed",
+			mutate: func(root map[string]any) {
+				timestamp := nestedMap(t, root, "components", "schemas", "Timestamp")
+				delete(timestamp, "x-veer-calendar-validation")
+			},
+			message: "timestamp format or precision drifted",
+		},
+		{
+			name: "timestamp example is impossible",
+			mutate: func(root map[string]any) {
+				timestamp := nestedMap(t, root, "components", "schemas", "Timestamp")
+				timestamp["example"] = "2026-02-31T12:00:00.000Z"
+			},
+			message: "timestamp format or precision drifted",
 		},
 		{
 			name: "unknown problem members allowed",
@@ -455,6 +618,33 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			err := Validate(mutated)
 			if err == nil || !strings.Contains(err.Error(), test.message) {
 				t.Fatalf("Validate() error = %v, want message containing %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestTimestampValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "ordinary date", value: "2026-09-01T21:00:00.000Z", valid: true},
+		{name: "leap day divisible by four", value: "2024-02-29T00:00:00.000Z", valid: true},
+		{name: "leap day divisible by four hundred", value: "2000-02-29T00:00:00.000Z", valid: true},
+		{name: "February thirty first", value: "2026-02-31T12:00:00.000Z", valid: false},
+		{name: "non-leap February twenty ninth", value: "2025-02-29T00:00:00.000Z", valid: false},
+		{name: "century not divisible by four hundred", value: "1900-02-29T00:00:00.000Z", valid: false},
+		{name: "offset", value: "2026-09-01T16:00:00.000-05:00", valid: false},
+		{name: "excess precision", value: "2026-09-01T21:00:00.0001Z", valid: false},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := validTimestamp(test.value); got != test.valid {
+				t.Fatalf("validTimestamp(%q) = %t, want %t", test.value, got, test.valid)
 			}
 		})
 	}

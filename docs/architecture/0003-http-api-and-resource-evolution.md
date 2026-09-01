@@ -135,7 +135,9 @@ Persisted and returned timestamps are UTC RFC 3339 strings with exactly three
 fractional digits and a terminal `Z`, for example `2026-09-01T21:00:00.000Z`.
 Clients may not depend on sub-millisecond precision. A timestamp with an
 offset, missing fraction, leap-second value, or excess precision is rejected
-where a client supplies it. The server compares parsed instants, never raw
+where a client supplies it. Calendar validity is asserted in the schema
+pattern, including Gregorian leap-year rules, and implementations also parse
+the value before accepting it. The server compares parsed instants, never raw
 timestamp text.
 
 ### Unknown fields
@@ -273,6 +275,13 @@ optional `retryAfterSeconds`. Field errors contain an RFC 6901 JSON Pointer,
 stable code, and safe message. Raw tokens, credentials, SQL, stack traces,
 provider bodies, connection strings, internal hostnames, and cross-workspace
 identifiers are forbidden.
+
+A problem response contains at most one field violation. Its pointer, code,
+and message are capped at 96, 32, and 96 characters respectively; the
+top-level title and detail are capped at 64 and 192 characters. These bounds
+leave headroom within the 1,024-byte encoded response ceiling. Implementations
+enforce the encoded-byte limit after serialization and omit optional field
+violations and detail before exceeding it.
 
 The baseline includes validated examples for every issue-required class:
 

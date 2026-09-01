@@ -12,13 +12,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
 	maxContractBytes = 1 << 20
 	maxJSONDepth     = 64
 	maxJSONNodes     = 50000
-	timestampPattern = `^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$`
+	timestampPattern = `^((\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|02-(0[1-9]|1\d|2[0-8])))|((\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$`
 )
 
 var httpMethods = map[string]bool{
@@ -36,7 +37,10 @@ var pathItemMetadata = map[string]bool{
 	"summary":     true,
 }
 
-var lowerCamelCaseProperty = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
+var (
+	lowerCamelCaseProperty = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
+	timestampValuePattern  = regexp.MustCompile(timestampPattern)
+)
 
 // Load reads one bounded, regular, non-symlink contract file.
 func Load(path string) ([]byte, error) {
@@ -527,6 +531,13 @@ func validateOperations(root map[string]any) error {
 			if err != nil {
 				return fmt.Errorf("%s %s parameters: %w", strings.ToUpper(method), route, err)
 			}
+			effectiveParameters := make(map[string]bool, len(pathParameters)+len(operationParameters))
+			for name := range pathParameters {
+				effectiveParameters[name] = true
+			}
+			for name := range operationParameters {
+				effectiveParameters[name] = true
+			}
 			if method == "get" {
 				if _, exists := operation["x-veer-write-class"]; exists {
 					return fmt.Errorf("GET %s declares a write class", route)
@@ -534,7 +545,7 @@ func validateOperations(root map[string]any) error {
 				if _, exists := operation["requestBody"]; exists {
 					return fmt.Errorf("GET %s must not define a request body", route)
 				}
-				if operationParameters["IdempotencyKey"] || operationParameters["IfMatch"] {
+				if effectiveParameters["IdempotencyKey"] || effectiveParameters["IfMatch"] {
 					return fmt.Errorf("GET %s carries mutation headers", route)
 				}
 				continue
@@ -544,13 +555,13 @@ func validateOperations(root map[string]any) error {
 			if !ok || (writeClass != "spec" && writeClass != "status" && writeClass != "delete") {
 				return fmt.Errorf("%s %s has invalid write class", strings.ToUpper(method), route)
 			}
-			if !operationParameters["IdempotencyKey"] {
+			if !effectiveParameters["IdempotencyKey"] {
 				return fmt.Errorf("%s %s omits IdempotencyKey", strings.ToUpper(method), route)
 			}
 			if _, exists := responses["409"]; !exists {
 				return fmt.Errorf("%s %s omits conflict response 409", strings.ToUpper(method), route)
 			}
-			if method != "post" && !operationParameters["IfMatch"] {
+			if method != "post" && !effectiveParameters["IfMatch"] {
 				return fmt.Errorf("%s %s omits IfMatch", strings.ToUpper(method), route)
 			}
 			if method != "post" {
@@ -561,6 +572,11 @@ func validateOperations(root map[string]any) error {
 				}
 			}
 			if method == "post" || method == "put" || method == "patch" {
+				for _, status := range []string{"413", "415"} {
+					if _, exists := responses[status]; !exists {
+						return fmt.Errorf("%s %s omits request-body response %s", strings.ToUpper(method), route, status)
+					}
+				}
 				if err := validateJSONRequestBody(operationID, operation); err != nil {
 					return fmt.Errorf("%s %s: %w", strings.ToUpper(method), route, err)
 				}
@@ -900,6 +916,18 @@ func validateHeaders(headers map[string]any) error {
 			return fmt.Errorf("header %s is missing", name)
 		}
 	}
+	for name, want := range map[string]string{
+		"ETag":          "#/components/schemas/StrongETag",
+		"VeerRequestId": "#/components/schemas/RequestId",
+	} {
+		header, err := mapField(headers, name)
+		if err != nil {
+			return err
+		}
+		if err := requireSchemaReference(header, want); err != nil {
+			return fmt.Errorf("%s header contract drifted: %w", name, err)
+		}
+	}
 
 	for name, want := range map[string]struct {
 		minimum string
@@ -909,9 +937,18 @@ func validateHeaders(headers map[string]any) error {
 		"Location": {
 			pattern: `^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{15,127}$`,
 		},
+		"RetryAfter": {
+			pattern: `^[1-9][0-9]{0,4}$`,
+		},
 		"WWWAuthenticate": {
 			maximum: "64",
 			pattern: `^Bearer realm="veer"(?:, error="(?:invalid_request|invalid_token)")?$`,
+		},
+		"Deprecation": {
+			pattern: `^@[0-9]{10,12}$`,
+		},
+		"Sunset": {
+			pattern: `^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$`,
 		},
 		"DeprecationLink": {
 			minimum: "1",
@@ -1094,12 +1131,50 @@ func validateSchemas(schemas map[string]any) error {
 			return fmt.Errorf("schema %s is missing", name)
 		}
 	}
+	for name, want := range map[string]struct {
+		minimum string
+		maximum string
+		pattern string
+	}{
+		"RequestId": {
+			minimum: "1",
+			maximum: "64",
+			pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`,
+		},
+		"IdempotencyKey": {
+			minimum: "16",
+			maximum: "128",
+			pattern: `^[A-Za-z0-9][A-Za-z0-9._~:+/-]{15,127}$`,
+		},
+		"StrongETag": {
+			minimum: "3",
+			maximum: "130",
+			pattern: `^"[A-Za-z0-9_-]{1,128}"$`,
+		},
+		"OpaqueId": {
+			minimum: "16",
+			maximum: "128",
+			pattern: `^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$`,
+		},
+	} {
+		schema, err := mapField(schemas, name)
+		if err != nil {
+			return err
+		}
+		if schema["type"] != "string" || !numberEquals(schema["minLength"], want.minimum) ||
+			!numberEquals(schema["maxLength"], want.maximum) || schema["pattern"] != want.pattern {
+			return fmt.Errorf("%s schema contract drifted", name)
+		}
+	}
 
 	timestamp, err := mapField(schemas, "Timestamp")
 	if err != nil {
 		return err
 	}
-	if timestamp["format"] != "date-time" || timestamp["pattern"] != timestampPattern {
+	timestampExample, exampleOK := timestamp["example"].(string)
+	if timestamp["type"] != "string" || timestamp["format"] != "date-time" ||
+		timestamp["pattern"] != timestampPattern || timestamp["x-veer-calendar-validation"] != "rfc3339-calendar" ||
+		!exampleOK || !validTimestamp(timestampExample) {
 		return errors.New("timestamp format or precision drifted")
 	}
 
@@ -1223,6 +1298,55 @@ func validateSchemas(schemas map[string]any) error {
 	if !stringSetEquals(problem["required"], []string{"type", "title", "status", "code", "requestId"}) {
 		return errors.New("problem required fields drifted")
 	}
+	if !numberEquals(problem["x-veer-maximum-json-bytes"], "1024") {
+		return errors.New("problem encoded-size contract drifted")
+	}
+	problemProperties, err := mapField(problem, "properties")
+	if err != nil {
+		return err
+	}
+	for name, wantMaximum := range map[string]string{
+		"type":     "81",
+		"title":    "64",
+		"detail":   "192",
+		"instance": "81",
+		"code":     "64",
+	} {
+		property, err := mapField(problemProperties, name)
+		if err != nil {
+			return err
+		}
+		if !numberEquals(property["maxLength"], wantMaximum) {
+			return fmt.Errorf("problem.%s bound drifted", name)
+		}
+	}
+	errorsProperty, err := mapField(problemProperties, "errors")
+	if err != nil {
+		return err
+	}
+	if errorsProperty["type"] != "array" || !numberEquals(errorsProperty["maxItems"], "1") {
+		return errors.New("problem.errors aggregate bound drifted")
+	}
+	if err := requireReference(errorsProperty, "items", "#/components/schemas/FieldViolation"); err != nil {
+		return fmt.Errorf("problem.errors: %w", err)
+	}
+	fieldViolation, err := mapField(schemas, "FieldViolation")
+	if err != nil {
+		return err
+	}
+	fieldProperties, err := mapField(fieldViolation, "properties")
+	if err != nil {
+		return err
+	}
+	for name, wantMaximum := range map[string]string{"field": "96", "code": "32", "message": "96"} {
+		property, err := mapField(fieldProperties, name)
+		if err != nil {
+			return err
+		}
+		if !numberEquals(property["maxLength"], wantMaximum) {
+			return fmt.Errorf("FieldViolation.%s bound drifted", name)
+		}
+	}
 	return nil
 }
 
@@ -1235,10 +1359,11 @@ func validateExamples(root map[string]any) error {
 	if err != nil {
 		return err
 	}
-	want := map[string]struct {
+	type exampleContract struct {
 		status string
 		code   string
-	}{
+	}
+	want := map[string]exampleContract{
 		"ValidationFailure":      {status: "400", code: "validation-failed"},
 		"AuthenticationRequired": {status: "401", code: "authentication-required"},
 		"AuthorizationDenied":    {status: "403", code: "authorization-denied"},
@@ -1258,19 +1383,68 @@ func validateExamples(root map[string]any) error {
 		if err != nil {
 			return err
 		}
-		if !numberEquals(value["status"], expected.status) || value["code"] != expected.code {
-			return fmt.Errorf("example %s status or code drifted", name)
+		if err := validateProblemExample(name, value, expected.status, expected.code); err != nil {
+			return err
 		}
-		if value["type"] != "urn:veer:problem:"+expected.code {
-			return fmt.Errorf("example %s type is not bound to its code", name)
+	}
+
+	responses, err := mapField(components, "responses")
+	if err != nil {
+		return err
+	}
+	inline := map[string]exampleContract{
+		"NotFound":             {status: "404", code: "not-found"},
+		"PreconditionFailed":   {status: "412", code: "precondition-failed"},
+		"PreconditionRequired": {status: "428", code: "precondition-required"},
+		"RequestTooLarge":      {status: "413", code: "request-too-large"},
+		"UnsupportedMediaType": {status: "415", code: "unsupported-media-type"},
+		"Unavailable":          {status: "503", code: "unavailable"},
+	}
+	for name, expected := range inline {
+		response, err := mapField(responses, name)
+		if err != nil {
+			return err
 		}
-		requestID, requestOK := value["requestId"].(string)
-		instance, instanceOK := value["instance"].(string)
-		if !requestOK || !instanceOK || instance != "urn:veer:request:"+requestID {
-			return fmt.Errorf("example %s requestId and instance are not bound", name)
+		content, err := mapField(response, "content")
+		if err != nil {
+			return err
+		}
+		media, err := mapField(content, "application/problem+json")
+		if err != nil {
+			return err
+		}
+		value, err := mapField(media, "example")
+		if err != nil {
+			return fmt.Errorf("inline example %s: %w", name, err)
+		}
+		if err := validateProblemExample(name, value, expected.status, expected.code); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateProblemExample(name string, value map[string]any, status, code string) error {
+	if !numberEquals(value["status"], status) || value["code"] != code {
+		return fmt.Errorf("example %s status or code drifted", name)
+	}
+	if value["type"] != "urn:veer:problem:"+code {
+		return fmt.Errorf("example %s type is not bound to its code", name)
+	}
+	requestID, requestOK := value["requestId"].(string)
+	instance, instanceOK := value["instance"].(string)
+	if !requestOK || !instanceOK || instance != "urn:veer:request:"+requestID {
+		return fmt.Errorf("example %s requestId and instance are not bound", name)
+	}
+	return nil
+}
+
+func validTimestamp(value string) bool {
+	if !timestampValuePattern.MatchString(value) {
+		return false
+	}
+	_, err := time.Parse("2006-01-02T15:04:05.000Z", value)
+	return err == nil
 }
 
 func mapField(parent map[string]any, name string) (map[string]any, error) {

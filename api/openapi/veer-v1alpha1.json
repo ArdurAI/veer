@@ -41,7 +41,7 @@
     "unknownRequestFields": "reject",
     "unknownResponseFields": "ignore",
     "timestampFormat": "RFC3339-UTC-milliseconds",
-    "timestampPattern": "^\\d{4}-(0[1-9]|1[0-2])-([0-2]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+    "timestampPattern": "^((\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|02-(0[1-9]|1\\d|2[0-8])))|((\\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
     "maximumRequestBytes": 262144,
     "maximumResponsePageBytes": 262144,
     "maximumNonReadResponseBytes": 1024,
@@ -1176,7 +1176,8 @@
         "format": "date-time",
         "description": "UTC RFC 3339 timestamp serialized with exactly millisecond precision.",
         "example": "2026-09-01T21:00:00.000Z",
-        "pattern": "^\\d{4}-(0[1-9]|1[0-2])-([0-2]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$"
+        "pattern": "^((\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|02-(0[1-9]|1\\d|2[0-8])))|((\\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+        "x-veer-calendar-validation": "rfc3339-calendar"
       },
       "Labels": {
         "type": "object",
@@ -1664,20 +1665,20 @@
             "type": "string",
             "example": "/spec/unknownField",
             "minLength": 1,
-            "maxLength": 512,
+            "maxLength": 96,
             "pattern": "^(/([^~/]|~0|~1)*)+$"
           },
           "code": {
             "type": "string",
             "example": "unknown-field",
             "minLength": 1,
-            "maxLength": 64,
+            "maxLength": 32,
             "pattern": "^[a-z][a-z0-9-]*$"
           },
           "message": {
             "type": "string",
             "example": "The field is not defined for v1alpha1.",
-            "maxLength": 512
+            "maxLength": 96
           }
         }
       },
@@ -1685,6 +1686,7 @@
         "type": "object",
         "description": "RFC 9457 problem details with stable Veer extensions. Raw tokens, SQL, provider bodies, and secret-bearing values are prohibited.",
         "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 1024,
         "required": [
           "type",
           "title",
@@ -1697,13 +1699,14 @@
             "type": "string",
             "format": "uri",
             "example": "urn:veer:problem:validation-failed",
+            "maxLength": 81,
             "pattern": "^urn:veer:problem:[a-z][a-z0-9-]*$"
           },
           "title": {
             "type": "string",
             "example": "Request validation failed",
             "minLength": 1,
-            "maxLength": 128
+            "maxLength": 64
           },
           "status": {
             "type": "integer",
@@ -1715,12 +1718,13 @@
           "detail": {
             "type": "string",
             "example": "One request field is not accepted.",
-            "maxLength": 512
+            "maxLength": 192
           },
           "instance": {
             "type": "string",
             "format": "uri",
             "example": "urn:veer:request:req_01J00000000000000000000000",
+            "maxLength": 81,
             "pattern": "^urn:veer:request:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
           },
           "code": {
@@ -1736,7 +1740,7 @@
           "errors": {
             "type": "array",
             "example": [],
-            "maxItems": 64,
+            "maxItems": 1,
             "items": {
               "$ref": "#/components/schemas/FieldViolation"
             }
