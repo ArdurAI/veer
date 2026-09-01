@@ -11,8 +11,24 @@ reliability.
 
 ## Status
 
-Veer is in the pre-alpha architecture phase. APIs, storage formats, and
+Veer is in the pre-alpha foundation phase. APIs, storage formats, and
 deployment topology are not yet stable.
+
+## Development
+
+A clean macOS or Linux checkout on `amd64` or `arm64` needs only standard host
+utilities and these two commands:
+
+```sh
+./hack/dev bootstrap
+./hack/dev check
+```
+
+Bootstrap installs Veer's checksum-verified toolchain under the ignored
+`.tools/` directory. The aggregate check then runs formatting, lint, build,
+unit-test, and documentation gates without cloud credentials or network
+access. See the [local development guide](docs/development.md) for supported
+hosts, individual commands, resource use, and troubleshooting.
 
 ## Design principles
 
@@ -55,6 +71,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [Architecture overview](docs/architecture/overview.md)
 - [Alpha operational bounds](docs/architecture/0001-alpha-operational-bounds.md)
 - [Alpha implementation stack](docs/architecture/0002-alpha-implementation-stack.md)
+- [Local development](docs/development.md)
 - [Security model](docs/security/model.md)
 - [Roadmap](docs/roadmap.md)
 

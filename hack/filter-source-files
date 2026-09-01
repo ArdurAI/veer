@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 1 ]; then
+  printf '%s\n' 'usage: filter-source-files REPOSITORY_ROOT [PATH ...]' >&2
+  exit 64
+fi
+
+repo_root=$1
+shift
+
+for source_path; do
+  if [ -f "$repo_root/$source_path" ] && [ ! -L "$repo_root/$source_path" ]; then
+    printf '%s\0' "$source_path"
+  fi
+done

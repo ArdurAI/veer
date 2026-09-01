@@ -2,9 +2,9 @@
 set -eu
 
 script_dir=$(
-    unset CDPATH
-    cd -- "$(dirname -- "$0")"
-    pwd
+  unset CDPATH
+  cd -- "$(dirname -- "$0")"
+  pwd
 )
 tmp_file=
 expected_summary_file=
@@ -12,29 +12,28 @@ actual_summary_file=
 
 # Remove only the files allocated by mktemp for this invocation.
 cleanup() {
-    for allocated_file in \
-        "$tmp_file" \
-        "$expected_summary_file" \
-        "$actual_summary_file"
-    do
-        if [ -n "$allocated_file" ]; then
-            rm -f -- "$allocated_file"
-        fi
-    done
+  for allocated_file in \
+    "$tmp_file" \
+    "$expected_summary_file" \
+    "$actual_summary_file"; do
+    if [ -n "$allocated_file" ]; then
+      rm -f -- "$allocated_file"
+    fi
+  done
 }
 trap cleanup 0
 trap 'exit 1' HUP INT TERM
 
 tmp_file=$(mktemp "${TMPDIR:-/tmp}/veer-cost-model.XXXXXX")
 expected_summary_file=$(mktemp \
-    "${TMPDIR:-/tmp}/veer-cost-summary-expected.XXXXXX")
+  "${TMPDIR:-/tmp}/veer-cost-summary-expected.XXXXXX")
 actual_summary_file=$(mktemp \
-    "${TMPDIR:-/tmp}/veer-cost-summary-actual.XXXXXX")
+  "${TMPDIR:-/tmp}/veer-cost-summary-actual.XXXXXX")
 
 LC_ALL=C awk -f "$script_dir/calculate.awk" \
-    "$script_dir/sources.tsv" \
-    "$script_dir/profiles.tsv" \
-    "$script_dir/inputs.tsv" >"$tmp_file"
+  "$script_dir/sources.tsv" \
+  "$script_dir/profiles.tsv" \
+  "$script_dir/inputs.tsv" >"$tmp_file"
 
 diff -u "$script_dir/expected.tsv" "$tmp_file"
 
