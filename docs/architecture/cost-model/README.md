@@ -48,18 +48,21 @@ does not contact AWS or read environment credentials.
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
 | Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
 | Modeled 64 KiB queue request units with no free allowance | 20 million | 100 million |
+| Encoded queue message body hard limit | 2 KiB | 2 KiB |
+| Aggregate encoded queue body byte limit | 40 GB | 200 GB |
 | Average ALB capacity | 1 LCU | 5 LCU |
 | Derived provider traffic through NAT | 86.12 GB | 861.15 GB |
 | Billable NAT processed data | 100 GB | 1,000 GB |
 | Derived client plus provider-request egress | 156.64 GB | 890.85 GB |
 | Billable internet egress with no free allowance | 200 GB | 1,000 GB |
+| Billable directional cross-AZ transfer | 200 GB | 2,000 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Stored archive ingress per 30-day month | 16 GB | 80 GB |
-| Archive objects written | 28,000 | 110,000 |
-| S3 tier-1 archive requests, primary plus recovery | 84,000 | 330,000 |
-| KMS archive requests, primary plus recovery | 112,000 | 440,000 |
+| Archive objects written | 32,000 | 155,000 |
+| S3 tier-1 archive requests, primary plus recovery | 96,000 | 465,000 |
+| KMS archive requests, primary plus recovery | 128,000 | 620,000 |
 | Encrypted primary archive/object storage | 200 GiB | 1,000 GiB |
 | Encrypted recovery archive/object storage | 200 GiB | 1,000 GiB |
 | Secrets Manager API requests, primary region | 45,000 | 450,000 |
@@ -79,7 +82,13 @@ changed data; incremental copies may cost less.
 Queue units derive from the accepted 15% write-and-cancellation share of the
 monthly request schedule. One send, receive, and delete consumes 10.35 million
 units small and 51.74 million target; the rounded limits reserve the balance for
-retries, empty long polls, and recovery traffic.
+retries, empty long polls, and recovery traffic. Encoded bodies are capped at 2
+KiB even though each request is conservatively priced as a 64 KiB billable unit.
+A separate counter expands batches and caps all send, receive, redelivery, and
+recovery body occurrences at 40/200 GB. That queue budget, 140/1,600 GB for
+database and internal service traffic, and 20/200 GB for failover and retries
+form the 200/2,000 GB directional cross-AZ cap. The ADR makes those partitions
+measurable admission limits rather than usage forecasts.
 
 Provider traffic units allow at most 4 KiB outbound and 12 KiB inbound across
 requests, responses, pagination, observations, and retries. The continuous
@@ -94,10 +103,11 @@ up to two decimals. Cross-region transfer retains the one-dataset monthly change
 assumption.
 
 The archive quantities hold 365 days at the ADR's measured 16 GB and 80 GB
-monthly ingress caps. Audit and compact non-audit record multiplicity derives
-the object/request quantities. Secret values use a version-aware, single-flight
-cache; the request rows are hard monthly budgets rather than an assumption that
-every provider operation reads Secrets Manager.
+monthly ingress caps. The 7/50 million event limits include one record per
+provider mutation attempt. Audit and compact non-audit record multiplicity
+derives the object/request quantities. Secret values use a version-aware,
+single-flight cache; the request rows are hard monthly budgets rather than an
+assumption that every provider operation reads Secrets Manager.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
