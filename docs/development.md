@@ -19,11 +19,11 @@ it. It never invokes a remote install script and does not modify system or user
 tool directories.
 
 `check` requires the prepared repository-local toolchain. It disables Go
-toolchain switching, inherited Go workspaces, module proxies,
-checksum-database calls, and version control downloads. It also removes common
-AWS, Google Cloud, and Azure credential variables from child processes. No
-check needs a cloud API, database, queue, cluster, container runtime, or
-private credential.
+toolchain switching, inherited Go workspaces, per-user Go configuration, Go
+telemetry, module proxies, checksum-database calls, and version control
+downloads. It also removes common AWS, Google Cloud, and Azure credential
+variables from child processes. No check needs a cloud API, database, queue,
+cluster, container runtime, or private credential.
 
 ## Supported hosts and prerequisites
 
@@ -35,9 +35,9 @@ Bootstrap supports these host combinations:
 | Linux | `amd64`, `arm64` |
 
 The clean host must provide POSIX `sh`, `awk`, `curl`, `date`, `diff`, `git`,
-`grep`, `mktemp`, `sed`, `tar`, `uname`, `xargs`, and either `shasum` or
-`sha256sum`. These are base utilities on supported macOS and common Linux
-development or CI images. No package manager or administrator access is
+`grep`, `head`, `mktemp`, `sed`, `tar`, `uname`, `wc`, `xargs`, and either
+`shasum` or `sha256sum`. These are base utilities on supported macOS and common
+Linux development or CI images. No package manager or administrator access is
 required.
 
 Windows is not supported directly for the alpha. Use a supported Linux
@@ -85,6 +85,11 @@ variables or credentials.
 - Only `bootstrap` needs public network access. Verified downloads are cached
   in `.tools/downloads/`; repeated bootstrap runs reuse them after checking
   their digest.
+- Each manifest row is bound to the selected tool's exact upstream repository,
+  release version, platform artifact name, archive format, and binary member.
+  Tar archives may contain only unique regular files and directories, at most
+  20,000 members, and at most 512 MiB of expanded file data. The compressed
+  download cap remains 100 MiB per artifact.
 - On a macOS/arm64 clean run verified on 2026-09-01, the download cache was
   exactly 157,327,393 bytes and `.tools/` occupied approximately 769 MiB after
   one full check. Other platforms may differ. The whole directory is ignored
@@ -93,7 +98,12 @@ variables or credentials.
   runner is bounded to 15 minutes and has no service containers, cloud login,
   or paid third-party API calls.
 - Fast gates use repository-local Go, golangci-lint, and XDG caches but run
-  with `GOWORK=off`, `GOPROXY=off`, `GOVCS=off`, and `GOTOOLCHAIN=local`.
+  with `GOENV=off`, `GOWORK=off`, `GOPROXY=off`, `GOVCS=off`, and
+  `GOTOOLCHAIN=local`.
+- The pinned Go process uses `.tools/cache/go-telemetry` with mode `off`, and
+  every command verifies the reported mode and directory before invoking Go.
+  This prevents collection and upload without changing the developer's global
+  preference; see the primary [Go telemetry documentation](https://go.dev/doc/telemetry).
 - Deleted worktree paths and source symlinks are never passed to write-mode
   formatters; source symlinks are not a supported way to include Veer code.
 
@@ -134,7 +144,9 @@ failing step and command output.
 
 1. Verify the new release and compatibility at the upstream primary source.
 2. Update all four platform rows and their upstream SHA-256 digests in
-   `tools/manifest.tsv` in one pull request.
+   `tools/manifest.tsv` in one pull request. The URL, format, and member must
+   continue to match the tool-specific platform contract enforced by
+   `./hack/dev bootstrap`.
 3. Synchronize every declaration of the changed version:
    - the pinned-tool table in this guide for every tool;
    - `.go-version` and the `go` directive in `go.mod` for Go;
@@ -147,6 +159,10 @@ failing step and command output.
 4. Run `./hack/dev bootstrap`, `./hack/dev versions`, and
    `./hack/dev check` from a clean tool directory.
 5. Let the clean-bootstrap CI lane exercise the same commands on Linux.
+
+If a legitimate upstream archive grows beyond the member or expanded-size
+budget, review its contents and disk-cost impact before changing the bound.
+Do not raise a limit merely to make bootstrap pass.
 
 Never use a floating tag, `@latest`, a curl-to-shell installer, or an
 unverified binary. Issue #15 owns the broader software-supply-chain gates,

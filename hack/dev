@@ -16,6 +16,8 @@ bin_dir="$tools_dir/bin"
 download_dir="$tools_dir/downloads"
 state_dir="$tools_dir/state"
 manifest_file="$repo_root/tools/manifest.tsv"
+max_archive_members=20000
+max_archive_expanded_bytes=536870912
 temp_dir=
 
 fail() {
@@ -88,8 +90,6 @@ validate_manifest() {
   LC_ALL=C awk -F '\t' '
     BEGIN {
         expected_header = "name\tversion\tos\tarch\tformat\tmember\tsha256\turl"
-        approved_go_url = "^https://go[.]dev/dl/[A-Za-z0-9._-]+$"
-        approved_github_url = "^https://github[.]com/(golangci/golangci-lint|sqlc-dev/sqlc|pressly/goose|mvdan/sh|koalaman/shellcheck|rvben/rumdl)/releases/download/v[0-9]+[.][0-9]+[.][0-9]+/[A-Za-z0-9._-]+$"
         split("go golangci-lint sqlc goose shfmt shellcheck rumdl", tools, " ")
         split("darwin linux", systems, " ")
         split("amd64 arm64", architectures, " ")
@@ -137,12 +137,55 @@ validate_manifest() {
             print FILENAME ":" NR ": unsupported platform" > "/dev/stderr"
             failed = 1
         }
-        if ($5 != "raw" && $5 != "tar.gz" && $5 != "go-tar.gz") {
-            print FILENAME ":" NR ": unsupported artifact format" > "/dev/stderr"
+
+        github_prefix = "https://github.com/"
+        release_suffix = "/releases/download/v" $2 "/"
+        x86_arch = ($4 == "amd64" ? "x86_64" : "arm64")
+        portable_arch = ($4 == "amd64" ? "x86_64" : "aarch64")
+        if ($1 == "go") {
+            expected_format = "go-tar.gz"
+            expected_member = "go"
+            expected_url = "https://go.dev/dl/go" $2 "." $3 "-" $4 ".tar.gz"
+        } else if ($1 == "golangci-lint") {
+            expected_format = "tar.gz"
+            expected_member = "golangci-lint-" $2 "-" $3 "-" $4 "/golangci-lint"
+            expected_url = github_prefix "golangci/golangci-lint" release_suffix \
+                "golangci-lint-" $2 "-" $3 "-" $4 ".tar.gz"
+        } else if ($1 == "sqlc") {
+            expected_format = "tar.gz"
+            expected_member = "sqlc"
+            expected_url = github_prefix "sqlc-dev/sqlc" release_suffix \
+                "sqlc_" $2 "_" $3 "_" $4 ".tar.gz"
+        } else if ($1 == "goose") {
+            expected_format = "raw"
+            expected_member = "-"
+            expected_url = github_prefix "pressly/goose" release_suffix \
+                "goose_" $3 "_" x86_arch
+        } else if ($1 == "shfmt") {
+            expected_format = "raw"
+            expected_member = "-"
+            expected_url = github_prefix "mvdan/sh" release_suffix \
+                "shfmt_v" $2 "_" $3 "_" $4
+        } else if ($1 == "shellcheck") {
+            expected_format = "tar.gz"
+            expected_member = "shellcheck-v" $2 "/shellcheck"
+            expected_url = github_prefix "koalaman/shellcheck" release_suffix \
+                "shellcheck-v" $2 "." $3 "." portable_arch ".tar.gz"
+        } else if ($1 == "rumdl") {
+            expected_format = "tar.gz"
+            expected_member = "rumdl"
+            target = ($3 == "darwin" ? portable_arch "-apple-darwin" : \
+                portable_arch "-unknown-linux-gnu")
+            expected_url = github_prefix "rvben/rumdl" release_suffix \
+                "rumdl-v" $2 "-" target ".tar.gz"
+        }
+
+        if ($5 != expected_format) {
+            print FILENAME ":" NR ": unexpected format for " $1 "/" $3 "/" $4 > "/dev/stderr"
             failed = 1
         }
-        if ($5 == "raw" && $6 != "-") {
-            print FILENAME ":" NR ": raw artifact must use member -" > "/dev/stderr"
+        if ($6 != expected_member) {
+            print FILENAME ":" NR ": unexpected member for " $1 "/" $3 "/" $4 > "/dev/stderr"
             failed = 1
         }
         if ($5 != "raw" && ($6 == "" || $6 ~ "^[-/]" || $6 ~ "(^|/)[.][.](/|$)")) {
@@ -153,16 +196,9 @@ validate_manifest() {
             print FILENAME ":" NR ": invalid SHA-256 digest" > "/dev/stderr"
             failed = 1
         }
-        if ($8 !~ approved_go_url && $8 !~ approved_github_url) {
-            print FILENAME ":" NR ": artifact URL is outside approved HTTPS release paths" > "/dev/stderr"
-            failed = 1
-        }
-        if ($1 == "go" && index($8, "/dl/go" $2 ".") == 0) {
-            print FILENAME ":" NR ": Go URL does not match manifest version" > "/dev/stderr"
-            failed = 1
-        }
-        if ($1 != "go" && index($8, "/releases/download/v" $2 "/") == 0) {
-            print FILENAME ":" NR ": release URL does not match manifest version" > "/dev/stderr"
+        if ($8 != expected_url) {
+            print FILENAME ":" NR ": URL does not match " $1 "/" $3 "/" $4 \
+                " artifact contract" > "/dev/stderr"
             failed = 1
         }
         if (seen[key]++) {
@@ -199,6 +235,9 @@ fetch_artifact() {
   case "$artifact" in
     '' | *[!A-Za-z0-9._-]*) fail "unsafe artifact name in URL: $url" ;;
   esac
+  if [ -L "$cached_artifact" ]; then
+    fail "cached artifact must not be a symbolic link: $artifact"
+  fi
 
   if [ -f "$cached_artifact" ]; then
     actual_sha=$(sha256_file "$cached_artifact")
@@ -225,18 +264,84 @@ fetch_artifact() {
   printf '%s\n' "veer-bootstrap artifact=$artifact digest=verified"
 }
 
-validate_tar_paths() {
+validate_tar_archive() {
   archive=$1
   list_file="$temp_dir/archive-members"
+  verbose_file="$temp_dir/archive-entries"
   if ! tar -tzf "$archive" >"$list_file"; then
     fail "cannot list archive: ${archive##*/}"
   fi
-  if ! LC_ALL=C awk '
-        /^\// || /(^|\/)[.][.](\/|$)/ { unsafe = 1 }
-        END { exit unsafe }
-    ' "$list_file"; then
-    fail "archive contains an unsafe path: ${archive##*/}"
+
+  member_count=$(wc -l <"$list_file" | awk '{ print $1 }')
+  case "$member_count" in
+    '' | *[!0-9]*) fail "cannot count archive members: ${archive##*/}" ;;
+  esac
+  if [ "$member_count" -eq 0 ] || [ "$member_count" -gt "$max_archive_members" ]; then
+    fail "archive member count is outside 1..$max_archive_members: ${archive##*/}"
   fi
+
+  if ! LC_ALL=C awk '
+        /^\// || /(^|\/)[.][.](\/|$)/ {
+            print FILENAME ":" NR ": unsafe archive path" > "/dev/stderr"
+            failed = 1
+        }
+        seen[$0]++ {
+            print FILENAME ":" NR ": duplicate archive path" > "/dev/stderr"
+            failed = 1
+        }
+        END { exit failed }
+    ' "$list_file"; then
+    fail "archive path validation failed: ${archive##*/}"
+  fi
+
+  if ! tar -tvzf "$archive" >"$verbose_file"; then
+    fail "cannot inspect archive entry types: ${archive##*/}"
+  fi
+  verbose_count=$(wc -l <"$verbose_file" | awk '{ print $1 }')
+  [ "$verbose_count" -eq "$member_count" ] ||
+    fail "archive entry listing is ambiguous: ${archive##*/}"
+  if ! LC_ALL=C awk '
+        substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d" {
+            print FILENAME ":" NR ": unsupported archive entry type " \
+                substr($1, 1, 1) > "/dev/stderr"
+            failed = 1
+        }
+        END { exit failed }
+    ' "$verbose_file"; then
+    fail "archive links and special entries are not allowed: ${archive##*/}"
+  fi
+
+  probe_bytes=$((max_archive_expanded_bytes + 1))
+  expanded_bytes=$(
+    tar -xOzf "$archive" 2>/dev/null |
+      head -c "$probe_bytes" |
+      wc -c |
+      awk '{ print $1 }'
+  )
+  case "$expanded_bytes" in
+    '' | *[!0-9]*) fail "cannot measure expanded archive size: ${archive##*/}" ;;
+  esac
+  if [ "$expanded_bytes" -gt "$max_archive_expanded_bytes" ]; then
+    fail "archive expands beyond $max_archive_expanded_bytes bytes: ${archive##*/}"
+  fi
+
+  printf '%s\n' \
+    "veer-bootstrap archive=${archive##*/} members=$member_count expanded_bytes=$expanded_bytes status=verified"
+}
+
+validate_regular_archive_member() {
+  archive=$1
+  member=$2
+  selected_file="$temp_dir/selected-entry"
+  if ! tar -tvzf "$archive" -- "$member" >"$selected_file"; then
+    fail "missing selected member $member in ${archive##*/}"
+  fi
+  archive_selected_count=$(wc -l <"$selected_file" | awk '{ print $1 }')
+  [ "$archive_selected_count" -eq 1 ] ||
+    fail "selected member $member is missing or duplicated in ${archive##*/}"
+  selected_type=$(awk 'NR == 1 { print substr($1, 1, 1) }' "$selected_file")
+  [ "$selected_type" = "-" ] ||
+    fail "selected member $member is not a regular archive entry in ${archive##*/}"
 }
 
 install_artifact() {
@@ -254,21 +359,28 @@ install_artifact() {
       mv -- "$next_binary" "$bin_dir/$name"
       ;;
     tar.gz)
-      validate_tar_paths "$archive"
+      validate_tar_archive "$archive"
+      validate_regular_archive_member "$archive" "$member"
       extract_dir="$temp_dir/extract-$name"
       mkdir -p -- "$extract_dir"
       tar -xzf "$archive" -C "$extract_dir" -- "$member"
-      [ -f "$extract_dir/$member" ] || fail "missing $member in ${archive##*/}"
+      if [ ! -f "$extract_dir/$member" ] || [ -L "$extract_dir/$member" ]; then
+        fail "selected member $member did not extract as a regular file from ${archive##*/}"
+      fi
       cp -- "$extract_dir/$member" "$next_binary"
       chmod 0755 "$next_binary"
       mv -- "$next_binary" "$bin_dir/$name"
       ;;
     go-tar.gz)
-      validate_tar_paths "$archive"
+      validate_tar_archive "$archive"
+      validate_regular_archive_member "$archive" go/bin/go
       extract_dir="$temp_dir/extract-go"
       mkdir -p -- "$extract_dir"
       tar -xzf "$archive" -C "$extract_dir"
-      [ -x "$extract_dir/go/bin/go" ] || fail "Go archive has no executable go binary"
+      if [ ! -f "$extract_dir/go/bin/go" ] || [ -L "$extract_dir/go/bin/go" ] ||
+        [ ! -x "$extract_dir/go/bin/go" ]; then
+        fail "Go archive has no regular executable go binary"
+      fi
       rm -rf -- "$tools_dir/go"
       mv -- "$extract_dir/go" "$tools_dir/go"
       ;;
@@ -283,7 +395,7 @@ sanitize_cloud_environment() {
 }
 
 bootstrap() {
-  for host_command in awk curl date diff git grep mktemp sed tar uname xargs; do
+  for host_command in awk curl date diff git grep head mktemp sed tar uname wc xargs; do
     require_command "$host_command"
   done
   validate_manifest
@@ -389,7 +501,45 @@ verify_declared_versions() {
   done
 }
 
+prepare_go_telemetry() {
+  cache_root="$tools_dir/cache"
+  telemetry_gopath="$cache_root/gopath"
+  telemetry_dir="$cache_root/go-telemetry"
+  for local_directory in "$tools_dir" "$cache_root" "$telemetry_gopath" "$telemetry_dir"; do
+    if [ -L "$local_directory" ]; then
+      fail "$local_directory must not be a symbolic link"
+    fi
+    mkdir -p -- "$local_directory"
+  done
+  chmod 0700 "$telemetry_dir"
+
+  telemetry_mode_file="$telemetry_dir/mode"
+  if [ -L "$telemetry_mode_file" ] || { [ -e "$telemetry_mode_file" ] && [ ! -f "$telemetry_mode_file" ]; }; then
+    fail "$telemetry_mode_file must be a regular file"
+  fi
+  telemetry_mode_temp=$(mktemp "$telemetry_dir/mode.XXXXXX")
+  chmod 0600 "$telemetry_mode_temp"
+  printf '%s\n' off >"$telemetry_mode_temp"
+  mv -- "$telemetry_mode_temp" "$telemetry_mode_file"
+
+  # Go 1.27 reports GOTELEMETRY as read-only. Its upstream test harness uses
+  # TEST_TELEMETRY_DIR for process isolation; the probes below make a future
+  # toolchain change fail closed instead of falling back to the user setting.
+  GOENV=off
+  GOPATH="$telemetry_gopath"
+  GOWORK=off
+  TEST_TELEMETRY_DIR="$telemetry_dir"
+  export GOENV GOPATH GOWORK TEST_TELEMETRY_DIR
+  reported_mode=$("$bin_dir/go" env GOTELEMETRY)
+  reported_dir=$("$bin_dir/go" env GOTELEMETRYDIR)
+  [ "$reported_mode" = off ] ||
+    fail "repository-local Go telemetry mode is not off: $reported_mode"
+  [ "$reported_dir" = "$telemetry_dir" ] ||
+    fail "Go telemetry directory mismatch: expected $telemetry_dir, got $reported_dir"
+}
+
 verify_versions() {
+  prepare_go_telemetry
   verify_version go "go$(version_for_tool go)" "$bin_dir/go" version
   verify_version golangci-lint "$(version_for_tool golangci-lint)" "$bin_dir/golangci-lint" version
   verify_version sqlc "$(version_for_tool sqlc)" "$bin_dir/sqlc" version
@@ -400,6 +550,11 @@ verify_versions() {
 }
 
 require_prepared() {
+  for local_directory in "$tools_dir" "$bin_dir" "$download_dir" "$state_dir"; do
+    if [ -L "$local_directory" ]; then
+      fail "$local_directory must not be a symbolic link"
+    fi
+  done
   validate_manifest
   verify_declared_versions
   expected_manifest_sha=$(sha256_file "$manifest_file")
@@ -417,8 +572,6 @@ require_prepared() {
 prepare_offline_environment() {
   require_prepared
   sanitize_cloud_environment
-  mkdir -p -- "$tools_dir/cache/go-build" "$tools_dir/cache/golangci-lint" \
-    "$tools_dir/cache/gopath" "$tools_dir/cache/xdg"
   PATH="$bin_dir:$PATH"
   GOROOT="$tools_dir/go"
   GOCACHE="$tools_dir/cache/go-build"
@@ -435,6 +588,13 @@ prepare_offline_environment() {
   CGO_ENABLED=0
   export PATH GOROOT GOCACHE GOLANGCI_LINT_CACHE GOPATH GOMODCACHE \
     XDG_CACHE_HOME GOTOOLCHAIN GOWORK GOPROXY GOSUMDB GOVCS GOFLAGS CGO_ENABLED
+  prepare_go_telemetry
+  for local_directory in "$GOCACHE" "$GOLANGCI_LINT_CACHE" "$GOPATH" "$XDG_CACHE_HOME"; do
+    if [ -L "$local_directory" ]; then
+      fail "$local_directory must not be a symbolic link"
+    fi
+    mkdir -p -- "$local_directory"
+  done
 }
 
 regular_source_files() {
