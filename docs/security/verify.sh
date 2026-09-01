@@ -422,7 +422,7 @@ require_primary_reference() {
         }
         return slash_count % 2 == 1
     }
-    function link_destination(line, label_end, closing_parenthesis) {
+    function link_destination(line, label_end, closing_parenthesis, label) {
         if (substr(line, 1, 3) != "- [") {
             return ""
         }
@@ -438,6 +438,11 @@ require_primary_reference() {
             }
             if (substr(line, closing_parenthesis, 1) != ")" ||
                 is_escaped(line, closing_parenthesis)) {
+                return ""
+            }
+            label = substr(line, 4, label_end - 4)
+            if (label == "" || index(label, "[") || index(label, "]") ||
+                index(label, "\\")) {
                 return ""
             }
             return substr(line, label_end + 2,
@@ -471,6 +476,14 @@ for checked_file in \
 done
 
 LC_ALL=C awk '
+  BEGIN {
+      split("13 14 15 20 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 61 63 64 65 66", issue_numbers, " ")
+      for (issue_index in issue_numbers) {
+          expected_url = "https://github.com/ArdurAI/veer/issues/" issue_numbers[issue_index]
+          expected_issue[expected_url] = 1
+          expected_count++
+      }
+  }
   function issue_number_is_supported(issue_number) {
       return length(issue_number) < 10 ||
           (length(issue_number) == 10 && issue_number <= 2147483647)
@@ -489,14 +502,25 @@ LC_ALL=C awk '
           next
       }
   }
+  !($0 in expected_issue) {
+      print FILENAME ":" FNR ": issue inventory entry is outside the reviewed canonical set: " $0 > "/dev/stderr"
+      failed = 1
+      next
+  }
   seen[$0]++ {
       print FILENAME ":" FNR ": duplicate issue inventory entry " $0 > "/dev/stderr"
       failed = 1
   }
   { rows++ }
   END {
-      if (rows == 0) {
-          print FILENAME ": issue inventory has no entries" > "/dev/stderr"
+      for (expected_url in expected_issue) {
+          if (!(expected_url in seen)) {
+              print FILENAME ": missing reviewed canonical issue inventory entry " expected_url > "/dev/stderr"
+              failed = 1
+          }
+      }
+      if (rows != expected_count) {
+          print FILENAME ": expected exactly " expected_count " reviewed issue inventory entries" > "/dev/stderr"
           failed = 1
       }
       if (failed) {
@@ -529,8 +553,13 @@ LC_ALL=C awk '
       print FILENAME ":" FNR ": strikethrough formatting is forbidden in canonical contract rows" > "/dev/stderr"
       failed = 1
   }
+  index($0, "![") {
+      print FILENAME ":" FNR ": image markup is forbidden in verified security contracts" > "/dev/stderr"
+      failed = 1
+  }
   END { exit failed ? 1 : 0 }
-' "$visible_model_file" || fail 'formal security contract contains strikethrough formatting'
+' "$visible_model_file" "$visible_summary_file" ||
+  fail 'verified security contract contains meaning-replacing markup'
 
 LC_ALL=C awk '
   function trim(value) {
@@ -556,7 +585,7 @@ LC_ALL=C awk '
       }
       return 0
   }
-  function record_heading(heading) {
+  function record_heading(heading, heading_text) {
       if (heading ~ /[^[:print:][:space:]]/) {
           print FILENAME ":" FNR ": non-ASCII bytes are forbidden in verified Markdown headings" > "/dev/stderr"
           failed = 1
@@ -567,7 +596,9 @@ LC_ALL=C awk '
           print FILENAME ":" FNR ": inline formatting is forbidden in verified Markdown headings" > "/dev/stderr"
           failed = 1
       }
-      if (seen[heading]++) {
+      heading_text = heading
+      sub(/^#+[[:space:]]+/, "", heading_text)
+      if (seen[heading_text]++) {
           print FILENAME ":" FNR ": duplicate visible heading: " heading > "/dev/stderr"
           failed = 1
       }
@@ -656,7 +687,8 @@ LC_ALL=C awk -v issue_inventory="$issue_inventory_file" '
       }
   }
   END { exit failed ? 1 : 0 }
-' "$visible_model_file" || fail 'readable model references issues outside the offline inventory'
+' "$visible_model_file" "$visible_summary_file" ||
+  fail 'readable security documentation references issues outside the offline inventory'
 
 for required_heading in \
   '## Overview' \

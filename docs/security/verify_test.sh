@@ -826,6 +826,21 @@ expect_rejection 'escaped primary-reference label delimiter' \
 new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
+required_source='https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html'
+LC_ALL=C awk -v source="$required_source" '
+  index($0, source) {
+      print "- [![](" source ")"
+      next
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'image masquerading as a primary-reference link' \
+  'image markup is forbidden in verified security contracts'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   $0 == "| ID | Asset | Required property | Evidence |" { in_assets = 1; print; next }
   in_assets && $0 == "| --- | --- | --- | --- |" { in_assets = 0; next }
@@ -1100,6 +1115,17 @@ printf '%s\n' \
   '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
 expect_rejection 'duplicate canonical control-owner section' \
   'duplicate visible heading: ### Control owners'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+printf '%s\n' \
+  '' \
+  '## Control owners' \
+  '| ID | Conflicting responsibility | Alternate work |' \
+  '| --- | --- | --- |' \
+  '| OWN-FAKE | Conflicting contract | Issue #14 |' >>"$model"
+expect_rejection 'duplicate canonical heading at a different level' \
+  'duplicate visible heading: ## Control owners'
 
 new_fixture
 model="$test_root/docs/security/threat-model.md"
@@ -1596,6 +1622,14 @@ expect_rejection 'missing citation target in security summary' \
   'citation target does not exist: docs/security/does-not-exist.md:9999'
 
 new_fixture
+summary="$test_root/docs/security/model.md"
+printf '%s\n' \
+  '' \
+  'Verification: Issue #9999' >>"$summary"
+expect_rejection 'unknown issue reference in security summary' \
+  'unknown readable issue reference #9999'
+
+new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
@@ -1714,6 +1748,21 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
+  /^\| High \| \*\*TM-001 / {
+      sub(/Strict issuer\/audience\/algorithm\/signature\/time\/JWKS validation, human\/workload separation, raw-token canaries, and negative corpus/, "![](https://example.com/withdrawn.png)")
+  }
+  { print }
+' "$model" >"$rewritten_model"
+mv "$rewritten_model" "$model"
+rewrite_threat_field TM-001 12 \
+  '![](https://example.com/withdrawn.png)'
+expect_rejection 'image replacing a canonical mitigation' \
+  'image markup is forbidden in verified security contracts'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
   /^\| DC-CREDENTIAL \|/ {
       sub(/Forbidden in resources plans state queues fixtures logs traces metrics errors cost reports and support output; secret canaries must prove absence/, "~~&~~")
   }
@@ -1735,6 +1784,13 @@ printf '%s\n' \
   'Issue #9007199254740992 through #9007199254740992.' >>"$model"
 expect_rejection 'issue number outside the supported AWK integer range' \
   'issue inventory entry exceeds supported issue number'
+
+new_fixture
+inventory="$test_root/docs/security/issue-inventory.txt"
+printf '%s\n' \
+  'https://github.com/ArdurAI/veer/issues/9999' >>"$inventory"
+expect_rejection 'unreviewed issue inventory addition' \
+  'issue inventory entry is outside the reviewed canonical set: https://github.com/ArdurAI/veer/issues/9999'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"

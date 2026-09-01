@@ -411,8 +411,8 @@ The review must:
 1. update the architecture/effective-resource facts and source citations;
 2. add, change, or retire ledger rows without deleting historical Git evidence;
 3. live-verify every referenced Veer issue and update the reviewed offline
-   [issue-inventory.txt](issue-inventory.txt) before linking it from any
-   ledger;
+   [issue-inventory.txt](issue-inventory.txt) plus its verifier allowlist before
+   linking it from any ledger;
 4. link each high/critical scenario to an owned mitigation and live verification;
 5. update data handling for every derived copy, export, backup, log, and error;
 6. run `./hack/dev docs`, including its threat-model negative fixtures and the
