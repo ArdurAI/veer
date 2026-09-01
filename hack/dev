@@ -88,7 +88,8 @@ validate_manifest() {
   LC_ALL=C awk -F '\t' '
     BEGIN {
         expected_header = "name\tversion\tos\tarch\tformat\tmember\tsha256\turl"
-        approved_url = "^https://(go[.]dev/dl|github[.]com/(golangci/golangci-lint|sqlc-dev/sqlc|pressly/goose|mvdan/sh|koalaman/shellcheck|rvben/rumdl)/releases/download)/"
+        approved_go_url = "^https://go[.]dev/dl/[A-Za-z0-9._-]+$"
+        approved_github_url = "^https://github[.]com/(golangci/golangci-lint|sqlc-dev/sqlc|pressly/goose|mvdan/sh|koalaman/shellcheck|rvben/rumdl)/releases/download/v[0-9]+[.][0-9]+[.][0-9]+/[A-Za-z0-9._-]+$"
         split("go golangci-lint sqlc goose shfmt shellcheck rumdl", tools, " ")
         split("darwin linux", systems, " ")
         split("amd64 arm64", architectures, " ")
@@ -152,8 +153,16 @@ validate_manifest() {
             print FILENAME ":" NR ": invalid SHA-256 digest" > "/dev/stderr"
             failed = 1
         }
-        if ($8 !~ approved_url) {
+        if ($8 !~ approved_go_url && $8 !~ approved_github_url) {
             print FILENAME ":" NR ": artifact URL is outside approved HTTPS release paths" > "/dev/stderr"
+            failed = 1
+        }
+        if ($1 == "go" && index($8, "/dl/go" $2 ".") == 0) {
+            print FILENAME ":" NR ": Go URL does not match manifest version" > "/dev/stderr"
+            failed = 1
+        }
+        if ($1 != "go" && index($8, "/releases/download/v" $2 "/") == 0) {
+            print FILENAME ":" NR ": release URL does not match manifest version" > "/dev/stderr"
             failed = 1
         }
         if (seen[key]++) {
@@ -204,7 +213,7 @@ fetch_artifact() {
   partial="$temp_dir/$artifact.partial"
   printf '%s\n' "veer-bootstrap artifact=$artifact cache=miss action=download"
   curl --disable --fail --location --silent --show-error \
-    --proto '=https' --tlsv1.2 --retry 3 --retry-connrefused \
+    --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --retry-connrefused \
     --connect-timeout 15 --max-filesize 104857600 --max-time 300 \
     --output "$partial" "$url"
 
@@ -337,14 +346,24 @@ verify_version() {
   printf '%s\n' "veer-tool name=$name expected=$expected reported=$first_line"
 }
 
+version_for_tool() {
+  requested_tool=$1
+  LC_ALL=C awk -F '\t' -v requested_tool="$requested_tool" '
+    NR > 1 && $1 == requested_tool {
+        print $2
+        exit
+    }
+  ' "$manifest_file"
+}
+
 verify_versions() {
-  verify_version go go1.27.0 "$bin_dir/go" version
-  verify_version golangci-lint 2.13.2 "$bin_dir/golangci-lint" version
-  verify_version sqlc 1.31.1 "$bin_dir/sqlc" version
-  verify_version goose 3.27.3 "$bin_dir/goose" -version
-  verify_version shfmt 3.14.0 "$bin_dir/shfmt" --version
-  verify_version shellcheck 0.11.0 "$bin_dir/shellcheck" --version
-  verify_version rumdl 0.2.62 "$bin_dir/rumdl" --version
+  verify_version go "go$(version_for_tool go)" "$bin_dir/go" version
+  verify_version golangci-lint "$(version_for_tool golangci-lint)" "$bin_dir/golangci-lint" version
+  verify_version sqlc "$(version_for_tool sqlc)" "$bin_dir/sqlc" version
+  verify_version goose "$(version_for_tool goose)" "$bin_dir/goose" -version
+  verify_version shfmt "$(version_for_tool shfmt)" "$bin_dir/shfmt" --version
+  verify_version shellcheck "$(version_for_tool shellcheck)" "$bin_dir/shellcheck" --version
+  verify_version rumdl "$(version_for_tool rumdl)" "$bin_dir/rumdl" --version
 }
 
 require_prepared() {
@@ -383,31 +402,38 @@ prepare_offline_environment() {
     XDG_CACHE_HOME GOTOOLCHAIN GOPROXY GOSUMDB GOVCS GOFLAGS CGO_ENABLED
 }
 
+regular_source_files() {
+  xargs -0 "$repo_root/hack/filter-source-files" "$repo_root"
+}
+
 go_source_files() {
-  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- '*.go'
+  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- '*.go' |
+    regular_source_files
 }
 
 shell_source_files() {
-  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- '*.sh' 'hack/dev'
+  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- \
+    '*.sh' 'hack/dev' 'hack/filter-source-files' |
+    regular_source_files
 }
 
 format_files() {
   prepare_offline_environment
-  go_source_files | xargs -0 "$bin_dir/gofmt" -w
-  shell_source_files | xargs -0 "$bin_dir/shfmt" -w -i 2 -ci
+  go_source_files | xargs -0 "$bin_dir/gofmt" -w --
+  shell_source_files | xargs -0 "$bin_dir/shfmt" -w -i 2 -ci --
 }
 
 check_format() {
-  go_files=$(go_source_files | xargs -0 "$bin_dir/gofmt" -l)
+  go_files=$(go_source_files | xargs -0 "$bin_dir/gofmt" -l --)
   if [ -n "$go_files" ]; then
     printf '%s\n' 'Go files require formatting:' "$go_files" >&2
     return 1
   fi
-  shell_source_files | xargs -0 "$bin_dir/shfmt" -d -i 2 -ci
+  shell_source_files | xargs -0 "$bin_dir/shfmt" -d -i 2 -ci --
 }
 
 lint() {
-  shell_source_files | xargs -0 "$bin_dir/shellcheck"
+  shell_source_files | xargs -0 "$bin_dir/shellcheck" --
   "$bin_dir/golangci-lint" run --config "$repo_root/.golangci.yml" ./...
 }
 
@@ -430,26 +456,30 @@ run_step() {
   shift
   started=$(date +%s)
   printf '%s\n' "veer-check step=$step status=started"
-  if "$@"; then
-    finished=$(date +%s)
-    printf '%s\n' "veer-check step=$step status=passed duration_seconds=$((finished - started))"
-    return
-  else
-    status=$?
-  fi
+
+  # The command is a child hack/dev process with its own `set -e`. Capturing
+  # its process status here cannot disable first-failure behavior in the child.
+  set +e
+  "$@"
+  status=$?
+  set -e
+
   finished=$(date +%s)
-  printf '%s\n' "veer-check step=$step status=failed duration_seconds=$((finished - started))" >&2
+  if [ "$status" -eq 0 ]; then
+    printf '%s\n' "veer-check step=$step status=passed duration_seconds=$((finished - started))"
+  else
+    printf '%s\n' "veer-check step=$step status=failed duration_seconds=$((finished - started))" >&2
+  fi
   return "$status"
 }
 
 check_all() {
-  prepare_offline_environment
   cd -- "$repo_root"
-  run_step format check_format
-  run_step lint lint
-  run_step build build
-  run_step test test_units
-  run_step docs check_docs
+  run_step format "$repo_root/hack/dev" _format-check
+  run_step lint "$repo_root/hack/dev" lint
+  run_step build "$repo_root/hack/dev" build
+  run_step test "$repo_root/hack/dev" test
+  run_step docs "$repo_root/hack/dev" docs
   printf '%s\n' 'veer-check status=passed'
 }
 
@@ -491,6 +521,12 @@ case "$command" in
   check)
     [ "$#" -eq 1 ] || fail 'check accepts no arguments'
     check_all
+    ;;
+  _format-check)
+    [ "$#" -eq 1 ] || fail '_format-check accepts no arguments'
+    prepare_offline_environment
+    cd -- "$repo_root"
+    check_format
     ;;
   versions)
     [ "$#" -eq 1 ] || fail 'versions accepts no arguments'

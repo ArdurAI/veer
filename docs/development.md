@@ -67,7 +67,7 @@ with an instruction to rerun bootstrap.
 | --- | --- |
 | `./hack/dev bootstrap` | Validate the full platform matrix, download or reuse verified artifacts, install them under `.tools/`, and verify versions. |
 | `./hack/dev check` | Run every required fast gate in order and stop on the first failure. |
-| `./hack/dev format` | Rewrite tracked and unignored new Go and shell files using the pinned formatters. |
+| `./hack/dev format` | Rewrite existing regular, non-symlink Go and shell files using the pinned formatters. |
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
@@ -93,6 +93,8 @@ variables or credentials.
   or paid third-party API calls.
 - Fast gates use repository-local Go, golangci-lint, and XDG caches but run
   with `GOPROXY=off`, `GOVCS=off`, and `GOTOOLCHAIN=local`.
+- Deleted worktree paths and source symlinks are never passed to write-mode
+  formatters; source symlinks are not a supported way to include Veer code.
 
 ## Troubleshooting
 

@@ -2,6 +2,7 @@ package buildinfo
 
 import "testing"
 
+// TestNew verifies release normalization and development fallbacks.
 func TestNew(t *testing.T) {
 	t.Parallel()
 
