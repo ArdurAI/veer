@@ -107,6 +107,11 @@ expect_rejection 'citation parent traversal' \
   'unsafe citation path: docs/security/../security/model.md:1'
 
 new_fixture
+rewrite_threat_field TM-001 14 'docs/security/does-not-exist.md'
+expect_rejection 'incomplete citation syntax' \
+  'evidence must contain only complete repository documentation citations'
+
+new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
@@ -118,6 +123,60 @@ printf '%s\n' '<!-- TM-001 is intentionally not a readable attacker-story row. -
 mv "$rewritten_model" "$model"
 expect_rejection 'threat ID outside attacker-story table' \
   'threat ID is absent from the readable attacker-story table: TM-001'
+
+new_fixture
+rewrite_threat_field TM-001 3 'medium'
+expect_rejection 'readable and ledger risk mismatch' \
+  'ledger risk does not match readable priority for TM-001'
+
+new_fixture
+rewrite_threat_field TM-001 9 ' '
+expect_rejection 'whitespace-only high-risk mitigation' 'empty required field 9'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| DC-PERSONAL \|/ { next }
+  { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' '<!-- DC-PERSONAL is intentionally not a readable data-class row. -->' \
+  >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'data class outside classification table' \
+  'data class is absent from readable model: DC-PERSONAL'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  /^\| OWN-SECURITY \|/ { next }
+  { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' \
+  '<!--' \
+  '### Control owners' \
+  '| ID | Accountable surface | Live verification work |' \
+  '| --- | --- | --- |' \
+  '| OWN-SECURITY | fake surface | fake verification |' \
+  '-->' >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'owner outside control-owner table' \
+  'undeclared owner OWN-SECURITY'
+
+new_fixture
+model="$test_root/docs/security/threat-model.md"
+rewritten_model="$test_root/threat-model.md"
+LC_ALL=C awk '
+  $0 == "### Workspace isolation assumptions" { skip = 1; next }
+  $0 == "### Provider credential flow and blast radius" { skip = 0 }
+  !skip { print }
+' "$model" >"$rewritten_model"
+printf '%s\n' '<!-- ### Workspace isolation assumptions -->' \
+  >>"$rewritten_model"
+mv "$rewritten_model" "$model"
+expect_rejection 'required heading hidden in a comment' \
+  'is missing visible heading: ### Workspace isolation assumptions'
 
 new_fixture
 ledger="$test_root/docs/security/threats.tsv"

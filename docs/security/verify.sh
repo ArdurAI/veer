@@ -31,11 +31,43 @@ require_text() {
     fail "${checked_file#"$repo_root/"} is missing required text: $required_text"
 }
 
+require_visible_heading() {
+  required_heading=$1
+  checked_file=$2
+  LC_ALL=C awk -v required="$required_heading" '
+    {
+        line = $0
+        if (in_comment) {
+            if (index(line, "-->")) {
+                in_comment = 0
+            }
+            next
+        }
+        if (index(line, "<!--")) {
+            comment_tail = substr(line, index(line, "<!--") + 4)
+            if (!index(comment_tail, "-->")) {
+                in_comment = 1
+            }
+            next
+        }
+        if (line ~ /^```/ || line ~ /^~~~/) {
+            in_fence = !in_fence
+            next
+        }
+        if (!in_fence && line == required) {
+            found = 1
+        }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$checked_file" ||
+    fail "${checked_file#"$repo_root/"} is missing visible heading: $required_heading"
+}
+
 for checked_file in "$model_file" "$threat_file" "$class_file" "$summary_file"; do
   validate_regular_file "$checked_file"
 done
 
-for required_text in \
+for required_heading in \
   '## Overview' \
   '## Threat model, trust boundaries, and assumptions' \
   '### Workspace isolation assumptions' \
@@ -45,7 +77,7 @@ for required_text in \
   '## Attack surface, mitigations, and attacker stories' \
   '### Review and maintenance' \
   '## Severity calibration'; do
-  require_text "$required_text" "$model_file"
+  require_visible_heading "$required_heading" "$model_file"
 done
 
 for required_source in \
@@ -86,37 +118,120 @@ function valid_links(value, values, count, link_index) {
     }
     return 1
 }
-FNR == NR {
-    if ($0 == "## Attack surface, mitigations, and attacker stories") {
-        in_attack_section = 1
-    } else if (in_attack_section && $0 ~ /^## /) {
-        in_attack_section = 0
-        in_attack_table = 0
+function valid_evidence(value, values, count, citation_index) {
+    count = split(value, values, ";")
+    if (count < 1) {
+        return 0
     }
-    if (in_attack_section && $0 ~ /^\| Priority \| Scenario and capability gain \|/) {
-        in_attack_table = 1
-    } else if (in_attack_table && $0 !~ /^\|/) {
-        in_attack_table = 0
-    } else if (in_attack_table &&
-               $0 ~ /^\| (Critical|High|Medium|Low) \| \*\*TM-[0-9][0-9][0-9] /) {
+    for (citation_index = 1; citation_index <= count; citation_index++) {
+        if (values[citation_index] !~ /^docs\/[A-Za-z0-9_.\/-]+:[0-9][0-9]*(-[0-9][0-9]*)?$/) {
+            return 0
+        }
+    }
+    return 1
+}
+FNR == NR {
+    if (in_model_comment) {
+        if (index($0, "-->")) {
+            in_model_comment = 0
+        }
+        next
+    }
+    if (index($0, "<!--")) {
+        comment_tail = substr($0, index($0, "<!--") + 4)
+        if (!index(comment_tail, "-->")) {
+            in_model_comment = 1
+        }
+        next
+    }
+    if ($0 ~ /^```/ || $0 ~ /^~~~/) {
+        in_model_fence = !in_model_fence
+        next
+    }
+    if (in_model_fence) {
+        next
+    }
+    if ($0 ~ /^##+ /) {
+        section = $0
+        table = ""
+    }
+    if (section == "### Protected assets" &&
+        $0 == "| ID | Asset | Required property | Evidence |") {
+        table = "assets"
+        next
+    }
+    if (section == "### Actors and realistic starting capabilities" &&
+        $0 == "| ID | Actor and starting capability | Capability not assumed |") {
+        table = "attackers"
+        next
+    }
+    if (section == "### Trust boundaries" &&
+        $0 == "| ID | Crossing and transferred authority | Required enforcement | Verification owner |") {
+        table = "boundaries"
+        next
+    }
+    if (section == "### Control owners" &&
+        $0 == "| ID | Accountable surface | Live verification work |") {
+        table = "owners"
+        next
+    }
+    if (section == "## Attack surface, mitigations, and attacker stories" &&
+        $0 ~ /^\| Priority \| Scenario and capability gain \|/) {
+        table = "threats"
+        next
+    }
+    if (table != "" && $0 ~ /^\| ---/) {
+        next
+    }
+    if (table == "assets" && $0 ~ /^\| A-[0-9][0-9] \|/) {
+        split($0, cells, "|")
+        asset_id = trim(cells[2])
+        if (assets[asset_id]++) {
+            error("duplicate protected-asset row " asset_id)
+        }
+        next
+    }
+    if (table == "attackers" && $0 ~ /^\| ACT-[A-Z0-9-][A-Z0-9-]* \|/) {
+        split($0, cells, "|")
+        attacker_id = trim(cells[2])
+        if (attackers[attacker_id]++) {
+            error("duplicate attacker row " attacker_id)
+        }
+        next
+    }
+    if (table == "boundaries" && $0 ~ /^\| TB-[0-9][0-9] \|/) {
+        split($0, cells, "|")
+        boundary_id = trim(cells[2])
+        if (boundaries[boundary_id]++) {
+            error("duplicate trust-boundary row " boundary_id)
+        }
+        next
+    }
+    if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
+        split($0, cells, "|")
+        owner_id = trim(cells[2])
+        if (owners[owner_id]++) {
+            error("duplicate control-owner row " owner_id)
+        }
+        next
+    }
+    if (table == "threats" &&
+        $0 ~ /^\| (Critical|High|Medium|Low) \| \*\*TM-[0-9][0-9][0-9] /) {
+        split($0, cells, "|")
         match($0, /TM-[0-9][0-9][0-9]/)
         threat_id = substr($0, RSTART, RLENGTH)
         if (model_threat[threat_id]++) {
             error("duplicate readable attacker-story row " threat_id)
         }
+        model_risk[threat_id] = tolower(trim(cells[2]))
+        next
     }
-    if ($0 ~ /^\| A-[0-9][0-9] \|/) {
-        split($0, cells, "|")
-        assets[trim(cells[2])] = 1
-    } else if ($0 ~ /^\| TB-[0-9][0-9] \|/) {
-        split($0, cells, "|")
-        boundaries[trim(cells[2])] = 1
-    } else if ($0 ~ /^\| ACT-[A-Z0-9-][A-Z0-9-]* \|/) {
-        split($0, cells, "|")
-        attackers[trim(cells[2])] = 1
-    } else if ($0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
-        split($0, cells, "|")
-        owners[trim(cells[2])] = 1
+    if (table != "" && $0 ~ /^\|/) {
+        error("unexpected row in canonical " table " table")
+        next
+    }
+    if (table != "" && $0 !~ /^\|/) {
+        table = ""
     }
     next
 }
@@ -158,6 +273,9 @@ NF != 14 {
     if (!($3 in risks)) {
         error("invalid risk " $3)
     }
+    if (($1 in model_threat) && $3 != model_risk[$1]) {
+        error("ledger risk does not match readable priority for " $1)
+    }
     asset_count = split($4, asset_refs, "|")
     for (asset_index = 1; asset_index <= asset_count; asset_index++) {
         if (!(asset_refs[asset_index] in assets)) {
@@ -177,7 +295,7 @@ NF != 14 {
     }
     used_attackers[$6] = 1
     for (field_index = 7; field_index <= 14; field_index++) {
-        if ($field_index == "") {
+        if (trim($field_index) == "" || trim($field_index) == "-") {
             error("empty required field " field_index)
         }
     }
@@ -191,11 +309,12 @@ NF != 14 {
     if (!valid_links($12)) {
         error("verification must contain exact Veer issue URLs")
     }
-    if (($3 == "critical" || $3 == "high") && ($9 == "-" || $11 == "-")) {
+    if (($3 == "critical" || $3 == "high") &&
+        (trim($9) == "-" || trim($11) == "-")) {
         error("critical/high threat requires a mitigation and linked follow-up")
     }
-    if ($14 !~ /^docs\//) {
-        error("evidence must start with a repository documentation citation")
+    if (!valid_evidence($14)) {
+        error("evidence must contain only complete repository documentation citations")
     }
 }
 END {
@@ -256,14 +375,71 @@ function valid_links(value, values, count, link_index) {
     return 1
 }
 FNR == NR {
-    if ($0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
-        split($0, cells, "|")
-        owners[trim(cells[2])] = 1
+    if (in_model_comment) {
+        if (index($0, "-->")) {
+            in_model_comment = 0
+        }
+        next
     }
-    remaining = $0
-    while (match(remaining, /DC-[A-Z][A-Z-]*/)) {
-        model_class[substr(remaining, RSTART, RLENGTH)] = 1
-        remaining = substr(remaining, RSTART + RLENGTH)
+    if (index($0, "<!--")) {
+        comment_tail = substr($0, index($0, "<!--") + 4)
+        if (!index(comment_tail, "-->")) {
+            in_model_comment = 1
+        }
+        next
+    }
+    if ($0 ~ /^```/ || $0 ~ /^~~~/) {
+        in_model_fence = !in_model_fence
+        next
+    }
+    if (in_model_fence) {
+        next
+    }
+    if ($0 ~ /^##+ /) {
+        section = $0
+        table = ""
+    }
+    if (section == "### Control owners" &&
+        $0 == "| ID | Accountable surface | Live verification work |") {
+        table = "owners"
+        next
+    }
+    if (section == "### Data classification" &&
+        $0 == "| ID | Class | Central rule | Retention boundary | Owner and verification |") {
+        table = "classes"
+        next
+    }
+    if (table != "" && $0 ~ /^\| ---/) {
+        next
+    }
+    if (table == "owners" && $0 ~ /^\| OWN-[A-Z-][A-Z-]* \|/) {
+        split($0, cells, "|")
+        owner_id = trim(cells[2])
+        if (owners[owner_id]++) {
+            error("duplicate control-owner row " owner_id)
+        }
+        next
+    }
+    if (table == "classes" && $0 ~ /^\| DC-[A-Z][A-Z-]* \|/) {
+        split($0, cells, "|")
+        class_id = trim(cells[2])
+        if (class_seen[class_id]++) {
+            error("duplicate readable data-class row " class_id)
+        }
+        model_class[class_id] = trim(cells[3])
+        if (!match(cells[6], /OWN-[A-Z-][A-Z-]*/)) {
+            error("readable data class lacks a control owner: " class_id)
+        } else {
+            model_class_owner[class_id] = substr(cells[6], RSTART, RLENGTH)
+        }
+        next
+    }
+    if (table != "" && $0 ~ /^\|/) {
+        error("unexpected row in canonical " table " table")
+        next
+    }
+    if (table != "" && $0 !~ /^\|/) {
+        table = ""
     }
     next
 }
@@ -295,14 +471,18 @@ NF != 11 {
     }
     if (!($1 in model_class)) {
         error("data class is absent from readable model: " $1)
+    } else if ($2 != model_class[$1]) {
+        error("ledger name does not match readable data class for " $1)
     }
     for (field_index = 1; field_index <= 10; field_index++) {
-        if ($field_index == "" || $field_index == "-") {
+        if (trim($field_index) == "" || trim($field_index) == "-") {
             error("data class " $1 " has empty handling field " field_index)
         }
     }
     if (!($10 in owners)) {
         error("undeclared data-class owner " $10)
+    } else if (($1 in model_class_owner) && $10 != model_class_owner[$1]) {
+        error("ledger owner does not match readable data class for " $1)
     }
     if (!valid_links($11)) {
         error("data-class verification must contain exact Veer issue URLs")
@@ -316,6 +496,11 @@ END {
     }
     if (rows != 5) {
         error("expected exactly five required data classes")
+    }
+    for (model_id in model_class) {
+        if (!(model_id in seen)) {
+            error("readable model references missing data-class ledger row: " model_id)
+        }
     }
     if (failed) {
         exit 1
