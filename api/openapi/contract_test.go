@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -426,7 +427,7 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				list := nestedMap(t, root, "components", "schemas", "WorkspaceList", "properties")
 				delete(list, "nextPageToken")
 			},
-			message: "WorkspaceList omits nextPageToken",
+			message: "WorkspaceList shape drifted",
 		},
 		{
 			name: "deprecation notice shortened",
@@ -605,6 +606,118 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "OpaqueId schema contract drifted",
 		},
 		{
+			name: "workspace response byte ceiling removed",
+			mutate: func(root map[string]any) {
+				workspace := nestedMap(t, root, "components", "schemas", "Workspace")
+				delete(workspace, "x-veer-maximum-json-bytes")
+			},
+			message: "workspace read shape or encoded-size contract drifted",
+		},
+		{
+			name: "workspace page byte ceiling removed",
+			mutate: func(root map[string]any) {
+				list := nestedMap(t, root, "components", "schemas", "WorkspaceList")
+				delete(list, "x-veer-maximum-json-bytes")
+			},
+			message: "WorkspaceList encoded-size contract drifted",
+		},
+		{
+			name: "workspace page byte policy relaxed",
+			mutate: func(root map[string]any) {
+				list := nestedMap(t, root, "components", "schemas", "WorkspaceList")
+				list["x-veer-page-byte-policy"] = "truncate-after-limit"
+			},
+			message: "WorkspaceList encoded-size contract drifted",
+		},
+		{
+			name: "create payload becomes partial",
+			mutate: func(root map[string]any) {
+				create := nestedMap(t, root, "components", "schemas", "WorkspaceCreate")
+				create["required"] = []any{"apiVersion", "kind", "metadata"}
+			},
+			message: "WorkspaceCreate complete-write shape drifted",
+		},
+		{
+			name: "replacement metadata becomes server owned",
+			mutate: func(root map[string]any) {
+				metadata := nestedMap(t, root, "components", "schemas", "WorkspaceReplace", "properties", "metadata")
+				metadata["$ref"] = "#/components/schemas/ResourceMetadata"
+			},
+			message: "WorkspaceReplace: metadata must reference #/components/schemas/WritableMetadata",
+		},
+		{
+			name: "resource generation upper bound removed",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "generation")
+				delete(generation, "maximum")
+			},
+			message: "ResourceMetadata.generation int64 contract drifted",
+		},
+		{
+			name: "mutation receipt generation upper bound removed",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "components", "schemas", "MutationReceipt", "properties", "generation")
+				delete(generation, "maximum")
+			},
+			message: "MutationReceipt.generation int64 contract drifted",
+		},
+		{
+			name: "operation generation upper bound removed",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "components", "schemas", "Operation", "properties", "generation")
+				delete(generation, "maximum")
+			},
+			message: "Operation.generation int64 contract drifted",
+		},
+		{
+			name: "resource ID loses read only marker",
+			mutate: func(root map[string]any) {
+				id := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "id")
+				delete(id, "readOnly")
+			},
+			message: "ResourceMetadata.id must be readOnly",
+		},
+		{
+			name: "creation time loses read only marker",
+			mutate: func(root map[string]any) {
+				createdAt := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "createdAt")
+				delete(createdAt, "readOnly")
+			},
+			message: "ResourceMetadata.createdAt must be readOnly",
+		},
+		{
+			name: "update time loses read only marker",
+			mutate: func(root map[string]any) {
+				updatedAt := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "updatedAt")
+				delete(updatedAt, "readOnly")
+			},
+			message: "ResourceMetadata.updatedAt must be readOnly",
+		},
+		{
+			name: "next page token loses encoding grammar",
+			mutate: func(root map[string]any) {
+				token := nestedMap(t, root, "components", "schemas", "WorkspaceList", "properties", "nextPageToken")
+				delete(token, "pattern")
+			},
+			message: "WorkspaceList nextPageToken contract drifted",
+		},
+		{
+			name: "status receipt byte ceiling removed",
+			mutate: func(root map[string]any) {
+				receipt := nestedMap(t, root, "components", "schemas", "StatusReceipt")
+				delete(receipt, "x-veer-maximum-json-bytes")
+			},
+			message: "status receipt encoded-size contract drifted",
+		},
+		{
+			name: "mutation receipt byte ceiling removed",
+			mutate: func(root map[string]any) {
+				receipt := nestedMap(t, root, "components", "schemas", "MutationReceipt")
+				delete(receipt, "x-veer-maximum-json-bytes")
+			},
+			message: "mutation receipt encoded-size contract drifted",
+		},
+		{
 			name: "problem field violations become unbounded aggregate",
 			mutate: func(root map[string]any) {
 				errors := nestedMap(t, root, "components", "schemas", "Problem", "properties", "errors")
@@ -627,6 +740,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(problem, "x-veer-maximum-json-bytes")
 			},
 			message: "problem encoded-size contract drifted",
+		},
+		{
+			name: "problem diagnostic text admits escaping Unicode",
+			mutate: func(root map[string]any) {
+				title := nestedMap(t, root, "components", "schemas", "Problem", "properties", "title")
+				title["pattern"] = ".*"
+			},
+			message: "problem primitive contract drifted",
 		},
 		{
 			name: "timestamp calendar assertion removed",
@@ -715,7 +836,34 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				schema := nestedMap(t, root, "components", "responses", "Conflict", "content", "application/problem+json", "schema")
 				schema["$ref"] = "#/components/schemas/Workspace"
 			},
-			message: "error response Conflict must reference Problem",
+			message: "error response Conflict must reference ConflictProblem",
+		},
+		{
+			name: "conflict response status schema mismatched",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "ConflictProblem")
+				allOf := schema["allOf"].([]any)
+				refinement := allOf[1].(map[string]any)
+				property := nestedMap(t, refinement, "properties", "status")
+				property["const"] = json.Number("412")
+			},
+			message: "ConflictProblem constants drifted for response Conflict",
+		},
+		{
+			name: "mandatory response header contract removed",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "MutationAccepted")
+				delete(response, "x-veer-required-headers")
+			},
+			message: "response MutationAccepted required-header contract drifted",
+		},
+		{
+			name: "deprecation header set becomes partial",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "Workspace")
+				response["x-veer-required-header-sets"] = []any{[]any{"Deprecation", "Sunset"}}
+			},
+			message: "success response Workspace deprecation-header contract drifted",
 		},
 	}
 
@@ -734,6 +882,44 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want message containing %q", err, test.message)
 			}
 		})
+	}
+}
+
+func TestMaximumProblemEncoding(t *testing.T) {
+	t.Parallel()
+	safeText := regexp.MustCompile(safeProblemTextPattern)
+	for _, value := range []string{"safe diagnostic text", strings.Repeat("A", 192)} {
+		if !safeText.MatchString(value) {
+			t.Fatalf("safe problem pattern rejected %q", value)
+		}
+	}
+	for _, value := range []string{"emoji 🚨", `quoted "text"`, `path\\value`, "html <tag> & value"} {
+		if safeText.MatchString(value) {
+			t.Fatalf("safe problem pattern accepted escaping value %q", value)
+		}
+	}
+
+	problem := map[string]any{
+		"type":      "urn:veer:problem:" + strings.Repeat("a", 64),
+		"title":     strings.Repeat("A", 64),
+		"status":    599,
+		"detail":    strings.Repeat("A", 192),
+		"instance":  "urn:veer:request:" + strings.Repeat("A", 64),
+		"code":      strings.Repeat("a", 64),
+		"requestId": strings.Repeat("A", 64),
+		"errors": []any{map[string]any{
+			"field":   "/" + strings.Repeat("a", 95),
+			"code":    strings.Repeat("a", 32),
+			"message": strings.Repeat("A", 96),
+		}},
+		"retryAfterSeconds": 86400,
+	}
+	encoded, err := json.Marshal(problem)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if len(encoded) > 1024 {
+		t.Fatalf("maximal problem encoding is %d bytes, want at most 1024", len(encoded))
 	}
 }
 

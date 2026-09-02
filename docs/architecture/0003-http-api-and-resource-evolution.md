@@ -116,9 +116,12 @@ generation, resource version, and update time; the caller reads the point
 resource when it needs the full representation.
 
 Only `application/json` is accepted for a request body. Missing or mismatched
-`Content-Type` returns `415`. The maximum encoded request body, read response,
-or response page is 262,144 bytes. Non-read receipts, status summaries, and
-problem bodies are capped at 1,024 bytes as established by
+`Content-Type` returns `415`. The maximum encoded request body, individual read
+representation, or response page is 262,144 bytes. A collection page stops
+before adding an item that would exceed the byte ceiling, even when fewer than
+100 items have been selected. A write whose resulting canonical Workspace
+representation cannot fit the same ceiling is rejected before commit. Non-read
+receipts, status summaries, and problem bodies are capped at 1,024 bytes as established by
 [ADR 0001](0001-alpha-operational-bounds.md). Oversized input is rejected
 before JSON decoding, authentication-dependent allocation, persistence, or
 audit payload construction.
@@ -159,6 +162,10 @@ addition.
 Server-owned fields are absent from write schemas or marked read-only in read
 schemas. A client cannot set `id`, `generation`, `resourceVersion`, creation or
 update timestamps, or status through a desired-state write.
+
+Every schema value declared as `int64` also carries the explicit signed
+64-bit maximum `9223372036854775807`; the format annotation alone does not
+constrain JSON Schema validators.
 
 ## Generation, status, and resource version
 
@@ -238,7 +245,10 @@ changing this route version.
 
 Collection reads use keyset pagination. `pageSize` defaults to 50 and is
 bounded to 1 through 100. Results are ordered ascending by `(createdAt, id)`;
-the stable ID breaks timestamp ties. Offset pagination is not exposed.
+the stable ID breaks timestamp ties. Offset pagination is not exposed. The
+count limit is secondary to the 262,144-byte encoded-page limit: page assembly
+stops before the first item that would cross either limit and returns the
+continuation token for that unconsumed item.
 
 `nextPageToken` is an opaque, authenticated, URL-safe value no larger than
 1,024 bytes. Before use, the server bounds its size and decoding work. Its
@@ -278,10 +288,18 @@ identifiers are forbidden.
 
 A problem response contains at most one field violation. Its pointer, code,
 and message are capped at 96, 32, and 96 characters respectively; the
-top-level title and detail are capped at 64 and 192 characters. These bounds
-leave headroom within the 1,024-byte encoded response ceiling. Implementations
-enforce the encoded-byte limit after serialization and omit optional field
-violations and detail before exceeding it.
+top-level title and detail are capped at 64 and 192 characters. Human-readable
+diagnostic text uses a non-escaping printable-ASCII subset: control characters,
+Unicode, quotes, reverse solidus, and the HTML-sensitive `&`, `<`, and `>` are
+excluded. These grammar and length bounds keep the maximal declared envelope
+within the 1,024-byte encoded response ceiling. Implementations still enforce
+the encoded-byte limit after serialization and omit optional field violations
+and detail before exceeding it.
+
+Each reusable error response references a response-specific schema that fixes
+`type`, HTTP `status`, and stable `code` with constants. This prevents a valid
+generic Problem body from carrying a status or code that contradicts its HTTP
+response component.
 
 The baseline includes validated examples for every issue-required class:
 
@@ -306,6 +324,14 @@ it never grants identity, authorization, idempotency, or resource ownership.
 Workspace, resource, actor, provider object, and request IDs are forbidden as
 metric labels under the existing cardinality contract.
 
+Because OpenAPI response Header Objects do not have a native `required` flag,
+Veer response components carry `x-veer-required-headers` as an executable
+generator convention. `Veer-Request-Id` is always required; ETag, Location,
+authentication challenge, and retry headers are required on their declared
+responses. Successful responses additionally carry
+`x-veer-required-header-sets`: when an operation is deprecated, `Deprecation`,
+`Sunset`, and `Link` are emitted together as one conditional set.
+
 ## Deprecation and removal
 
 A deprecated operation or representation returns all of:
@@ -327,7 +353,10 @@ the deprecated behavior. Sunset is at least 90 days later. Removal cannot
 occur before that date, and a breaking replacement uses a new route version.
 The migration document identifies the replacement, behavioral differences,
 client action, and last supported date. The headers are response metadata,
-not an authorization or cache invalidation mechanism.
+not an authorization or cache invalidation mechanism. The conditional trio is
+encoded in each successful response component through
+`x-veer-required-header-sets` so generated adapters cannot emit only part of
+the lifecycle signal.
 
 Security remediation may disable an unsafe operation sooner only when the
 maintainers record the threat, blast radius, compensating behavior, customer
@@ -353,9 +382,10 @@ The semantic verifier rejects:
   IDs, unselected methods, server overrides, callbacks, or webhooks;
 - mutation routes without idempotency, required ETag preconditions, an exact
   request schema, or their reviewed success response;
-- request media type, problem media type, shared response-header or example
-  references, status-write, generation, resource-version, pagination, or
-  deprecation drift;
+- request media type, response-specific problem status/code, mandatory header
+  metadata, shared response-header or example references, complete-write
+  shape, status-write, generation, resource-version, byte-bounded pagination,
+  or deprecation drift;
 - an object schema that silently accepts unknown properties; and
 - missing or inconsistent validation, authentication, authorization,
   conflict, throttling, or internal-failure examples.

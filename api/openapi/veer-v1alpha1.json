@@ -684,6 +684,16 @@
     "responses": {
       "WorkspaceList": {
         "description": "A bounded deterministic workspace page.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
+        "x-veer-required-header-sets": [
+          [
+            "Deprecation",
+            "Sunset",
+            "Link"
+          ]
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -712,6 +722,17 @@
       },
       "Workspace": {
         "description": "Current workspace representation.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "ETag"
+        ],
+        "x-veer-required-header-sets": [
+          [
+            "Deprecation",
+            "Sunset",
+            "Link"
+          ]
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -761,6 +782,17 @@
       },
       "StatusUpdated": {
         "description": "Bounded receipt for a persisted controller status update.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "ETag"
+        ],
+        "x-veer-required-header-sets": [
+          [
+            "Deprecation",
+            "Sunset",
+            "Link"
+          ]
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -794,6 +826,17 @@
       },
       "Operation": {
         "description": "Current asynchronous operation representation.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "ETag"
+        ],
+        "x-veer-required-header-sets": [
+          [
+            "Deprecation",
+            "Sunset",
+            "Link"
+          ]
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -832,6 +875,17 @@
       },
       "MutationAccepted": {
         "description": "Desired state was durably accepted; asynchronous convergence is not implied.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "Location"
+        ],
+        "x-veer-required-header-sets": [
+          [
+            "Deprecation",
+            "Sunset",
+            "Link"
+          ]
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -866,6 +920,9 @@
       },
       "ValidationFailure": {
         "description": "The request is syntactically or semantically invalid and caused no mutation.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -874,7 +931,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/ValidationProblem"
             },
             "examples": {
               "validation": {
@@ -886,6 +943,10 @@
       },
       "AuthenticationRequired": {
         "description": "Authentication is missing or invalid.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "WWW-Authenticate"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -897,7 +958,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/AuthenticationProblem"
             },
             "examples": {
               "authentication": {
@@ -909,6 +970,9 @@
       },
       "AuthorizationDenied": {
         "description": "The authenticated principal lacks the required action in the resolved scope.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -917,7 +981,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/AuthorizationProblem"
             },
             "examples": {
               "authorization": {
@@ -929,6 +993,9 @@
       },
       "NotFound": {
         "description": "The resource does not exist in the caller-visible scope.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -937,7 +1004,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/NotFoundProblem"
             },
             "example": {
               "type": "urn:veer:problem:not-found",
@@ -953,6 +1020,9 @@
       },
       "Conflict": {
         "description": "The request conflicts with a current invariant or reuses an idempotency key with a different request.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -961,7 +1031,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/ConflictProblem"
             },
             "examples": {
               "conflict": {
@@ -973,6 +1043,10 @@
       },
       "PreconditionFailed": {
         "description": "If-Match does not equal the current strong ETag.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "ETag"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -984,7 +1058,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/PreconditionFailedProblem"
             },
             "example": {
               "type": "urn:veer:problem:precondition-failed",
@@ -1000,6 +1074,9 @@
       },
       "PreconditionRequired": {
         "description": "A required If-Match header is absent.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -1008,7 +1085,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/PreconditionRequiredProblem"
             },
             "example": {
               "type": "urn:veer:problem:precondition-required",
@@ -1024,6 +1101,9 @@
       },
       "RequestTooLarge": {
         "description": "The encoded request exceeds 262144 bytes.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -1032,7 +1112,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/RequestTooLargeProblem"
             },
             "example": {
               "type": "urn:veer:problem:request-too-large",
@@ -1048,6 +1128,9 @@
       },
       "UnsupportedMediaType": {
         "description": "A request body is not application/json.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -1056,7 +1139,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/UnsupportedMediaTypeProblem"
             },
             "example": {
               "type": "urn:veer:problem:unsupported-media-type",
@@ -1072,6 +1155,10 @@
       },
       "Throttled": {
         "description": "The caller or scoped admission budget is temporarily exhausted.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "Retry-After"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -1083,7 +1170,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/ThrottledProblem"
             },
             "examples": {
               "throttling": {
@@ -1095,6 +1182,9 @@
       },
       "InternalFailure": {
         "description": "The request failed without exposing internal or provider details.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -1103,7 +1193,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/InternalFailureProblem"
             },
             "examples": {
               "internal": {
@@ -1115,6 +1205,10 @@
       },
       "Unavailable": {
         "description": "A system-wide safety or availability boundary temporarily prevents service.",
+        "x-veer-required-headers": [
+          "Veer-Request-Id",
+          "Retry-After"
+        ],
         "headers": {
           "Veer-Request-Id": {
             "$ref": "#/components/headers/VeerRequestId"
@@ -1126,7 +1220,7 @@
         "content": {
           "application/problem+json": {
             "schema": {
-              "$ref": "#/components/schemas/Problem"
+              "$ref": "#/components/schemas/UnavailableProblem"
             },
             "example": {
               "type": "urn:veer:problem:unavailable",
@@ -1230,6 +1324,7 @@
             "type": "integer",
             "format": "int64",
             "minimum": 1,
+            "maximum": 9223372036854775807,
             "readOnly": true,
             "description": "Starts at 1 and advances once per semantic desired-spec change only."
           },
@@ -1387,6 +1482,7 @@
         "type": "object",
         "description": "Representative versioned resource used to make the HTTP conventions executable.",
         "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
         "required": [
           "apiVersion",
           "kind",
@@ -1495,6 +1591,7 @@
         "type": "object",
         "description": "Bounded non-read response proving a controller status update was persisted.",
         "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 1024,
         "required": [
           "resourceId",
           "observedGeneration",
@@ -1528,6 +1625,8 @@
         "type": "object",
         "description": "A deterministic bounded page ordered by createdAt and stable id.",
         "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-page-byte-policy": "stop-before-limit",
         "required": [
           "items"
         ],
@@ -1553,6 +1652,7 @@
         "type": "object",
         "description": "Bounded receipt returned for a durably accepted asynchronous mutation.",
         "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 1024,
         "required": [
           "resourceId",
           "operationId",
@@ -1571,7 +1671,8 @@
             "type": "integer",
             "format": "int64",
             "example": 3,
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9223372036854775807
           },
           "resourceVersion": {
             "type": "string",
@@ -1613,7 +1714,8 @@
             "type": "integer",
             "format": "int64",
             "example": 3,
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9223372036854775807
           },
           "resourceVersion": {
             "type": "string",
@@ -1668,7 +1770,7 @@
             "example": "/spec/unknownField",
             "minLength": 1,
             "maxLength": 96,
-            "pattern": "^(/([^~/]|~0|~1)*)+$"
+            "pattern": "^(/([A-Za-z0-9._:-]|~0|~1)*)+$"
           },
           "code": {
             "type": "string",
@@ -1680,7 +1782,8 @@
           "message": {
             "type": "string",
             "example": "The field is not defined for v1alpha1.",
-            "maxLength": 96
+            "maxLength": 96,
+            "pattern": "^[\\x20-\\x21\\x23-\\x25\\x27-\\x3B\\x3D\\x3F-\\x5B\\x5D-\\x7E]*$"
           }
         }
       },
@@ -1708,7 +1811,8 @@
             "type": "string",
             "example": "Request validation failed",
             "minLength": 1,
-            "maxLength": 64
+            "maxLength": 64,
+            "pattern": "^[\\x20-\\x21\\x23-\\x25\\x27-\\x3B\\x3D\\x3F-\\x5B\\x5D-\\x7E]*$"
           },
           "status": {
             "type": "integer",
@@ -1720,7 +1824,8 @@
           "detail": {
             "type": "string",
             "example": "One request field is not accepted.",
-            "maxLength": 192
+            "maxLength": 192,
+            "pattern": "^[\\x20-\\x21\\x23-\\x25\\x27-\\x3B\\x3D\\x3F-\\x5B\\x5D-\\x7E]*$"
           },
           "instance": {
             "type": "string",
@@ -1755,6 +1860,270 @@
             "maximum": 86400
           }
         }
+      },
+      "ValidationProblem": {
+        "description": "A 400 response with Veer's validation-failed problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:validation-failed"
+              },
+              "status": {
+                "const": 400
+              },
+              "code": {
+                "const": "validation-failed"
+              }
+            }
+          }
+        ]
+      },
+      "AuthenticationProblem": {
+        "description": "A 401 response with Veer's authentication-required problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:authentication-required"
+              },
+              "status": {
+                "const": 401
+              },
+              "code": {
+                "const": "authentication-required"
+              }
+            }
+          }
+        ]
+      },
+      "AuthorizationProblem": {
+        "description": "A 403 response with Veer's authorization-denied problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:authorization-denied"
+              },
+              "status": {
+                "const": 403
+              },
+              "code": {
+                "const": "authorization-denied"
+              }
+            }
+          }
+        ]
+      },
+      "NotFoundProblem": {
+        "description": "A 404 response with Veer's not-found problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:not-found"
+              },
+              "status": {
+                "const": 404
+              },
+              "code": {
+                "const": "not-found"
+              }
+            }
+          }
+        ]
+      },
+      "ConflictProblem": {
+        "description": "A 409 response with Veer's idempotency-key-reused problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:idempotency-key-reused"
+              },
+              "status": {
+                "const": 409
+              },
+              "code": {
+                "const": "idempotency-key-reused"
+              }
+            }
+          }
+        ]
+      },
+      "PreconditionFailedProblem": {
+        "description": "A 412 response with Veer's precondition-failed problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:precondition-failed"
+              },
+              "status": {
+                "const": 412
+              },
+              "code": {
+                "const": "precondition-failed"
+              }
+            }
+          }
+        ]
+      },
+      "RequestTooLargeProblem": {
+        "description": "A 413 response with Veer's request-too-large problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:request-too-large"
+              },
+              "status": {
+                "const": 413
+              },
+              "code": {
+                "const": "request-too-large"
+              }
+            }
+          }
+        ]
+      },
+      "UnsupportedMediaTypeProblem": {
+        "description": "A 415 response with Veer's unsupported-media-type problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:unsupported-media-type"
+              },
+              "status": {
+                "const": 415
+              },
+              "code": {
+                "const": "unsupported-media-type"
+              }
+            }
+          }
+        ]
+      },
+      "PreconditionRequiredProblem": {
+        "description": "A 428 response with Veer's precondition-required problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:precondition-required"
+              },
+              "status": {
+                "const": 428
+              },
+              "code": {
+                "const": "precondition-required"
+              }
+            }
+          }
+        ]
+      },
+      "ThrottledProblem": {
+        "description": "A 429 response with Veer's rate-limited problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:rate-limited"
+              },
+              "status": {
+                "const": 429
+              },
+              "code": {
+                "const": "rate-limited"
+              }
+            }
+          }
+        ]
+      },
+      "InternalFailureProblem": {
+        "description": "A 500 response with Veer's internal-failure problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:internal-failure"
+              },
+              "status": {
+                "const": 500
+              },
+              "code": {
+                "const": "internal-failure"
+              }
+            }
+          }
+        ]
+      },
+      "UnavailableProblem": {
+        "description": "A 503 response with Veer's unavailable problem identity.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:unavailable"
+              },
+              "status": {
+                "const": 503
+              },
+              "code": {
+                "const": "unavailable"
+              }
+            }
+          }
+        ]
       }
     },
     "examples": {
