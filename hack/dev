@@ -44,6 +44,7 @@ Commands:
   format     Rewrite Go and shell files to the repository format.
   lint       Run Go and shell static analysis without network access.
   test       Run the fast unit-test suite without network access.
+  api        Validate the versioned OpenAPI and evolution contract offline.
   docs       Validate Markdown and checked-in architecture evidence.
   check      Run format, lint, build, test, and docs gates.
   versions   Print the verified repository-local tool versions.
@@ -94,7 +95,7 @@ validate_manifest() {
   LC_ALL=C awk -F '\t' '
     BEGIN {
         expected_header = "name\tversion\tos\tarch\tformat\tmember\tsha256\turl"
-        split("go golangci-lint sqlc goose shfmt shellcheck rumdl", tools, " ")
+        split("go golangci-lint sqlc goose shfmt shellcheck rumdl vacuum", tools, " ")
         split("darwin linux", systems, " ")
         split("amd64 arm64", architectures, " ")
         for (loop_index in tools) {
@@ -182,6 +183,11 @@ validate_manifest() {
                 portable_arch "-unknown-linux-gnu")
             expected_url = github_prefix "rvben/rumdl" release_suffix \
                 "rumdl-v" $2 "-" target ".tar.gz"
+        } else if ($1 == "vacuum") {
+            expected_format = "tar.gz"
+            expected_member = "vacuum"
+            expected_url = github_prefix "daveshanley/vacuum" release_suffix \
+                "vacuum_" $2 "_" $3 "_" x86_arch ".tar.gz"
         }
 
         if ($5 != expected_format) {
@@ -401,7 +407,11 @@ sanitize_external_environment() {
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE \
     AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE GOOGLE_APPLICATION_CREDENTIALS \
     AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID GZIP SHELLCHECK_OPTS \
-    TAR_OPTIONS || true
+    TAR_OPTIONS VACUUM_ALLOW_HTTP VACUUM_ALLOW_PRIVATE_NETWORKS VACUUM_BASE \
+    VACUUM_BREAKING_CONFIG VACUUM_CHANGES VACUUM_CONFIG VACUUM_FAIL_SEVERITY \
+    VACUUM_FUNCTIONS VACUUM_IGNORE_FILE VACUUM_INSECURE VACUUM_MIN_SCORE \
+    VACUUM_NO_UPDATE_CHECK VACUUM_ORIGINAL VACUUM_REMOTE VACUUM_RULESET \
+    VACUUM_SKIP_CHECK || true
 }
 
 bootstrap() {
@@ -445,7 +455,7 @@ bootstrap() {
     printf '%s\n' "veer-bootstrap tool=$name version=$version os=$row_os arch=$row_arch status=installed"
   done <"$manifest_file"
 
-  [ "$selected_count" -eq 7 ] || fail "expected 7 tools for $platform_os/$platform_arch, found $selected_count"
+  [ "$selected_count" -eq 8 ] || fail "expected 8 tools for $platform_os/$platform_arch, found $selected_count"
   ln -sf ../go/bin/go "$bin_dir/go"
   ln -sf ../go/bin/gofmt "$bin_dir/gofmt"
 
@@ -489,11 +499,12 @@ verify_declared_versions() {
   [ "$go_mod_version" = "$go_version" ] ||
     fail "go.mod version mismatch: expected $go_version, got $go_mod_version"
 
-  for tool in go golangci-lint sqlc goose shfmt shellcheck rumdl; do
+  for tool in go golangci-lint sqlc goose shfmt shellcheck rumdl vacuum; do
     version=$(version_for_tool "$tool")
     case "$tool" in
       go) display_name=Go ;;
       shellcheck) display_name=ShellCheck ;;
+      vacuum) display_name=Vacuum ;;
       *) display_name=$tool ;;
     esac
     if ! grep -Fq "| $display_name | $version |" "$repo_root/docs/development.md"; then
@@ -558,6 +569,7 @@ verify_versions() {
   verify_version shfmt "$(version_for_tool shfmt)" "$bin_dir/shfmt" --version
   verify_version shellcheck "$(version_for_tool shellcheck)" "$bin_dir/shellcheck" --version
   verify_version rumdl "$(version_for_tool rumdl)" "$bin_dir/rumdl" --version
+  verify_version vacuum "$(version_for_tool vacuum)" "$bin_dir/vacuum" version
 }
 
 require_prepared() {
@@ -575,7 +587,7 @@ require_prepared() {
     fail 'tool manifest changed; run ./hack/dev bootstrap'
   fi
 
-  for tool in go gofmt golangci-lint sqlc goose shfmt shellcheck rumdl; do
+  for tool in go gofmt golangci-lint sqlc goose shfmt shellcheck rumdl vacuum; do
     [ -x "$bin_dir/$tool" ] || fail "missing repository-local tool $tool; run ./hack/dev bootstrap"
   done
 }
@@ -651,6 +663,37 @@ test_units() {
   "$bin_dir/go" test -trimpath -count=1 ./...
 }
 
+check_api() {
+  api_dir="$repo_root/api/openapi"
+  for contract_file in \
+    "$api_dir/vacuum.conf.yaml" \
+    "$api_dir/veer-v1alpha1.json"; do
+    [ -f "$contract_file" ] && [ ! -L "$contract_file" ] ||
+      fail "API contract input must be a regular non-symlink file: $contract_file"
+  done
+
+  "$bin_dir/vacuum" \
+    --config "$api_dir/vacuum.conf.yaml" \
+    --no-update-check \
+    --remote=false \
+    --allow-private-networks=false \
+    --allow-http=false \
+    --insecure=false \
+    --timeout 10 \
+    lint \
+    --details \
+    --all-results \
+    --no-style \
+    --no-banner \
+    --no-clip \
+    --fail-severity warn \
+    --min-score 100 \
+    "$api_dir/veer-v1alpha1.json"
+  "$bin_dir/go" test -trimpath -count=1 ./api/openapi
+  printf '%s\n' \
+    'veer-api-contract openapi=3.1.2 transport=v1alpha1 remote_refs=denied status=passed'
+}
+
 check_docs() {
   "$bin_dir/rumdl" check --disable MD013 README.md docs
   "$repo_root/docs/architecture/cost-model/verify.sh"
@@ -688,6 +731,7 @@ check_all() {
   run_step build "$repo_root/hack/dev" build
   run_step test "$repo_root/hack/dev" test
   run_step docs "$repo_root/hack/dev" docs
+  run_step api "$repo_root/hack/dev" api
   printf '%s\n' 'veer-check status=passed'
 }
 
@@ -719,6 +763,12 @@ case "$command" in
     prepare_offline_environment
     cd -- "$repo_root"
     test_units
+    ;;
+  api)
+    [ "$#" -eq 1 ] || fail 'api accepts no arguments'
+    prepare_offline_environment
+    cd -- "$repo_root"
+    check_api
     ;;
   docs)
     [ "$#" -eq 1 ] || fail 'docs accepts no arguments'

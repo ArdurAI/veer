@@ -58,6 +58,7 @@ The artifact manifest is the source of truth for every supported platform:
 | shfmt | 3.14.0 | Shell formatting |
 | ShellCheck | 0.11.0 | Shell static analysis |
 | rumdl | 0.2.62 | Markdown linting |
+| Vacuum | 0.30.1 | OpenAPI structural validation and linting |
 
 Run `./hack/dev versions` to verify and print the installed versions. A changed
 manifest invalidates the prepared-state marker, so subsequent commands stop
@@ -73,6 +74,7 @@ with an instruction to rerun bootstrap.
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
+| `./hack/dev api` | Validate the OpenAPI document and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify checked-in architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
 
@@ -92,7 +94,7 @@ variables or credentials.
   and directories, at most 20,000 members, and at most 512 MiB of expanded
   file data. The compressed download cap remains 100 MiB per artifact.
 - On a macOS/arm64 clean run verified on 2026-09-01, the download cache was
-  exactly 157,327,393 bytes and `.tools/` occupied approximately 769 MiB after
+  exactly 176,834,836 bytes and `.tools/` occupied approximately 851 MiB after
   one full check. Other platforms may differ. The whole directory is ignored
   by Git and can be removed to reclaim local space.
 - The bootstrap CI job uses a fresh checkout to prove the clean-host path. Its
@@ -101,6 +103,10 @@ variables or credentials.
 - Fast gates use repository-local Go, golangci-lint, and XDG caches but run
   with `GOENV=off`, `GOWORK=off`, `GOPROXY=off`, `GOVCS=*:off`, and
   `GOTOOLCHAIN=local`.
+- API validation runs Vacuum with a repository-owned configuration, update
+  checks disabled, remote references disabled, and HTTP, private-network, and
+  insecure TLS access denied. Veer-specific contract tests use only the Go
+  standard library and bound document size, nesting, and traversal work.
 - Bootstrap clears `TAR_OPTIONS` and `GZIP`; lint clears `SHELLCHECK_OPTS` and
   passes `--norc`. Archive behavior and ShellCheck policy therefore do not
   inherit user or CI defaults.

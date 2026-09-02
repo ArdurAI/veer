@@ -71,6 +71,8 @@ The first implementation slice targets AWS and Kubernetes:
 - [Architecture overview](docs/architecture/overview.md)
 - [Alpha operational bounds](docs/architecture/0001-alpha-operational-bounds.md)
 - [Alpha implementation stack](docs/architecture/0002-alpha-implementation-stack.md)
+- [HTTP API and resource evolution conventions](docs/architecture/0003-http-api-and-resource-evolution.md)
+- [OpenAPI v1alpha1 baseline](api/openapi/veer-v1alpha1.json)
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)
 - [Formal threat model and data classification](docs/security/threat-model.md)

@@ -1,0 +1,3 @@
+# Repository-owned empty configuration prevents Vacuum from loading per-user
+# settings. Security-affecting behavior is set explicitly by ./hack/dev api.
+{}
