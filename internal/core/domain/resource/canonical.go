@@ -222,48 +222,77 @@ func UnmarshalCanonical[Spec any, Status GenerationObservations](data []byte) (R
 
 func canonicalizeObject[Value any](value Value, field string) ([]byte, Value, error) {
 	var zero Value
-	encoded, err := json.Marshal(value)
+	encoded, err := encodeTypedJSON(value)
 	if err != nil {
-		return nil, zero, fmt.Errorf("encode %s: %w", field, err)
+		return nil, zero, fmt.Errorf("encode %s with strict JSON: %w", field, err)
 	}
 	return decodeObject[Value](encoded, field)
 }
 
 func decodeObject[Value any](data []byte, field string) ([]byte, Value, error) {
 	var zero Value
+	canonical, err := canonicalizeRawObject(data, field)
+	if err != nil {
+		return nil, zero, err
+	}
+	for range 2 {
+		value, err := decodeExactJSON[Value](canonical, field)
+		if err != nil {
+			return nil, zero, err
+		}
+		encoded, err := encodeTypedJSON(value)
+		if err != nil {
+			return nil, zero, fmt.Errorf("encode decoded %s with strict JSON: %w", field, err)
+		}
+		normalized, err := canonicalizeRawObject(encoded, field)
+		if err != nil {
+			return nil, zero, err
+		}
+		if bytes.Equal(canonical, normalized) {
+			return canonical, value, nil
+		}
+		canonical = normalized
+	}
+	return nil, zero, fmt.Errorf("%s typed JSON normalization did not converge", field)
+}
+
+func encodeTypedJSON(value any) ([]byte, error) {
+	return jsonv2.Marshal(
+		value,
+		json.DefaultOptionsV1(),
+		jsontext.AllowInvalidUTF8(false),
+	)
+}
+
+func canonicalizeRawObject(data []byte, field string) ([]byte, error) {
 	if len(data) > MaxCanonicalBytes {
-		return nil, zero, fmt.Errorf("%s: %w", field, ErrRepresentationTooLarge)
+		return nil, fmt.Errorf("%s: %w", field, ErrRepresentationTooLarge)
 	}
 	if err := validateJSON(data); err != nil {
-		return nil, zero, fmt.Errorf("%s: %w", field, err)
+		return nil, fmt.Errorf("%s: %w", field, err)
 	}
 
 	var normalized any
 	normalizer := json.NewDecoder(bytes.NewReader(data))
 	normalizer.UseNumber()
 	if err := normalizer.Decode(&normalized); err != nil {
-		return nil, zero, fmt.Errorf("decode %s: %w", field, err)
+		return nil, fmt.Errorf("decode %s: %w", field, err)
 	}
 	if err := requireEOF(normalizer); err != nil {
-		return nil, zero, fmt.Errorf("decode %s: %w", field, err)
+		return nil, fmt.Errorf("decode %s: %w", field, err)
 	}
 	if _, ok := normalized.(map[string]any); !ok {
-		return nil, zero, fmt.Errorf("%s must be a JSON object", field)
+		return nil, fmt.Errorf("%s must be a JSON object", field)
 	}
 	normalized, err := normalizeCanonicalValue(normalized)
 	if err != nil {
-		return nil, zero, fmt.Errorf("%s: %w", field, err)
+		return nil, fmt.Errorf("%s: %w", field, err)
 	}
 	canonical, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, zero, fmt.Errorf("canonicalize %s: %w", field, err)
+		return nil, fmt.Errorf("canonicalize %s: %w", field, err)
 	}
-
-	value, err := decodeExactJSON[Value](canonical, field)
-	if err != nil {
-		return nil, zero, err
-	}
-	return canonical, value, nil
+	return canonical, nil
 }
 
 func decodeValue[Value any](data []byte, field string) (Value, error) {

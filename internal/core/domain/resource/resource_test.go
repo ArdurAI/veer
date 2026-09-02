@@ -59,9 +59,51 @@ func (status marshalingStatus) ObservedGenerations() []int64 {
 }
 
 func (status marshalingStatus) MarshalJSON() ([]byte, error) {
+	observedGeneration := status.ObservedGeneration
+	if status.MarshaledObservedGeneration != 0 {
+		observedGeneration = status.MarshaledObservedGeneration
+	}
 	return json.Marshal(struct {
 		ObservedGeneration int64 `json:"observedGeneration"`
-	}{ObservedGeneration: status.MarshaledObservedGeneration})
+	}{ObservedGeneration: observedGeneration})
+}
+
+type normalizingStatus struct {
+	ObservedGeneration int64 `json:"observedGeneration"`
+}
+
+func (status normalizingStatus) ObservedGenerations() []int64 {
+	return []int64{status.ObservedGeneration}
+}
+
+func (status *normalizingStatus) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ObservedGeneration int64 `json:"observedGeneration"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	status.ObservedGeneration = 0
+	return nil
+}
+
+type oscillatingObject struct {
+	Value int64 `json:"value"`
+}
+
+func (object *oscillatingObject) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Value int64 `json:"value"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Value == 1 {
+		object.Value = 2
+	} else {
+		object.Value = 1
+	}
+	return nil
 }
 
 type workspaceSpec struct {
@@ -579,6 +621,10 @@ func TestResourceValidationBounds(t *testing.T) {
 		{name: "timestamp", mutate: func(input *CreateInput[testSpec, testStatus]) { input.CreatedAt = time.Time{} }, message: "createdAt"},
 		{name: "label key", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Labels = map[string]string{"Invalid": "value"} }, message: "labels key"},
 		{name: "future status", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Status = testStatus{ObservedGeneration: 2} }, message: "exceeds"},
+		{name: "invalid UTF-8 spec", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Spec.Region = string([]byte{0xff}) }, message: "UTF-8"},
+		{name: "invalid UTF-8 status", mutate: func(input *CreateInput[testSpec, testStatus]) {
+			input.Status.Conditions = []testCondition{{Type: string([]byte{0xff})}}
+		}, message: "UTF-8"},
 	}
 	for _, test := range tests {
 		test := test
@@ -596,6 +642,59 @@ func TestResourceValidationBounds(t *testing.T) {
 	oversized.Spec.Config = map[string]string{"payload": strings.Repeat("x", MaxCanonicalBytes)}
 	if _, err := New(oversized); !errors.Is(err, ErrRepresentationTooLarge) {
 		t.Fatalf("New(oversized) error = %v, want ErrRepresentationTooLarge", err)
+	}
+}
+
+func TestTransitionsRejectInvalidUTF8WithoutPartialState(t *testing.T) {
+	t.Parallel()
+
+	initial := newTestResource(t, false)
+	before, err := MarshalCanonical(initial)
+	if err != nil {
+		t.Fatalf("MarshalCanonical(initial) error = %v", err)
+	}
+	invalid := string([]byte{0xff})
+	tests := []struct {
+		name  string
+		apply func() (Resource[testSpec, testStatus], error)
+	}{
+		{
+			name: "spec",
+			apply: func() (Resource[testSpec, testStatus], error) {
+				return initial.ReplaceSpec(
+					testSpec{Region: invalid},
+					"rv_invalid_spec",
+					initial.Metadata().UpdatedAt().Add(time.Millisecond),
+				)
+			},
+		},
+		{
+			name: "status",
+			apply: func() (Resource[testSpec, testStatus], error) {
+				return initial.ReplaceStatus(
+					testStatus{Conditions: []testCondition{{Type: invalid}}},
+					"rv_invalid_status",
+					initial.Metadata().UpdatedAt().Add(time.Millisecond),
+				)
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := test.apply()
+			if err == nil || !strings.Contains(err.Error(), "UTF-8") {
+				t.Fatalf("transition error = %v, want invalid UTF-8 rejection", err)
+			}
+			after, marshalErr := MarshalCanonical(result)
+			if marshalErr != nil {
+				t.Fatalf("MarshalCanonical(result) error = %v", marshalErr)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("invalid UTF-8 transition returned partial state")
+			}
+		})
 	}
 }
 
@@ -708,6 +807,47 @@ func TestTypedDecodingUsesExactNamesForPromotedFields(t *testing.T) {
 	}
 }
 
+func TestTypedDecodingRetainsStableNormalizedRepresentation(t *testing.T) {
+	t.Parallel()
+
+	canonical, value, err := decodeObject[normalizingStatus](
+		[]byte(`{"observedGeneration":2}`),
+		"status",
+	)
+	if err != nil {
+		t.Fatalf("decodeObject(normalizing status) error = %v", err)
+	}
+	if string(canonical) != `{"observedGeneration":0}` || value.ObservedGeneration != 0 {
+		t.Fatalf("decodeObject(normalizing status) = %s / %#v", canonical, value)
+	}
+	replayed, replayedValue, err := decodeObject[normalizingStatus](canonical, "status")
+	if err != nil {
+		t.Fatalf("decodeObject(normalized status) error = %v", err)
+	}
+	if !bytes.Equal(canonical, replayed) || replayedValue.ObservedGeneration != 0 {
+		t.Fatalf("normalized status is not stable: %s / %#v", replayed, replayedValue)
+	}
+
+	typedSpec, typedValue, err := decodeObject[testSpec](
+		[]byte(`{"config":{},"region":"us-east-1","suspendReconciliation":false}`),
+		"spec",
+	)
+	if err != nil {
+		t.Fatalf("decodeObject(empty typed map) error = %v", err)
+	}
+	if bytes.Contains(typedSpec, []byte(`"config"`)) || typedValue.Config != nil {
+		t.Fatalf("typed empty map did not normalize to absence: %s / %#v", typedSpec, typedValue)
+	}
+}
+
+func TestTypedDecodingRejectsNonConvergentNormalization(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := decodeObject[oscillatingObject]([]byte(`{"value":1}`), "spec"); err == nil || !strings.Contains(err.Error(), "did not converge") {
+		t.Fatalf("decodeObject(oscillating object) error = %v, want convergence rejection", err)
+	}
+}
+
 func TestCanonicalIntegerSpellingIsUnique(t *testing.T) {
 	t.Parallel()
 
@@ -729,9 +869,23 @@ func TestCanonicalIntegerSpellingIsUnique(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalCanonical() error = %v", err)
 	}
-	if bytes.Contains(canonical, []byte(`"revision":-0`)) ||
-		!bytes.Contains(canonical, []byte(`"revision":0`)) {
+	if bytes.Contains(canonical, []byte(`"revision":`)) {
 		t.Fatalf("canonical integer spelling = %s", canonical)
+	}
+	spec, err := decoded.Spec()
+	if err != nil {
+		t.Fatalf("Spec() error = %v", err)
+	}
+	unchanged, err := decoded.ReplaceSpec(spec, "invalid version", time.Time{})
+	if err != nil {
+		t.Fatalf("no-op ReplaceSpec() error = %v", err)
+	}
+	replayed, err := MarshalCanonical(unchanged)
+	if err != nil {
+		t.Fatalf("MarshalCanonical(no-op) error = %v", err)
+	}
+	if !bytes.Equal(canonical, replayed) {
+		t.Fatalf("normalized integer changed on typed replay:\n got %s\nwant %s", replayed, canonical)
 	}
 }
 

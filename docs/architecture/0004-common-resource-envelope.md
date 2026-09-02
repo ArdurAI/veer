@@ -96,8 +96,12 @@ round trips, and storage fixtures:
 - timestamps are UTC RFC 3339 with exactly three fractional digits;
 - an empty labels map normalizes to an omitted `labels` field and a root omits
   `parent`;
-- absent, `null`, empty object, and empty array values inside `spec` and
-  `status` remain distinct until admission explicitly normalizes them; and
+- retained `spec` and `status` bytes advance through at most one typed
+  encode/decode normalization step and must then reach a fixed point. Absent,
+  `null`, empty object, and empty array values remain distinct only when the
+  concrete type represents that distinction; unstructured maps preserve it,
+  while typed `omitempty` fields can normalize empty or zero values to absence;
+  and
 - both decode input and encoded output are bounded to 262,144 bytes, 64 levels,
   and 50,000 JSON values. Duplicate keys and unknown typed fields fail.
 
