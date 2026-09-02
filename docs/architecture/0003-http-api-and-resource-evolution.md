@@ -89,9 +89,10 @@ The transport version appears once in the route prefix and once in resource
 ```
 
 Resource names are plural nouns. Stable opaque identifiers are path segments;
-display names never identify a resource and remain mutable. Nested routes are
-used only when the parent is a real authorization or lifecycle boundary, not
-to mirror storage joins.
+their reusable parameters use explicit OpenAPI `simple` style with
+`explode: false`. Display names never identify a resource and remain mutable.
+Nested routes are used only when the parent is a real authorization or
+lifecycle boundary, not to mirror storage joins.
 
 Within one route version, Veer may add an optional request field, response
 field, enum value with a documented unknown-value behavior, operation, or

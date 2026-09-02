@@ -1185,8 +1185,14 @@ func validateParameters(parameters map[string]any) error {
 		if err != nil {
 			return err
 		}
-		if parameter["name"] != contract.wireName || parameter["in"] != "path" || parameter["required"] != true {
+		if parameter["name"] != contract.wireName || parameter["in"] != "path" || parameter["required"] != true ||
+			parameter["style"] != "simple" || parameter["explode"] != false {
 			return fmt.Errorf("%s path parameter contract drifted", contract.component)
+		}
+		if !mapKeySetEquals(parameter, []string{
+			"name", "in", "required", "style", "explode", "description", "schema",
+		}) {
+			return fmt.Errorf("%s path parameter has unreviewed keywords", contract.component)
 		}
 		if err := requireSchemaReference(parameter, "#/components/schemas/"+contract.schema); err != nil {
 			return fmt.Errorf("%s: %w", contract.component, err)
@@ -1897,6 +1903,9 @@ func validateSchemas(schemas map[string]any) error {
 	if !stringSetEquals(workspaceSpec["required"], []string{"suspendReconciliation"}) ||
 		len(specProperties) != 1 || suspend["type"] != "boolean" || suspend["default"] != false {
 		return errors.New("WorkspaceSpec contract drifted")
+	}
+	if !mapKeySetEquals(suspend, []string{"type", "default", "description"}) {
+		return errors.New("WorkspaceSpec.suspendReconciliation has unreviewed keywords")
 	}
 
 	statusWrite, err := mapField(schemas, "WorkspaceStatusWrite")

@@ -582,6 +582,8 @@
         "name": "workspaceId",
         "in": "path",
         "required": true,
+        "style": "simple",
+        "explode": false,
         "description": "Stable opaque workspace identifier. Display-name changes never alter it.",
         "schema": {
           "$ref": "#/components/schemas/OpaqueId"
@@ -591,6 +593,8 @@
         "name": "operationId",
         "in": "path",
         "required": true,
+        "style": "simple",
+        "explode": false,
         "description": "Stable opaque operation identifier.",
         "schema": {
           "$ref": "#/components/schemas/OpaqueId"

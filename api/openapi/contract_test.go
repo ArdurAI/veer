@@ -505,6 +505,15 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "OperationId path parameter contract drifted",
 		},
 		{
+			name: "operation ID path serialization drifts",
+			mutate: func(root map[string]any) {
+				parameter := nestedMap(t, root, "components", "parameters", "OperationId")
+				parameter["style"] = "matrix"
+				parameter["explode"] = true
+			},
+			message: "OperationId path parameter contract drifted",
+		},
+		{
 			name: "success response reference gains const sibling",
 			mutate: func(root map[string]any) {
 				schema := nestedMap(
@@ -801,6 +810,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				spec["not"] = map[string]any{}
 			},
 			message: "WorkspaceSpec schema has unreviewed keywords",
+		},
+		{
+			name: "workspace spec field gains narrowing assertion",
+			mutate: func(root map[string]any) {
+				suspend := nestedMap(t, root, "components", "schemas", "WorkspaceSpec", "properties", "suspendReconciliation")
+				suspend["const"] = false
+			},
+			message: "WorkspaceSpec.suspendReconciliation has unreviewed keywords",
 		},
 		{
 			name: "resource metadata identity becomes optional",
