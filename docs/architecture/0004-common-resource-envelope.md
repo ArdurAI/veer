@@ -31,6 +31,7 @@ Every implemented resource contains these fields:
 | `apiVersion` | Resource representation version | Immutable after creation |
 | `kind` | Concrete resource kind | Immutable after creation |
 | `metadata.id` | Stable opaque identity | Server-issued and immutable |
+| `metadata.workspaceId` | Stable Workspace ownership | Server-derived and immutable |
 | `metadata.displayName` | Human-readable name | Desired-state client |
 | `metadata.parent` | Immediate parent's stable ID | Server-owned and immutable |
 | `metadata.labels` | Bounded caller metadata | Desired-state client |
@@ -41,16 +42,19 @@ Every implemented resource contains these fields:
 | `spec` | Desired state | Desired-state client after admission |
 | `status` | Observed state | Authorized controller |
 
-`metadata.parent` is absent only for a root resource. It is an opaque ID rather
-than a display name or a version-dependent path. It is read-only and has no
-domain transition, so the common envelope cannot reparent a resource. Issue
-[#18](https://github.com/ArdurAI/veer/issues/18) owns allowed parent kinds,
-root and child rules, orphan and cycle checks, and immutable hierarchy
-admission.
+`metadata.workspaceId` is required for every resource. The Workspace root owns
+itself; descendants retain the root Workspace ID derived from their resolved
+parent. `metadata.parent` is absent only for a root resource. Both are opaque
+IDs rather than display names or version-dependent paths. They are read-only
+and have no domain transition, so the common envelope cannot transfer or
+reparent a resource. [ADR 0005](0005-resource-hierarchy-and-ownership.md)
+defines the allowed parent kinds, derivation, orphan and cycle checks, and
+immutable hierarchy admission.
 
 The domain package stores envelope state privately and returns copies. Callers
-cannot mutate an ID, parent, labels map, spec map or slice, status map or slice,
-generation, resource version, or timestamp through an alias. Concrete
+cannot mutate an ID, Workspace ID, parent, labels map, spec map or slice,
+status map or slice, generation, resource version, or timestamp through an
+alias. Concrete
 identifier and resource-version allocation remains injected; this ADR does not
 select UUID, ULID, sequence, or database issuance semantics.
 
@@ -59,8 +63,8 @@ select UUID, ULID, sequence, or database issuance semantics.
 Creation starts at generation `1`, with equal creation and update timestamps.
 The following copy-returning transitions are defined:
 
-- A rename or label change preserves ID, parent, creation time, spec, status,
-  and generation.
+- A rename or label change preserves ID, Workspace ID, parent, creation time,
+  spec, status, and generation.
 - A semantic change to an already-defaulted spec increments generation exactly
   once. Generation overflow fails without returning partial state.
 - A status change preserves the complete spec and generation. Every status type
@@ -87,8 +91,8 @@ round trips, and storage fixtures:
 
 - output is UTF-8 JSON with no insignificant whitespace or trailing newline;
 - envelope order is `apiVersion`, `kind`, `metadata`, `spec`, `status`;
-- metadata order is `id`, `displayName`, optional `parent`, optional `labels`,
-  `generation`, `resourceVersion`, `createdAt`, `updatedAt`;
+- metadata order is `id`, `workspaceId`, `displayName`, optional `parent`,
+  optional `labels`, `generation`, `resourceVersion`, `createdAt`, `updatedAt`;
 - map and nested object keys are encoded in the deterministic lexical order
   provided by Go's pinned `encoding/json` implementation;
 - array order is preserved;
@@ -164,8 +168,9 @@ serialization standard.
 ## Evidence
 
 The implementation is covered by a root golden fixture bound to the checked-in
-OpenAPI Workspace example, a parented domain golden, transition tables,
-fixed-seed property tests, and Go fuzz seeds. The evidence commands are:
+OpenAPI Workspace example, a parented domain golden, required/invalid
+Workspace-ownership cases, transition tables, fixed-seed property tests, and
+Go fuzz seeds. The evidence commands are:
 
 ```sh
 go test ./internal/core/domain/resource

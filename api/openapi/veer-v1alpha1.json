@@ -105,6 +105,119 @@
       "breakingChange": "new-route-version"
     }
   },
+  "x-veer-hierarchy": {
+    "workspaceOwnership": {
+      "workspaceIdPointer": "/metadata/workspaceId",
+      "rootDerivation": "resource-id",
+      "childDerivation": "resolved-parent-workspace-id",
+      "clientWritable": false,
+      "mutable": false
+    },
+    "parentReference": {
+      "pointer": "/metadata/parent",
+      "source": "server-derived",
+      "mutable": false
+    },
+    "referenceValidation": {
+      "orphan": "reject",
+      "crossWorkspace": "reject",
+      "cycle": "reject"
+    },
+    "deletion": {
+      "policy": "RESTRICT",
+      "blockedBy": "retained-direct-child"
+    },
+    "resources": [
+      {
+        "kind": "Workspace",
+        "parentKind": null,
+        "schema": {
+          "$ref": "#/components/schemas/Workspace"
+        },
+        "metadataSchema": {
+          "$ref": "#/components/schemas/RootResourceMetadata"
+        },
+        "createSchema": {
+          "$ref": "#/components/schemas/WorkspaceCreate"
+        },
+        "replaceSchema": {
+          "$ref": "#/components/schemas/WorkspaceReplace"
+        },
+        "statusWriteSchema": {
+          "$ref": "#/components/schemas/WorkspaceStatusWrite"
+        },
+        "listSchema": {
+          "$ref": "#/components/schemas/WorkspaceList"
+        }
+      },
+      {
+        "kind": "Environment",
+        "parentKind": "Workspace",
+        "schema": {
+          "$ref": "#/components/schemas/Environment"
+        },
+        "metadataSchema": {
+          "$ref": "#/components/schemas/ChildResourceMetadata"
+        },
+        "createSchema": {
+          "$ref": "#/components/schemas/EnvironmentCreate"
+        },
+        "replaceSchema": {
+          "$ref": "#/components/schemas/EnvironmentReplace"
+        },
+        "statusWriteSchema": {
+          "$ref": "#/components/schemas/EnvironmentStatusWrite"
+        },
+        "listSchema": {
+          "$ref": "#/components/schemas/EnvironmentList"
+        }
+      },
+      {
+        "kind": "Application",
+        "parentKind": "Environment",
+        "schema": {
+          "$ref": "#/components/schemas/Application"
+        },
+        "metadataSchema": {
+          "$ref": "#/components/schemas/ChildResourceMetadata"
+        },
+        "createSchema": {
+          "$ref": "#/components/schemas/ApplicationCreate"
+        },
+        "replaceSchema": {
+          "$ref": "#/components/schemas/ApplicationReplace"
+        },
+        "statusWriteSchema": {
+          "$ref": "#/components/schemas/ApplicationStatusWrite"
+        },
+        "listSchema": {
+          "$ref": "#/components/schemas/ApplicationList"
+        }
+      },
+      {
+        "kind": "Component",
+        "parentKind": "Application",
+        "schema": {
+          "$ref": "#/components/schemas/Component"
+        },
+        "metadataSchema": {
+          "$ref": "#/components/schemas/ChildResourceMetadata"
+        },
+        "createSchema": {
+          "$ref": "#/components/schemas/ComponentCreate"
+        },
+        "replaceSchema": {
+          "$ref": "#/components/schemas/ComponentReplace"
+        },
+        "statusWriteSchema": {
+          "$ref": "#/components/schemas/ComponentStatusWrite"
+        },
+        "listSchema": {
+          "$ref": "#/components/schemas/ComponentList"
+        }
+      }
+    ]
+  },
   "paths": {
     "/api/v1alpha1/workspaces": {
       "parameters": [
@@ -811,6 +924,7 @@
               "kind": "Workspace",
               "metadata": {
                 "id": "wsp_01J00000000000000000000000",
+                "workspaceId": "wsp_01J00000000000000000000000",
                 "displayName": "payments",
                 "labels": {
                   "team": "platform"
@@ -1371,6 +1485,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "workspaceId",
           "displayName",
           "generation",
           "resourceVersion",
@@ -1382,6 +1497,13 @@
             "$ref": "#/components/schemas/OpaqueId",
             "type": "string",
             "readOnly": true
+          },
+          "workspaceId": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "readOnly": true,
+            "description": "Immutable server-derived workspace ownership key used for authorization.",
+            "example": "wsp_01J00000000000000000000000"
           },
           "displayName": {
             "type": "string",
@@ -1428,6 +1550,7 @@
         },
         "example": {
           "id": "wsp_01J00000000000000000000000",
+          "workspaceId": "wsp_01J00000000000000000000000",
           "displayName": "payments",
           "labels": {
             "team": "platform"
@@ -1437,6 +1560,36 @@
           "createdAt": "2026-09-01T20:00:00.000Z",
           "updatedAt": "2026-09-01T21:00:00.000Z"
         }
+      },
+      "RootResourceMetadata": {
+        "description": "Resource metadata for a Workspace root; parent is forbidden and workspaceId equals id.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          {
+            "not": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "parent"
+              ]
+            }
+          }
+        ]
+      },
+      "ChildResourceMetadata": {
+        "description": "Resource metadata for a non-root hierarchy member; the immediate parent is required.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          {
+            "required": [
+              "parent"
+            ]
+          }
+        ]
       },
       "WritableMetadata": {
         "type": "object",
@@ -1564,6 +1717,7 @@
           "kind": "Workspace",
           "metadata": {
             "id": "wsp_01J00000000000000000000000",
+            "workspaceId": "wsp_01J00000000000000000000000",
             "displayName": "payments",
             "labels": {
               "environment": "production",
@@ -1606,7 +1760,7 @@
             "const": "Workspace"
           },
           "metadata": {
-            "$ref": "#/components/schemas/ResourceMetadata"
+            "$ref": "#/components/schemas/RootResourceMetadata"
           },
           "spec": {
             "$ref": "#/components/schemas/WorkspaceSpec"
@@ -1743,6 +1897,600 @@
             "example": [],
             "items": {
               "$ref": "#/components/schemas/Workspace"
+            }
+          },
+          "nextPageToken": {
+            "type": "string",
+            "example": "eyJjdXJzb3IiOiJvcGFxdWUifQ",
+            "minLength": 16,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "EnvironmentSpec": {
+        "type": "object",
+        "description": "Closed provider-neutral desired state for an Environment in v1alpha1.",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "EnvironmentStatus": {
+        "type": "object",
+        "description": "Observed Environment status written only by authorized controllers.",
+        "example": {
+          "observedGeneration": 0,
+          "conditions": []
+        },
+        "additionalProperties": false,
+        "required": [
+          "observedGeneration",
+          "conditions"
+        ],
+        "properties": {
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "conditions": {
+            "type": "array",
+            "maxItems": 32,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            }
+          }
+        }
+      },
+      "Environment": {
+        "type": "object",
+        "description": "An Environment owned by one Workspace and parented directly by that Workspace.",
+        "example": {
+          "apiVersion": "v1alpha1",
+          "kind": "Environment",
+          "metadata": {
+            "id": "env_01J00000000000000000000000",
+            "workspaceId": "wsp_01J00000000000000000000000",
+            "displayName": "production",
+            "parent": "wsp_01J00000000000000000000000",
+            "labels": {
+              "team": "platform"
+            },
+            "generation": 1,
+            "resourceVersion": "rv_01J00000000000000000000010",
+            "createdAt": "2026-09-02T17:31:00.000Z",
+            "updatedAt": "2026-09-02T17:31:00.000Z"
+          },
+          "spec": {},
+          "status": {
+            "observedGeneration": 0,
+            "conditions": []
+          }
+        },
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-observed-generation-upper-bound": {
+          "observedGenerationPointer": "/status/observedGeneration",
+          "conditionObservedGenerationPointerTemplate": "/status/conditions/{index}/observedGeneration",
+          "resourceGenerationPointer": "/metadata/generation"
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Environment"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ChildResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/EnvironmentSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EnvironmentStatus"
+          }
+        }
+      },
+      "EnvironmentCreate": {
+        "type": "object",
+        "description": "Strict Environment create payload with server-derived hierarchy ownership.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Environment"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/EnvironmentSpec"
+          }
+        }
+      },
+      "EnvironmentReplace": {
+        "type": "object",
+        "description": "Strict Environment replacement payload; hierarchy ownership is immutable.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Environment"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/EnvironmentSpec"
+          }
+        }
+      },
+      "EnvironmentStatusWrite": {
+        "type": "object",
+        "description": "Strict controller-only Environment status payload.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Environment"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EnvironmentStatus"
+          }
+        }
+      },
+      "EnvironmentList": {
+        "type": "object",
+        "description": "A deterministic bounded page of Environments.",
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-page-byte-policy": "stop-before-limit",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Environment"
+            }
+          },
+          "nextPageToken": {
+            "type": "string",
+            "example": "eyJjdXJzb3IiOiJvcGFxdWUifQ",
+            "minLength": 16,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "ApplicationSpec": {
+        "type": "object",
+        "description": "Closed provider-neutral desired state for an Application in v1alpha1.",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "ApplicationStatus": {
+        "type": "object",
+        "description": "Observed Application status written only by authorized controllers.",
+        "example": {
+          "observedGeneration": 0,
+          "conditions": []
+        },
+        "additionalProperties": false,
+        "required": [
+          "observedGeneration",
+          "conditions"
+        ],
+        "properties": {
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "conditions": {
+            "type": "array",
+            "maxItems": 32,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            }
+          }
+        }
+      },
+      "Application": {
+        "type": "object",
+        "description": "An Application owned by one Workspace and parented directly by an Environment.",
+        "example": {
+          "apiVersion": "v1alpha1",
+          "kind": "Application",
+          "metadata": {
+            "id": "app_01J00000000000000000000000",
+            "workspaceId": "wsp_01J00000000000000000000000",
+            "displayName": "payments-api",
+            "parent": "env_01J00000000000000000000000",
+            "labels": {
+              "team": "platform"
+            },
+            "generation": 1,
+            "resourceVersion": "rv_01J00000000000000000000020",
+            "createdAt": "2026-09-02T17:32:00.000Z",
+            "updatedAt": "2026-09-02T17:32:00.000Z"
+          },
+          "spec": {},
+          "status": {
+            "observedGeneration": 0,
+            "conditions": []
+          }
+        },
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-observed-generation-upper-bound": {
+          "observedGenerationPointer": "/status/observedGeneration",
+          "conditionObservedGenerationPointerTemplate": "/status/conditions/{index}/observedGeneration",
+          "resourceGenerationPointer": "/metadata/generation"
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Application"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ChildResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ApplicationSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApplicationStatus"
+          }
+        }
+      },
+      "ApplicationCreate": {
+        "type": "object",
+        "description": "Strict Application create payload with server-derived hierarchy ownership.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Application"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ApplicationSpec"
+          }
+        }
+      },
+      "ApplicationReplace": {
+        "type": "object",
+        "description": "Strict Application replacement payload; hierarchy ownership is immutable.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Application"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ApplicationSpec"
+          }
+        }
+      },
+      "ApplicationStatusWrite": {
+        "type": "object",
+        "description": "Strict controller-only Application status payload.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Application"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApplicationStatus"
+          }
+        }
+      },
+      "ApplicationList": {
+        "type": "object",
+        "description": "A deterministic bounded page of Applications.",
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-page-byte-policy": "stop-before-limit",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Application"
+            }
+          },
+          "nextPageToken": {
+            "type": "string",
+            "example": "eyJjdXJzb3IiOiJvcGFxdWUifQ",
+            "minLength": 16,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "ComponentSpec": {
+        "type": "object",
+        "description": "Closed provider-neutral desired state for a Component in v1alpha1.",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "ComponentStatus": {
+        "type": "object",
+        "description": "Observed Component status written only by authorized controllers.",
+        "example": {
+          "observedGeneration": 0,
+          "conditions": []
+        },
+        "additionalProperties": false,
+        "required": [
+          "observedGeneration",
+          "conditions"
+        ],
+        "properties": {
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "conditions": {
+            "type": "array",
+            "maxItems": 32,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            }
+          }
+        }
+      },
+      "Component": {
+        "type": "object",
+        "description": "A Component owned by one Workspace and parented directly by an Application.",
+        "example": {
+          "apiVersion": "v1alpha1",
+          "kind": "Component",
+          "metadata": {
+            "id": "cmp_01J00000000000000000000000",
+            "workspaceId": "wsp_01J00000000000000000000000",
+            "displayName": "api",
+            "parent": "app_01J00000000000000000000000",
+            "labels": {
+              "team": "platform"
+            },
+            "generation": 1,
+            "resourceVersion": "rv_01J00000000000000000000030",
+            "createdAt": "2026-09-02T17:33:00.000Z",
+            "updatedAt": "2026-09-02T17:33:00.000Z"
+          },
+          "spec": {},
+          "status": {
+            "observedGeneration": 0,
+            "conditions": []
+          }
+        },
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-observed-generation-upper-bound": {
+          "observedGenerationPointer": "/status/observedGeneration",
+          "conditionObservedGenerationPointerTemplate": "/status/conditions/{index}/observedGeneration",
+          "resourceGenerationPointer": "/metadata/generation"
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Component"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ChildResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ComponentSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          }
+        }
+      },
+      "ComponentCreate": {
+        "type": "object",
+        "description": "Strict Component create payload with server-derived hierarchy ownership.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Component"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ComponentSpec"
+          }
+        }
+      },
+      "ComponentReplace": {
+        "type": "object",
+        "description": "Strict Component replacement payload; hierarchy ownership is immutable.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Component"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ComponentSpec"
+          }
+        }
+      },
+      "ComponentStatusWrite": {
+        "type": "object",
+        "description": "Strict controller-only Component status payload.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Component"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          }
+        }
+      },
+      "ComponentList": {
+        "type": "object",
+        "description": "A deterministic bounded page of Components.",
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-page-byte-policy": "stop-before-limit",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Component"
             }
           },
           "nextPageToken": {

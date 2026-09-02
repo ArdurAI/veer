@@ -169,6 +169,22 @@ func (status testStatus) ObservedGenerations() []int64 {
 	return result
 }
 
+func TestParseID(t *testing.T) {
+	t.Parallel()
+
+	const value = "wsp_01J00000000000000000000000"
+	id, err := ParseID(value)
+	if err != nil {
+		t.Fatalf("ParseID(valid) error = %v", err)
+	}
+	if id.String() != value {
+		t.Fatalf("ParseID(valid) = %q, want %q", id, value)
+	}
+	if _, err := ParseID("short"); err == nil || !strings.Contains(err.Error(), "resource ID") {
+		t.Fatalf("ParseID(invalid) error = %v, want opaque ID rejection", err)
+	}
+}
+
 func TestNewNormalizesAndDefensivelyCopies(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +201,7 @@ func TestNewNormalizesAndDefensivelyCopies(t *testing.T) {
 		APIVersion:      "v1alpha1",
 		Kind:            "Environment",
 		ID:              "env_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "production",
 		Parent:          &parent,
 		Labels:          labels,
@@ -205,6 +222,9 @@ func TestNewNormalizesAndDefensivelyCopies(t *testing.T) {
 	metadata := resource.Metadata()
 	if metadata.Generation() != 1 {
 		t.Fatalf("Generation() = %d, want 1", metadata.Generation())
+	}
+	if metadata.WorkspaceID() != "wsp_01J00000000000000000000000" {
+		t.Fatalf("WorkspaceID() = %q", metadata.WorkspaceID())
 	}
 	gotParent, present := metadata.Parent()
 	if !present || gotParent != "wsp_01J00000000000000000000000" {
@@ -270,6 +290,9 @@ func TestRenamePreservesStableState(t *testing.T) {
 	}
 	if beforeMetadata.ID() != afterMetadata.ID() {
 		t.Fatalf("ID changed from %q to %q", beforeMetadata.ID(), afterMetadata.ID())
+	}
+	if beforeMetadata.WorkspaceID() != afterMetadata.WorkspaceID() {
+		t.Fatalf("workspace ID changed from %q to %q", beforeMetadata.WorkspaceID(), afterMetadata.WorkspaceID())
 	}
 	if beforeMetadata.Generation() != afterMetadata.Generation() {
 		t.Fatalf("generation changed from %d to %d", beforeMetadata.Generation(), afterMetadata.Generation())
@@ -398,6 +421,7 @@ func TestStatusObservationValidationUsesCanonicalPayload(t *testing.T) {
 		APIVersion:      "v1alpha1",
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "payments",
 		ResourceVersion: "rv_initial",
 		CreatedAt:       time.Date(2026, 9, 2, 17, 30, 0, 0, time.UTC),
@@ -572,6 +596,7 @@ func TestStructuralBoundsApplyToWholeEnvelope(t *testing.T) {
 		APIVersion:      "v1alpha1",
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "payments",
 		ResourceVersion: "rv_initial",
 		CreatedAt:       createdAt,
@@ -592,6 +617,7 @@ func TestStructuralBoundsApplyToWholeEnvelope(t *testing.T) {
 		APIVersion:      "v1alpha1",
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "payments",
 		ResourceVersion: "rv_initial",
 		CreatedAt:       createdAt,
@@ -613,6 +639,7 @@ func TestStructuralBoundFailurePreservesOriginalTransitionState(t *testing.T) {
 		APIVersion:      "v1alpha1",
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "payments",
 		ResourceVersion: "rv_initial",
 		CreatedAt:       time.Date(2026, 9, 2, 17, 30, 0, 0, time.UTC),
@@ -651,6 +678,7 @@ func TestResourceValidationBounds(t *testing.T) {
 		APIVersion:      "v1alpha1",
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "payments",
 		ResourceVersion: "rv_initial",
 		CreatedAt:       time.Date(2026, 9, 2, 17, 30, 0, 0, time.UTC),
@@ -666,6 +694,7 @@ func TestResourceValidationBounds(t *testing.T) {
 		{name: "api version", mutate: func(input *CreateInput[testSpec, testStatus]) { input.APIVersion = "latest" }, message: "apiVersion"},
 		{name: "kind", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Kind = "workspace" }, message: "kind"},
 		{name: "ID", mutate: func(input *CreateInput[testSpec, testStatus]) { input.ID = "short" }, message: "metadata.id"},
+		{name: "workspace ID", mutate: func(input *CreateInput[testSpec, testStatus]) { input.WorkspaceID = "short" }, message: "metadata.workspaceId"},
 		{name: "display name", mutate: func(input *CreateInput[testSpec, testStatus]) { input.DisplayName = "" }, message: "displayName"},
 		{name: "resource version", mutate: func(input *CreateInput[testSpec, testStatus]) { input.ResourceVersion = "has spaces" }, message: "resourceVersion"},
 		{name: "timestamp", mutate: func(input *CreateInput[testSpec, testStatus]) { input.CreatedAt = time.Time{} }, message: "createdAt"},
@@ -806,6 +835,41 @@ func TestUnmarshalCanonicalRejectsAmbiguousInput(t *testing.T) {
 		{
 			name:    "case-folded metadata field",
 			data:    bytes.Replace(baseline, []byte(`"displayName":`), []byte(`"DisplayName":`), 1),
+			message: "exact JSON name",
+		},
+		{
+			name: "missing workspace ID",
+			data: bytes.Replace(
+				baseline,
+				[]byte(`"workspaceId":"wsp_01J00000000000000000000000",`),
+				nil,
+				1,
+			),
+			message: "metadata.workspaceId",
+		},
+		{
+			name: "null workspace ID",
+			data: bytes.Replace(
+				baseline,
+				[]byte(`"workspaceId":"wsp_01J00000000000000000000000"`),
+				[]byte(`"workspaceId":null`),
+				1,
+			),
+			message: "workspaceId",
+		},
+		{
+			name: "invalid workspace ID",
+			data: bytes.Replace(
+				baseline,
+				[]byte(`"workspaceId":"wsp_01J00000000000000000000000"`),
+				[]byte(`"workspaceId":"short"`),
+				1,
+			),
+			message: "metadata.workspaceId",
+		},
+		{
+			name:    "case-folded workspace ID",
+			data:    bytes.Replace(baseline, []byte(`"workspaceId":`), []byte(`"WorkspaceId":`), 1),
 			message: "exact JSON name",
 		},
 		{
@@ -1131,6 +1195,7 @@ func TestUnstructuredSpecPreservesFullInt64Precision(t *testing.T) {
 		APIVersion:      "v1alpha1",
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "payments",
 		ResourceVersion: "rv_initial",
 		CreatedAt:       time.Date(2026, 9, 2, 17, 30, 0, 0, time.UTC),
@@ -1186,6 +1251,7 @@ func newTestResource(t *testing.T, parented bool) Resource[testSpec, testStatus]
 		APIVersion:      "v1alpha1",
 		Kind:            kind,
 		ID:              id,
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     displayName,
 		Parent:          parent,
 		Labels:          map[string]string{"team": "platform", "environment": "production"},
@@ -1209,6 +1275,7 @@ func newWorkspaceResource(t *testing.T) Resource[workspaceSpec, testStatus] {
 		APIVersion:      "v1alpha1",
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
 		DisplayName:     "payments",
 		Labels:          map[string]string{"team": "platform", "environment": "production"},
 		ResourceVersion: "rv_01J00000000000000000000000",

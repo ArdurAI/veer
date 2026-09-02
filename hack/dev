@@ -411,7 +411,7 @@ sanitize_external_environment() {
     VACUUM_BREAKING_CONFIG VACUUM_CHANGES VACUUM_CONFIG VACUUM_FAIL_SEVERITY \
     VACUUM_FUNCTIONS VACUUM_IGNORE_FILE VACUUM_INSECURE VACUUM_MIN_SCORE \
     VACUUM_NO_UPDATE_CHECK VACUUM_ORIGINAL VACUUM_REMOTE VACUUM_RULESET \
-    VACUUM_SKIP_CHECK || true
+    VACUUM_SKIP_CHECK VEER_TEST_VACUUM_BIN || true
 }
 
 bootstrap() {
@@ -665,6 +665,7 @@ test_units() {
 
 check_api() {
   api_dir="$repo_root/api/openapi"
+
   for contract_file in \
     "$api_dir/vacuum.conf.yaml" \
     "$api_dir/veer-v1alpha1.json"; do
@@ -675,6 +676,7 @@ check_api() {
   "$bin_dir/vacuum" \
     --config "$api_dir/vacuum.conf.yaml" \
     --no-update-check \
+    --ext-refs \
     --remote=false \
     --allow-private-networks=false \
     --allow-http=false \
@@ -689,9 +691,10 @@ check_api() {
     --fail-severity warn \
     --min-score 100 \
     "$api_dir/veer-v1alpha1.json"
-  "$bin_dir/go" test -trimpath -count=1 ./api/openapi
+  VEER_TEST_VACUUM_BIN="$bin_dir/vacuum" \
+    "$bin_dir/go" test -trimpath -count=1 ./api/openapi
   printf '%s\n' \
-    'veer-api-contract openapi=3.1.2 transport=v1alpha1 remote_refs=denied status=passed'
+    'veer-api-contract openapi=3.1.2 transport=v1alpha1 remote_refs=denied extension_refs=resolved status=passed'
 }
 
 check_docs() {

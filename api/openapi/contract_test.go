@@ -1,14 +1,41 @@
 package openapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 )
+
+type schemaExampleWire struct {
+	APIVersion string                     `json:"apiVersion"`
+	Kind       string                     `json:"kind"`
+	Metadata   schemaExampleMetadata      `json:"metadata"`
+	Spec       map[string]json.RawMessage `json:"spec"`
+	Status     schemaExampleStatus        `json:"status"`
+}
+
+type schemaExampleMetadata struct {
+	ID              string            `json:"id"`
+	WorkspaceID     string            `json:"workspaceId"`
+	DisplayName     string            `json:"displayName"`
+	Parent          *string           `json:"parent,omitempty"`
+	Labels          map[string]string `json:"labels"`
+	Generation      int64             `json:"generation"`
+	ResourceVersion string            `json:"resourceVersion"`
+	CreatedAt       string            `json:"createdAt"`
+	UpdatedAt       string            `json:"updatedAt"`
+}
+
+type schemaExampleStatus struct {
+	ObservedGeneration int64             `json:"observedGeneration"`
+	Conditions         []json.RawMessage `json:"conditions"`
+}
 
 func TestBaselineContract(t *testing.T) {
 	t.Parallel()
@@ -46,6 +73,537 @@ func TestWorkspaceGoldenMatchesContractExample(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fixture, example) {
 		t.Fatalf("Workspace fixture does not match the schema example:\n fixture %#v\n example %#v", fixture, example)
+	}
+}
+
+func TestHierarchyGoldensMatchContractExamples(t *testing.T) {
+	t.Parallel()
+
+	contractData, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, contractData)
+	for _, contract := range []struct {
+		kind    string
+		fixture string
+	}{
+		{kind: "Workspace", fixture: "workspace.golden.json"},
+		{kind: "Environment", fixture: "environment.golden.json"},
+		{kind: "Application", fixture: "application.golden.json"},
+		{kind: "Component", fixture: "component.golden.json"},
+	} {
+		contract := contract
+		t.Run(contract.kind, func(t *testing.T) {
+			example := nestedMap(t, root, "components", "schemas", contract.kind, "example")
+			fixtureData, err := os.ReadFile(filepath.Join(
+				"..", "..", "internal", "core", "domain", "hierarchy", "testdata", contract.fixture,
+			))
+			if err != nil {
+				t.Fatalf("os.ReadFile() error = %v", err)
+			}
+			fixture := decodeForMutation(t, fixtureData)
+			if !reflect.DeepEqual(fixture, example) {
+				t.Fatalf("%s fixture does not match the schema example:\n fixture %#v\n example %#v", contract.kind, fixture, example)
+			}
+		})
+	}
+}
+
+func TestHierarchySchemaExampleMatrix(t *testing.T) {
+	t.Parallel()
+
+	data, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, data)
+	schemas := nestedMap(t, root, "components", "schemas")
+
+	contracts := []struct {
+		kind           string
+		parentKind     string
+		parentID       string
+		metadataSchema string
+		emptySpec      bool
+	}{
+		{kind: "Workspace", metadataSchema: "RootResourceMetadata"},
+		{
+			kind: "Environment", parentKind: "Workspace",
+			parentID: "wsp_01J00000000000000000000000", metadataSchema: "ChildResourceMetadata", emptySpec: true,
+		},
+		{
+			kind: "Application", parentKind: "Environment",
+			parentID: "env_01J00000000000000000000000", metadataSchema: "ChildResourceMetadata", emptySpec: true,
+		},
+		{
+			kind: "Component", parentKind: "Application",
+			parentID: "app_01J00000000000000000000000", metadataSchema: "ChildResourceMetadata", emptySpec: true,
+		},
+	}
+	type seenResource struct {
+		kind        string
+		workspaceID string
+	}
+	seen := make(map[string]seenResource, len(contracts))
+	for _, contract := range contracts {
+		contract := contract
+		t.Run(contract.kind, func(t *testing.T) {
+			schema := nestedMap(t, schemas, contract.kind)
+			example := nestedMap(t, schema, "example")
+			exampleJSON, err := json.Marshal(example)
+			if err != nil {
+				t.Fatalf("json.Marshal(example) error = %v", err)
+			}
+
+			decoder := json.NewDecoder(bytes.NewReader(exampleJSON))
+			decoder.DisallowUnknownFields()
+			var wire schemaExampleWire
+			if err := decoder.Decode(&wire); err != nil {
+				t.Fatalf("strict decode example: %v", err)
+			}
+			if err := requireJSONEOF(decoder); err != nil {
+				t.Fatalf("strict decode trailing data: %v", err)
+			}
+			if wire.APIVersion != "v1alpha1" || wire.Kind != contract.kind {
+				t.Fatalf("identity = %s/%s, want v1alpha1/%s", wire.APIVersion, wire.Kind, contract.kind)
+			}
+			if contract.emptySpec && len(wire.Spec) != 0 {
+				t.Fatalf("spec = %#v, want closed empty object", wire.Spec)
+			}
+			if !contract.emptySpec {
+				value, exists := wire.Spec["suspendReconciliation"]
+				if !exists || string(value) != "false" || len(wire.Spec) != 1 {
+					t.Fatalf("Workspace spec = %#v, want suspendReconciliation=false", wire.Spec)
+				}
+			}
+			if wire.Status.ObservedGeneration != 0 || len(wire.Status.Conditions) != 0 {
+				t.Fatalf("status = %#v, want observedGeneration=0 and no conditions", wire.Status)
+			}
+			if contract.parentKind == "" {
+				if wire.Metadata.Parent != nil || wire.Metadata.ID != wire.Metadata.WorkspaceID {
+					t.Fatalf("root metadata = %#v, want no parent and workspaceId=id", wire.Metadata)
+				}
+			} else {
+				if wire.Metadata.Parent == nil || *wire.Metadata.Parent != contract.parentID {
+					t.Fatalf("parent = %v, want %s", wire.Metadata.Parent, contract.parentID)
+				}
+				parent, exists := seen[*wire.Metadata.Parent]
+				if !exists || parent.kind != contract.parentKind {
+					t.Fatalf("parent %s is missing or has wrong kind", *wire.Metadata.Parent)
+				}
+				if parent.workspaceID != wire.Metadata.WorkspaceID {
+					t.Fatalf("workspaceId = %s, parent workspaceId = %s", wire.Metadata.WorkspaceID, parent.workspaceID)
+				}
+			}
+
+			properties := nestedMap(t, schema, "properties")
+			if got := nestedMap(t, properties, "metadata")["$ref"]; got != "#/components/schemas/"+contract.metadataSchema {
+				t.Fatalf("metadata ref = %v, want %s", got, contract.metadataSchema)
+			}
+			if got := nestedMap(t, properties, "spec")["$ref"]; got != "#/components/schemas/"+contract.kind+"Spec" {
+				t.Fatalf("spec ref = %v", got)
+			}
+			if got := nestedMap(t, properties, "status")["$ref"]; got != "#/components/schemas/"+contract.kind+"Status" {
+				t.Fatalf("status ref = %v", got)
+			}
+
+			roundTripJSON, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatalf("json.Marshal(round trip) error = %v", err)
+			}
+			roundTrip := decodeForMutation(t, roundTripJSON)
+			if !reflect.DeepEqual(roundTrip, example) {
+				t.Fatalf("v1alpha1 example round trip drifted:\n got %#v\nwant %#v", roundTrip, example)
+			}
+			seen[wire.Metadata.ID] = seenResource{kind: wire.Kind, workspaceID: wire.Metadata.WorkspaceID}
+		})
+	}
+}
+
+func TestVacuumHierarchySchemaInstanceMatrix(t *testing.T) {
+	vacuumPath := os.Getenv("VEER_TEST_VACUUM_BIN")
+	if vacuumPath == "" {
+		t.Skip("schema-instance matrix runs through ./hack/dev api")
+	}
+	expectedVacuumPath, err := filepath.Abs(filepath.Join("..", "..", ".tools", "bin", "vacuum"))
+	if err != nil {
+		t.Fatalf("resolve repository Vacuum path: %v", err)
+	}
+	if filepath.Clean(vacuumPath) != expectedVacuumPath {
+		t.Fatalf("Vacuum path = %q, want repository-pinned %q", vacuumPath, expectedVacuumPath)
+	}
+	info, err := os.Lstat(vacuumPath)
+	if err != nil {
+		t.Fatalf("inspect repository Vacuum: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("Vacuum must be a regular non-symlink executable: mode %s", info.Mode())
+	}
+
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	configPath, err := filepath.Abs("vacuum.conf.yaml")
+	if err != nil {
+		t.Fatalf("resolve Vacuum config: %v", err)
+	}
+	if output, err := runVacuumSchemaExamples(t, vacuumPath, configPath, "veer-v1alpha1.json"); err != nil {
+		t.Fatalf("Vacuum rejected positive schema examples: %v\n%s", err, output)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "Workspace forbids parent",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Workspace", "example", "metadata")["parent"] =
+					"wsp_01J11111111111111111111111"
+			},
+		},
+		{
+			name: "Environment requires parent",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "components", "schemas", "Environment", "example", "metadata"), "parent")
+			},
+		},
+		{
+			name: "Application spec is closed",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Application", "example", "spec")["provider"] = "aws"
+			},
+		},
+		{
+			name: "Component requires workspace ownership",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "components", "schemas", "Component", "example", "metadata"), "workspaceId")
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			contractPath := filepath.Join(t.TempDir(), "invalid-openapi.json")
+			if err := os.WriteFile(contractPath, mutated, 0o600); err != nil {
+				t.Fatalf("os.WriteFile() error = %v", err)
+			}
+			output, err := runVacuumSchemaExamples(t, vacuumPath, configPath, contractPath)
+			if err == nil || !bytes.Contains(output, []byte("oas3-valid-schema-example")) {
+				t.Fatalf("Vacuum did not reject invalid schema instance: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func runVacuumSchemaExamples(
+	t *testing.T,
+	vacuumPath, configPath, contractPath string,
+) ([]byte, error) {
+	t.Helper()
+	command := exec.Command(
+		vacuumPath,
+		"lint",
+		"--config", configPath,
+		"--no-update-check",
+		"--ext-refs",
+		"--remote=false",
+		"--allow-private-networks=false",
+		"--allow-http=false",
+		"--insecure=false",
+		"--min-score", "100",
+		"--fail-severity", "warn",
+		"--errors",
+		"--details",
+		"--no-style",
+		"--no-banner",
+		contractPath,
+	)
+	command.Env = []string{"NO_COLOR=1", "TMPDIR=" + t.TempDir()}
+	return command.CombinedOutput()
+}
+
+func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
+	t.Parallel()
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		message string
+	}{
+		{
+			name: "unknown hierarchy field",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy")["unreviewed"] = true
+			},
+			message: "unknown field",
+		},
+		{
+			name: "display name becomes authorization key",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "workspaceOwnership")["workspaceIdPointer"] =
+					"/metadata/displayName"
+			},
+			message: "workspace ownership policy drifted",
+		},
+		{
+			name: "ownership becomes client writable",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "workspaceOwnership")["clientWritable"] = true
+			},
+			message: "workspace ownership policy drifted",
+		},
+		{
+			name: "root ownership derivation drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "workspaceOwnership")["rootDerivation"] = "caller-value"
+			},
+			message: "workspace ownership policy drifted",
+		},
+		{
+			name: "child ownership derivation drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "workspaceOwnership")["childDerivation"] = "request-value"
+			},
+			message: "workspace ownership policy drifted",
+		},
+		{
+			name: "false ownership field omitted",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "x-veer-hierarchy", "workspaceOwnership"), "mutable")
+			},
+			message: "workspaceOwnership field set drifted",
+		},
+		{
+			name: "ownership becomes mutable",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "workspaceOwnership")["mutable"] = true
+			},
+			message: "workspace ownership policy drifted",
+		},
+		{
+			name: "parent pointer drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "parentReference")["pointer"] = "/metadata/displayName"
+			},
+			message: "parent reference policy drifted",
+		},
+		{
+			name: "orphan reference accepted",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "referenceValidation")["orphan"] = "allow"
+			},
+			message: "hierarchy reference validation policy drifted",
+		},
+		{
+			name: "cross-workspace reference accepted",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "referenceValidation")["crossWorkspace"] = "allow"
+			},
+			message: "hierarchy reference validation policy drifted",
+		},
+		{
+			name: "cycle accepted",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "referenceValidation")["cycle"] = "allow"
+			},
+			message: "hierarchy reference validation policy drifted",
+		},
+		{
+			name: "cascade deletion",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "deletion")["policy"] = "CASCADE"
+			},
+			message: "hierarchy deletion policy drifted",
+		},
+		{
+			name: "deletion blocker drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-hierarchy", "deletion")["blockedBy"] = "any-descendant"
+			},
+			message: "hierarchy deletion policy drifted",
+		},
+		{
+			name: "wrong parent kind",
+			mutate: func(root map[string]any) {
+				resources := nestedMap(t, root, "x-veer-hierarchy")["resources"].([]any)
+				resources[2].(map[string]any)["parentKind"] = "Workspace"
+			},
+			message: "Application parent kind must be Environment",
+		},
+		{
+			name: "wrong schema reference",
+			mutate: func(root map[string]any) {
+				resources := nestedMap(t, root, "x-veer-hierarchy")["resources"].([]any)
+				nestedMap(t, resources[3].(map[string]any), "schema")["$ref"] = "#/components/schemas/Application"
+			},
+			message: "Component schema reference drifted",
+		},
+		{
+			name: "wrong status write schema reference",
+			mutate: func(root map[string]any) {
+				resources := nestedMap(t, root, "x-veer-hierarchy")["resources"].([]any)
+				nestedMap(t, resources[1].(map[string]any), "statusWriteSchema")["$ref"] =
+					"#/components/schemas/WorkspaceStatusWrite"
+			},
+			message: "Environment status write schema reference drifted",
+		},
+		{
+			name: "root gains parent",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Workspace", "example", "metadata")["parent"] =
+					"wsp_01J99999999999999999999999"
+			},
+			message: "workspace canonical example drifted",
+		},
+		{
+			name: "orphan example",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Application", "example", "metadata")["parent"] =
+					"env_01J99999999999999999999999"
+			},
+			message: "Application example parent is orphaned or cyclic",
+		},
+		{
+			name: "cross-workspace example",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Component", "example", "metadata")["workspaceId"] =
+					"wsp_01J99999999999999999999999"
+			},
+			message: "Component example crosses workspace ownership",
+		},
+		{
+			name: "cyclic example",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Environment", "example", "metadata")["parent"] =
+					"cmp_01J00000000000000000000000"
+			},
+			message: "Environment example parent is orphaned or cyclic",
+		},
+		{
+			name: "provider field enters empty spec",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "EnvironmentSpec", "properties")["provider"] =
+					map[string]any{"type": "string"}
+			},
+			message: "EnvironmentSpec must remain a closed empty provider-neutral object",
+		},
+		{
+			name: "schema removed",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "components", "schemas"), "ComponentList")
+			},
+			message: "expected exactly 60 schemas, got 59",
+		},
+		{
+			name: "schema added",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas")["ProviderResource"] = map[string]any{
+					"type": "object", "additionalProperties": false, "properties": map[string]any{},
+				}
+			},
+			message: "expected exactly 60 schemas, got 61",
+		},
+		{
+			name: "workspace ownership no longer required",
+			mutate: func(root map[string]any) {
+				metadata := nestedMap(t, root, "components", "schemas", "ResourceMetadata")
+				metadata["required"] = []any{"id", "displayName", "generation", "resourceVersion", "createdAt", "updatedAt"}
+			},
+			message: "ResourceMetadata shape drifted",
+		},
+		{
+			name: "workspace ownership becomes writable in read schema",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "workspaceId")["readOnly"] = false
+			},
+			message: "ResourceMetadata.workspaceId must be readOnly",
+		},
+		{
+			name: "root metadata allows parent",
+			mutate: func(root map[string]any) {
+				rootMetadata := nestedMap(t, root, "components", "schemas", "RootResourceMetadata")
+				allOf := rootMetadata["allOf"].([]any)
+				nestedMap(t, allOf[1].(map[string]any), "not")["required"] = []any{"workspaceId"}
+			},
+			message: "permits unconstrained additional properties",
+		},
+		{
+			name: "child metadata makes parent optional",
+			mutate: func(root map[string]any) {
+				childMetadata := nestedMap(t, root, "components", "schemas", "ChildResourceMetadata")
+				allOf := childMetadata["allOf"].([]any)
+				allOf[1].(map[string]any)["required"] = []any{"workspaceId"}
+			},
+			message: "ChildResourceMetadata must require parent",
+		},
+		{
+			name: "environment uses root metadata",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Environment", "properties", "metadata")["$ref"] =
+					"#/components/schemas/RootResourceMetadata"
+			},
+			message: "metadata must reference #/components/schemas/ChildResourceMetadata",
+		},
+		{
+			name: "application kind drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Application", "properties", "kind")["const"] = "Workspace"
+			},
+			message: "Application identity contract drifted",
+		},
+		{
+			name: "component status conditions become unbounded",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "components", "schemas", "ComponentStatus", "properties", "conditions"), "maxItems")
+			},
+			message: "ComponentStatus conditions contract drifted",
+		},
+		{
+			name: "application status example drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "ApplicationStatus", "example")["observedGeneration"] =
+					json.Number("1")
+			},
+			message: "ApplicationStatus canonical example drifted",
+		},
+		{
+			name: "environment list grows beyond page bound",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "EnvironmentList", "properties", "items")["maxItems"] =
+					json.Number("101")
+			},
+			message: "EnvironmentList item bound drifted",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			err = Validate(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.message)
+			}
+		})
 	}
 }
 

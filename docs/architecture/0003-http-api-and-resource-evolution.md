@@ -44,12 +44,19 @@ dependencies and prove deterministic regeneration.
 
 The contract admits only enumerated `x-veer-*` extension names at their
 reviewed structural locations. It rejects generator-specific extensions,
-including `x-go-*` and `x-oapi-codegen-*`, before generation. As of 2026-09-02, upstream
+including `x-go-*` and `x-oapi-codegen-*`, before generation. As of 2026-09-02,
+upstream
 [GHSA-9c2f-gr95-7wqw](https://github.com/oapi-codegen/oapi-codegen/security/advisories/GHSA-9c2f-gr95-7wqw)
 reports no patched release for `x-go-type-import` generated-code injection.
 The first generation issue must recheck that advisory and may not activate an
 affected release without this gate plus a patched release or audited defensive
 fork.
+
+The root-only `x-veer-hierarchy` extension is the reviewed registry for
+resource kinds, parent edges, schema-family references, server-derived
+Workspace ownership, immutable placement, and RESTRICT deletion. The semantic
+verifier compares it with an independent exact table; it is not an arbitrary
+generator extension point.
 
 ## Decision boundary
 
@@ -60,6 +67,9 @@ implementation.
 
 - Issue [#17](https://github.com/ArdurAI/veer/issues/17) implements the common
   resource envelope, stable identity, serialization, and property tests.
+- Issue [#18](https://github.com/ArdurAI/veer/issues/18) implements the four
+  resource schema families, server-derived Workspace ownership, and
+  provider-free graph validation without adding child routes.
 - Issue [#20](https://github.com/ArdurAI/veer/issues/20) implements ordered
   validation, defaulting, immutable-field checks, references, and conversion.
 - Issue [#22](https://github.com/ArdurAI/veer/issues/22) implements OIDC
@@ -93,6 +103,10 @@ their reusable parameters use explicit OpenAPI `simple` style with
 `explode: false`. Display names never identify a resource and remain mutable.
 Nested routes are used only when the parent is a real authorization or
 lifecycle boundary, not to mirror storage joins.
+
+Environment, Application, and Component schemas can be published before their
+route topology is selected. The hierarchy manifest makes those schema families
+reachable and testable without implying that an HTTP handler exists.
 
 Within one route version, Veer may add an optional request field, response
 field, enum value with a documented unknown-value behavior, operation, or
@@ -191,8 +205,9 @@ exact contract revision so conformance tests detect an undocumented response
 addition.
 
 Server-owned fields are absent from write schemas or marked read-only in read
-schemas. A client cannot set `id`, `parent`, `generation`, `resourceVersion`,
-creation or update timestamps, or status through a desired-state write.
+schemas. A client cannot set `id`, `workspaceId`, `parent`, `generation`,
+`resourceVersion`, creation or update timestamps, or status through a
+desired-state write.
 
 Every schema value declared as `int64` also carries the explicit signed
 64-bit maximum `9223372036854775807`; the format annotation alone does not
@@ -468,6 +483,10 @@ not authorize an undocumented incompatible schema change.
 2. Go standard-library tests validate Veer's exact semantics and negative
    mutations.
 
+The API command also runs positive and negative resource examples through the
+same pinned Vacuum binary. Extension references are traversed for linting, but
+network references remain disabled.
+
 The semantic verifier rejects:
 
 - duplicate JSON keys, trailing documents, files above 1 MiB, nesting above
@@ -485,6 +504,9 @@ The semantic verifier rejects:
   status, receipt, and operation shapes, generation, resource-version,
   byte-bounded pagination, deprecation date-window bindings, or migration-Link
   URI-reference drift;
+- hierarchy ownership or deletion-policy drift, invalid parent-kind edges,
+  writable placement fields, metadata refinement drift, or mismatched
+  Workspace, Environment, Application, and Component schema-family refs;
 - unreviewed primitive-schema assertion keywords or additions to the closed
   Problem property set, pagination token/size schemas, generation counters, or
   resource-version fields;

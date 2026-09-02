@@ -21,6 +21,7 @@ const (
 	maxContractBytes             = 1 << 20
 	maxJSONDepth                 = 64
 	maxJSONNodes                 = 50000
+	expectedSchemaCount          = 60
 	minimumDeprecationNoticeDays = 90
 	deprecationPattern           = `^@[0-9]{10,12}$`
 	deprecationLinkTargetPattern = `[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{1,900}`
@@ -53,6 +54,72 @@ type problemContract struct {
 	title    string
 	required []string
 	variants []problemVariant
+}
+
+type hierarchyContract struct {
+	WorkspaceOwnership  hierarchyWorkspaceOwnership  `json:"workspaceOwnership"`
+	ParentReference     hierarchyParentReference     `json:"parentReference"`
+	ReferenceValidation hierarchyReferenceValidation `json:"referenceValidation"`
+	Deletion            hierarchyDeletion            `json:"deletion"`
+	Resources           []hierarchyResource          `json:"resources"`
+}
+
+type hierarchyWorkspaceOwnership struct {
+	WorkspaceIDPointer string `json:"workspaceIdPointer"`
+	RootDerivation     string `json:"rootDerivation"`
+	ChildDerivation    string `json:"childDerivation"`
+	ClientWritable     bool   `json:"clientWritable"`
+	Mutable            bool   `json:"mutable"`
+}
+
+type hierarchyParentReference struct {
+	Pointer string `json:"pointer"`
+	Source  string `json:"source"`
+	Mutable bool   `json:"mutable"`
+}
+
+type hierarchyReferenceValidation struct {
+	Orphan         string `json:"orphan"`
+	CrossWorkspace string `json:"crossWorkspace"`
+	Cycle          string `json:"cycle"`
+}
+
+type hierarchyDeletion struct {
+	Policy    string `json:"policy"`
+	BlockedBy string `json:"blockedBy"`
+}
+
+type hierarchyReference struct {
+	Ref string `json:"$ref"`
+}
+
+type hierarchyResource struct {
+	Kind              string             `json:"kind"`
+	ParentKind        *string            `json:"parentKind"`
+	Schema            hierarchyReference `json:"schema"`
+	MetadataSchema    hierarchyReference `json:"metadataSchema"`
+	CreateSchema      hierarchyReference `json:"createSchema"`
+	ReplaceSchema     hierarchyReference `json:"replaceSchema"`
+	StatusWriteSchema hierarchyReference `json:"statusWriteSchema"`
+	ListSchema        hierarchyReference `json:"listSchema"`
+}
+
+type resourceSchemaContract struct {
+	kind           string
+	parentKind     string
+	metadataSchema string
+	specIsEmpty    bool
+}
+
+func (contract resourceSchemaContract) schema(suffix string) string {
+	return contract.kind + suffix
+}
+
+var resourceSchemaContracts = []resourceSchemaContract{
+	{kind: "Workspace", metadataSchema: "RootResourceMetadata"},
+	{kind: "Environment", parentKind: "Workspace", metadataSchema: "ChildResourceMetadata", specIsEmpty: true},
+	{kind: "Application", parentKind: "Environment", metadataSchema: "ChildResourceMetadata", specIsEmpty: true},
+	{kind: "Component", parentKind: "Application", metadataSchema: "ChildResourceMetadata", specIsEmpty: true},
 }
 
 var operationContracts = map[string]operationContract{
@@ -235,6 +302,7 @@ func Validate(data []byte) error {
 		{name: "bounded tree", fn: validateTree},
 		{name: "root", fn: validateRoot},
 		{name: "evolution", fn: validateEvolution},
+		{name: "hierarchy", fn: validateHierarchy},
 		{name: "operations", fn: validateOperations},
 		{name: "components", fn: validateComponents},
 		{name: "examples", fn: validateExamples},
@@ -383,7 +451,7 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 				return fmt.Errorf("%s object schema omits additionalProperties", path)
 			}
 			if allowed, boolean := additional.(bool); boolean {
-				if allowed {
+				if allowed && !isReviewedRootParentExclusion(path, typed) {
 					return fmt.Errorf("%s permits unconstrained additional properties", path)
 				}
 			} else {
@@ -425,6 +493,12 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 	return nil
 }
 
+func isReviewedRootParentExclusion(path string, schema map[string]any) bool {
+	return path == "$/components/schemas/RootResourceMetadata/allOf/1/not" &&
+		schema["type"] == "object" && schema["additionalProperties"] == true &&
+		stringSetEquals(schema["required"], []string{"parent"})
+}
+
 func isReviewedProblemRefinement(path string, schema map[string]any) bool {
 	if schema["x-veer-refinement"] != true {
 		return false
@@ -445,7 +519,7 @@ func isReviewedFreeFormMap(path string, schema map[string]any) bool {
 
 func isReviewedExtension(path, name string) bool {
 	switch name {
-	case "x-veer-evolution":
+	case "x-veer-evolution", "x-veer-hierarchy":
 		return path == "$"
 	case "x-veer-write-class":
 		return strings.HasPrefix(path, "$/paths/") &&
@@ -483,7 +557,7 @@ func isReviewedExtension(path, name string) bool {
 		return path == "$/paths//api/v1alpha1/workspaces/{workspaceId}/status/put"
 	case "x-veer-observed-generation-upper-bound":
 		return path == "$/paths//api/v1alpha1/workspaces/{workspaceId}/status/put" ||
-			path == "$/components/schemas/Workspace"
+			isResourceSchemaPath(path, "")
 	case "x-veer-deprecation-sunset-minimum-notice-days",
 		"x-veer-etag-resource-version-pointer",
 		"x-veer-location-operation-id-pointer",
@@ -505,14 +579,13 @@ func isReviewedExtension(path, name string) bool {
 		case "$/components/schemas/MutationReceipt",
 			"$/components/schemas/Problem",
 			"$/components/schemas/StatusReceipt",
-			"$/components/schemas/Workspace",
 			"$/components/schemas/WorkspaceList":
 			return true
 		default:
-			return false
+			return isResourceSchemaPath(path, "") || isResourceSchemaPath(path, "List")
 		}
 	case "x-veer-page-byte-policy":
-		return path == "$/components/schemas/WorkspaceList"
+		return isResourceSchemaPath(path, "List")
 	case "x-veer-refinement":
 		for _, contract := range problemContracts {
 			for _, variant := range problemVariantsFor(contract) {
@@ -525,6 +598,15 @@ func isReviewedExtension(path, name string) bool {
 	default:
 		return false
 	}
+}
+
+func isResourceSchemaPath(path, suffix string) bool {
+	for _, contract := range resourceSchemaContracts {
+		if path == "$/components/schemas/"+contract.schema(suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isResponseComponentPath(path string) bool {
@@ -573,6 +655,141 @@ func validateRoot(root map[string]any) error {
 		return errors.New("webhooks are not selected for v1alpha1")
 	}
 	return nil
+}
+
+func validateHierarchy(root map[string]any) error {
+	raw, exists := root["x-veer-hierarchy"]
+	if !exists {
+		return errors.New("x-veer-hierarchy is missing")
+	}
+
+	var hierarchy hierarchyContract
+	if err := decodeStrictValue(raw, &hierarchy); err != nil {
+		return fmt.Errorf("x-veer-hierarchy shape: %w", err)
+	}
+	if err := validateHierarchyFieldSets(raw); err != nil {
+		return err
+	}
+	if hierarchy.WorkspaceOwnership != (hierarchyWorkspaceOwnership{
+		WorkspaceIDPointer: "/metadata/workspaceId",
+		RootDerivation:     "resource-id",
+		ChildDerivation:    "resolved-parent-workspace-id",
+		ClientWritable:     false,
+		Mutable:            false,
+	}) {
+		return errors.New("workspace ownership policy drifted")
+	}
+	if hierarchy.ParentReference != (hierarchyParentReference{
+		Pointer: "/metadata/parent",
+		Source:  "server-derived",
+		Mutable: false,
+	}) {
+		return errors.New("parent reference policy drifted")
+	}
+	if hierarchy.ReferenceValidation != (hierarchyReferenceValidation{
+		Orphan:         "reject",
+		CrossWorkspace: "reject",
+		Cycle:          "reject",
+	}) {
+		return errors.New("hierarchy reference validation policy drifted")
+	}
+	if hierarchy.Deletion != (hierarchyDeletion{Policy: "RESTRICT", BlockedBy: "retained-direct-child"}) {
+		return errors.New("hierarchy deletion policy drifted")
+	}
+	if len(hierarchy.Resources) != len(resourceSchemaContracts) {
+		return fmt.Errorf("hierarchy must contain exactly %d resource kinds", len(resourceSchemaContracts))
+	}
+	for index, want := range resourceSchemaContracts {
+		got := hierarchy.Resources[index]
+		if got.Kind != want.kind {
+			return fmt.Errorf("hierarchy resource %d kind must be %s", index, want.kind)
+		}
+		if want.parentKind == "" {
+			if got.ParentKind != nil {
+				return fmt.Errorf("hierarchy resource %s must be a root", want.kind)
+			}
+		} else if got.ParentKind == nil || *got.ParentKind != want.parentKind {
+			return fmt.Errorf("hierarchy resource %s parent kind must be %s", want.kind, want.parentKind)
+		}
+		if got.Schema.Ref != "#/components/schemas/"+want.kind {
+			return fmt.Errorf("hierarchy resource %s schema reference drifted", want.kind)
+		}
+		if got.MetadataSchema.Ref != "#/components/schemas/"+want.metadataSchema {
+			return fmt.Errorf("hierarchy resource %s metadata schema reference drifted", want.kind)
+		}
+		for _, role := range []struct {
+			name      string
+			suffix    string
+			reference hierarchyReference
+		}{
+			{name: "create", suffix: "Create", reference: got.CreateSchema},
+			{name: "replace", suffix: "Replace", reference: got.ReplaceSchema},
+			{name: "status write", suffix: "StatusWrite", reference: got.StatusWriteSchema},
+			{name: "list", suffix: "List", reference: got.ListSchema},
+		} {
+			if role.reference.Ref != "#/components/schemas/"+want.schema(role.suffix) {
+				return fmt.Errorf("hierarchy resource %s %s schema reference drifted", want.kind, role.name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateHierarchyFieldSets(raw any) error {
+	hierarchy, ok := raw.(map[string]any)
+	if !ok || !mapKeySetEquals(hierarchy, []string{
+		"workspaceOwnership", "parentReference", "referenceValidation", "deletion", "resources",
+	}) {
+		return errors.New("x-veer-hierarchy field set drifted")
+	}
+	for name, fields := range map[string][]string{
+		"workspaceOwnership": {
+			"workspaceIdPointer", "rootDerivation", "childDerivation", "clientWritable", "mutable",
+		},
+		"parentReference":     {"pointer", "source", "mutable"},
+		"referenceValidation": {"orphan", "crossWorkspace", "cycle"},
+		"deletion":            {"policy", "blockedBy"},
+	} {
+		object, err := mapField(hierarchy, name)
+		if err != nil || !mapKeySetEquals(object, fields) {
+			return fmt.Errorf("x-veer-hierarchy.%s field set drifted", name)
+		}
+	}
+	resources, ok := hierarchy["resources"].([]any)
+	if !ok {
+		return errors.New("x-veer-hierarchy.resources is not an array")
+	}
+	for index, rawResource := range resources {
+		resource, ok := rawResource.(map[string]any)
+		if !ok || !mapKeySetEquals(resource, []string{
+			"kind", "parentKind", "schema", "metadataSchema", "createSchema", "replaceSchema",
+			"statusWriteSchema", "listSchema",
+		}) {
+			return fmt.Errorf("x-veer-hierarchy.resources[%d] field set drifted", index)
+		}
+		for _, name := range []string{
+			"schema", "metadataSchema", "createSchema", "replaceSchema", "statusWriteSchema", "listSchema",
+		} {
+			reference, err := mapField(resource, name)
+			if err != nil || !mapKeySetEquals(reference, []string{"$ref"}) {
+				return fmt.Errorf("x-veer-hierarchy.resources[%d].%s field set drifted", index, name)
+			}
+		}
+	}
+	return nil
+}
+
+func decodeStrictValue(value any, target any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encode value: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return requireJSONEOF(decoder)
 }
 
 type evolutionContract struct {
@@ -1767,6 +1984,39 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 			return fmt.Errorf("%s schema has unreviewed keywords", contract.name)
 		}
 	}
+	for _, contract := range resourceSchemaContracts[1:] {
+		for _, schemaContract := range []struct {
+			suffix string
+			extra  []string
+		}{
+			{extra: []string{"example", "x-veer-maximum-json-bytes", "x-veer-observed-generation-upper-bound"}},
+			{suffix: "Create"},
+			{suffix: "List", extra: []string{"x-veer-maximum-json-bytes", "x-veer-page-byte-policy"}},
+			{suffix: "Replace"},
+			{suffix: "Spec"},
+			{suffix: "Status", extra: []string{"example"}},
+			{suffix: "StatusWrite"},
+		} {
+			schema, err := mapField(schemas, contract.schema(schemaContract.suffix))
+			if err != nil {
+				return err
+			}
+			keywords := append([]string(nil), objectKeywords...)
+			keywords = append(keywords, schemaContract.extra...)
+			if !mapKeysAllowed(schema, keywords) {
+				return fmt.Errorf("%s schema has unreviewed keywords", contract.schema(schemaContract.suffix))
+			}
+		}
+	}
+	for _, name := range []string{"RootResourceMetadata", "ChildResourceMetadata"} {
+		schema, err := mapField(schemas, name)
+		if err != nil {
+			return err
+		}
+		if !mapKeySetEquals(schema, []string{"description", "allOf"}) {
+			return fmt.Errorf("%s schema has unreviewed keywords", name)
+		}
+	}
 
 	labels, err := mapField(schemas, "Labels")
 	if err != nil {
@@ -1804,11 +2054,20 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 }
 
 func validateSchemas(schemas map[string]any) error {
+	if len(schemas) != expectedSchemaCount {
+		return fmt.Errorf("expected exactly %d schemas, got %d", expectedSchemaCount, len(schemas))
+	}
 	required := []string{
 		"Condition", "FieldViolation", "IdempotencyKey", "Labels", "MutationReceipt",
 		"OpaqueId", "Operation", "Problem", "RequestId", "ResourceMetadata", "StatusReceipt", "StrongETag",
 		"Timestamp", "Workspace", "WorkspaceCreate", "WorkspaceList", "WorkspaceReplace",
 		"WorkspaceSpec", "WorkspaceStatus", "WorkspaceStatusWrite", "WritableMetadata",
+		"RootResourceMetadata", "ChildResourceMetadata",
+	}
+	for _, contract := range resourceSchemaContracts[1:] {
+		for _, suffix := range []string{"", "Create", "List", "Replace", "Spec", "Status", "StatusWrite"} {
+			required = append(required, contract.schema(suffix))
+		}
 	}
 	for _, name := range required {
 		if _, exists := schemas[name]; !exists {
@@ -1896,11 +2155,11 @@ func validateSchemas(schemas map[string]any) error {
 		return err
 	}
 	if !stringSetEquals(metadata["required"], []string{
-		"id", "displayName", "generation", "resourceVersion", "createdAt", "updatedAt",
-	}) || len(metadataProperties) != 8 {
+		"id", "workspaceId", "displayName", "generation", "resourceVersion", "createdAt", "updatedAt",
+	}) || len(metadataProperties) != 9 {
 		return errors.New("ResourceMetadata shape drifted")
 	}
-	for _, name := range []string{"id", "parent", "generation", "resourceVersion", "createdAt", "updatedAt"} {
+	for _, name := range []string{"id", "workspaceId", "parent", "generation", "resourceVersion", "createdAt", "updatedAt"} {
 		property, err := mapField(metadataProperties, name)
 		if err != nil {
 			return err
@@ -1918,6 +2177,16 @@ func validateSchemas(schemas map[string]any) error {
 			property: "id",
 			target:   "OpaqueId",
 			siblings: map[string]any{"type": "string", "readOnly": true},
+		},
+		{
+			property: "workspaceId",
+			target:   "OpaqueId",
+			siblings: map[string]any{
+				"type":        "string",
+				"readOnly":    true,
+				"description": "Immutable server-derived workspace ownership key used for authorization.",
+				"example":     "wsp_01J00000000000000000000000",
+			},
 		},
 		{
 			property: "parent",
@@ -2034,6 +2303,17 @@ func validateSchemas(schemas map[string]any) error {
 	if err := validateOperationSchema(schemas); err != nil {
 		return err
 	}
+	if err := validateMetadataRefinements(schemas); err != nil {
+		return err
+	}
+	for _, contract := range resourceSchemaContracts[1:] {
+		if err := validateResourceSchemaFamily(schemas, contract); err != nil {
+			return err
+		}
+	}
+	if err := validateResourceExamples(schemas); err != nil {
+		return err
+	}
 
 	writable, err := mapField(schemas, "WritableMetadata")
 	if err != nil {
@@ -2043,7 +2323,7 @@ func validateSchemas(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
-	for _, forbidden := range []string{"id", "parent", "generation", "resourceVersion", "createdAt", "updatedAt"} {
+	for _, forbidden := range []string{"id", "workspaceId", "parent", "generation", "resourceVersion", "createdAt", "updatedAt"} {
 		if _, exists := writableProperties[forbidden]; exists {
 			return fmt.Errorf("WritableMetadata exposes server-owned field %s", forbidden)
 		}
@@ -2390,6 +2670,7 @@ func validateNestedSchemaKeywords(schemas map[string]any) error {
 		keywords []string
 	}{
 		{schema: "ResourceMetadata", property: "id", keywords: []string{"$ref", "readOnly", "type"}},
+		{schema: "ResourceMetadata", property: "workspaceId", keywords: []string{"$ref", "description", "example", "readOnly", "type"}},
 		{schema: "ResourceMetadata", property: "displayName", keywords: []string{"maxLength", "minLength", "type"}},
 		{schema: "ResourceMetadata", property: "parent", keywords: []string{"$ref", "description", "example", "readOnly", "type"}},
 		{schema: "ResourceMetadata", property: "labels", keywords: []string{"$ref"}},
@@ -2457,6 +2738,75 @@ func validateNestedSchemaKeywords(schemas map[string]any) error {
 		{schema: "Problem", property: "errors", keywords: []string{"example", "items", "maxItems", "type"}},
 		{schema: "Problem", property: "retryAfterSeconds", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
 	}
+	for _, contract := range resourceSchemaContracts[1:] {
+		for _, property := range []string{"apiVersion", "kind"} {
+			contracts = append(contracts,
+				struct {
+					schema   string
+					property string
+					keywords []string
+				}{schema: contract.kind, property: property, keywords: []string{"const", "type"}},
+				struct {
+					schema   string
+					property string
+					keywords []string
+				}{schema: contract.schema("Create"), property: property, keywords: []string{"const", "type"}},
+				struct {
+					schema   string
+					property string
+					keywords []string
+				}{schema: contract.schema("Replace"), property: property, keywords: []string{"const", "type"}},
+				struct {
+					schema   string
+					property string
+					keywords []string
+				}{schema: contract.schema("StatusWrite"), property: property, keywords: []string{"const", "type"}},
+			)
+		}
+		for _, property := range []string{"metadata", "spec", "status"} {
+			contracts = append(contracts, struct {
+				schema   string
+				property string
+				keywords []string
+			}{schema: contract.kind, property: property, keywords: []string{"$ref"}})
+		}
+		for _, schema := range []string{contract.schema("Create"), contract.schema("Replace")} {
+			for _, property := range []string{"metadata", "spec"} {
+				contracts = append(contracts, struct {
+					schema   string
+					property string
+					keywords []string
+				}{schema: schema, property: property, keywords: []string{"$ref"}})
+			}
+		}
+		contracts = append(contracts,
+			struct {
+				schema   string
+				property string
+				keywords []string
+			}{schema: contract.schema("StatusWrite"), property: "status", keywords: []string{"$ref"}},
+			struct {
+				schema   string
+				property string
+				keywords []string
+			}{schema: contract.schema("Status"), property: "observedGeneration", keywords: []string{"format", "maximum", "minimum", "type"}},
+			struct {
+				schema   string
+				property string
+				keywords []string
+			}{schema: contract.schema("Status"), property: "conditions", keywords: []string{"example", "items", "maxItems", "type"}},
+			struct {
+				schema   string
+				property string
+				keywords []string
+			}{schema: contract.schema("List"), property: "items", keywords: []string{"example", "items", "maxItems", "type"}},
+			struct {
+				schema   string
+				property string
+				keywords []string
+			}{schema: contract.schema("List"), property: "nextPageToken", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		)
+	}
 
 	for _, contract := range contracts {
 		schema, err := mapField(schemas, contract.schema)
@@ -2513,6 +2863,350 @@ func validateResourceVersionProperty(property map[string]any, context string, ke
 	}
 	if !mapKeySetEquals(property, keywords) {
 		return fmt.Errorf("%s resourceVersion has unreviewed keywords", context)
+	}
+	return nil
+}
+
+func validateMetadataRefinements(schemas map[string]any) error {
+	for _, contract := range []struct {
+		name       string
+		constraint string
+	}{
+		{name: "RootResourceMetadata", constraint: "not"},
+		{name: "ChildResourceMetadata", constraint: "required"},
+	} {
+		schema, err := mapField(schemas, contract.name)
+		if err != nil {
+			return err
+		}
+		allOf, ok := schema["allOf"].([]any)
+		if !ok || len(allOf) != 2 {
+			return fmt.Errorf("%s must contain exactly two allOf members", contract.name)
+		}
+		base, ok := allOf[0].(map[string]any)
+		if !ok || !mapKeySetEquals(base, []string{"$ref"}) ||
+			base["$ref"] != "#/components/schemas/ResourceMetadata" {
+			return fmt.Errorf("%s base reference drifted", contract.name)
+		}
+		refinement, ok := allOf[1].(map[string]any)
+		if !ok || !mapKeySetEquals(refinement, []string{contract.constraint}) {
+			return fmt.Errorf("%s refinement shape drifted", contract.name)
+		}
+		if contract.constraint == "required" {
+			if !stringSetEquals(refinement["required"], []string{"parent"}) {
+				return errors.New("ChildResourceMetadata must require parent")
+			}
+			continue
+		}
+		not, err := mapField(refinement, "not")
+		if err != nil || !mapKeySetEquals(not, []string{"type", "additionalProperties", "required"}) ||
+			!isReviewedRootParentExclusion("$/components/schemas/RootResourceMetadata/allOf/1/not", not) {
+			return errors.New("RootResourceMetadata must forbid parent")
+		}
+	}
+	return nil
+}
+
+func validateResourceSchemaFamily(schemas map[string]any, contract resourceSchemaContract) error {
+	spec, err := mapField(schemas, contract.schema("Spec"))
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(spec, "properties")
+	if err != nil {
+		return err
+	}
+	if !contract.specIsEmpty || len(properties) != 0 {
+		return fmt.Errorf("%s must remain a closed empty provider-neutral object", contract.schema("Spec"))
+	}
+	if _, exists := spec["required"]; exists {
+		return fmt.Errorf("%s must not declare required properties", contract.schema("Spec"))
+	}
+
+	if err := validateResourceStatusSchema(schemas, contract); err != nil {
+		return err
+	}
+	if err := validateResourceReadSchema(schemas, contract); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"Create", "Replace"} {
+		if err := validateResourceWriteSchema(schemas, contract, suffix); err != nil {
+			return err
+		}
+	}
+	if err := validateResourceStatusWriteSchema(schemas, contract); err != nil {
+		return err
+	}
+	return validateResourceListSchema(schemas, contract)
+}
+
+func validateResourceStatusSchema(schemas map[string]any, contract resourceSchemaContract) error {
+	name := contract.schema("Status")
+	status, err := mapField(schemas, name)
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(status, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(status["required"], []string{"observedGeneration", "conditions"}) ||
+		len(properties) != 2 {
+		return fmt.Errorf("%s shape drifted", name)
+	}
+	if !reflect.DeepEqual(status["example"], map[string]any{
+		"observedGeneration": json.Number("0"),
+		"conditions":         []any{},
+	}) {
+		return fmt.Errorf("%s canonical example drifted", name)
+	}
+	if err := validateInt64Property(
+		schemas,
+		name,
+		"observedGeneration",
+		"0",
+		[]string{"type", "format", "minimum", "maximum"},
+	); err != nil {
+		return err
+	}
+	conditions, err := mapField(properties, "conditions")
+	if err != nil {
+		return err
+	}
+	if conditions["type"] != "array" || !numberEquals(conditions["maxItems"], "32") {
+		return fmt.Errorf("%s conditions contract drifted", name)
+	}
+	if err := requireReference(conditions, "items", "#/components/schemas/Condition"); err != nil {
+		return fmt.Errorf("%s.conditions: %w", name, err)
+	}
+	return nil
+}
+
+func validateResourceReadSchema(schemas map[string]any, contract resourceSchemaContract) error {
+	schema, err := mapField(schemas, contract.kind)
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(schema["required"], []string{"apiVersion", "kind", "metadata", "spec", "status"}) ||
+		len(properties) != 5 || !numberEquals(schema["x-veer-maximum-json-bytes"], "262144") {
+		return fmt.Errorf("%s read shape or encoded-size contract drifted", contract.kind)
+	}
+	if !validObservedGenerationUpperBound(schema["x-veer-observed-generation-upper-bound"]) {
+		return fmt.Errorf("%s observed-generation upper bound drifted", contract.kind)
+	}
+	if err := validateResourceIdentity(properties, contract.kind, contract.kind); err != nil {
+		return err
+	}
+	for property, target := range map[string]string{
+		"metadata": contract.metadataSchema,
+		"spec":     contract.schema("Spec"),
+		"status":   contract.schema("Status"),
+	} {
+		if err := requireReference(properties, property, "#/components/schemas/"+target); err != nil {
+			return fmt.Errorf("%s: %w", contract.kind, err)
+		}
+	}
+	return nil
+}
+
+func validateResourceWriteSchema(
+	schemas map[string]any,
+	contract resourceSchemaContract,
+	suffix string,
+) error {
+	name := contract.schema(suffix)
+	schema, err := mapField(schemas, name)
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(schema["required"], []string{"apiVersion", "kind", "metadata", "spec"}) ||
+		len(properties) != 4 {
+		return fmt.Errorf("%s complete-write shape drifted", name)
+	}
+	if err := validateResourceIdentity(properties, name, contract.kind); err != nil {
+		return err
+	}
+	for property, target := range map[string]string{
+		"metadata": "WritableMetadata",
+		"spec":     contract.schema("Spec"),
+	} {
+		if err := requireReference(properties, property, "#/components/schemas/"+target); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateResourceStatusWriteSchema(schemas map[string]any, contract resourceSchemaContract) error {
+	name := contract.schema("StatusWrite")
+	schema, err := mapField(schemas, name)
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(schema["required"], []string{"apiVersion", "kind", "status"}) ||
+		len(properties) != 3 {
+		return fmt.Errorf("%s shape drifted", name)
+	}
+	if err := validateResourceIdentity(properties, name, contract.kind); err != nil {
+		return err
+	}
+	if err := requireReference(properties, "status", "#/components/schemas/"+contract.schema("Status")); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+func validateResourceListSchema(schemas map[string]any, contract resourceSchemaContract) error {
+	name := contract.schema("List")
+	schema, err := mapField(schemas, name)
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(schema["required"], []string{"items"}) || len(properties) != 2 ||
+		!numberEquals(schema["x-veer-maximum-json-bytes"], "262144") ||
+		schema["x-veer-page-byte-policy"] != "stop-before-limit" {
+		return fmt.Errorf("%s shape or encoded-size contract drifted", name)
+	}
+	items, err := mapField(properties, "items")
+	if err != nil {
+		return err
+	}
+	if items["type"] != "array" || !numberEquals(items["maxItems"], "100") {
+		return fmt.Errorf("%s item bound drifted", name)
+	}
+	if err := requireReference(items, "items", "#/components/schemas/"+contract.kind); err != nil {
+		return fmt.Errorf("%s.items: %w", name, err)
+	}
+	nextPageToken, err := mapField(properties, "nextPageToken")
+	if err != nil {
+		return err
+	}
+	if nextPageToken["type"] != "string" || !numberEquals(nextPageToken["minLength"], "16") ||
+		!numberEquals(nextPageToken["maxLength"], "1024") || nextPageToken["pattern"] != "^[A-Za-z0-9_-]+$" {
+		return fmt.Errorf("%s nextPageToken contract drifted", name)
+	}
+	return nil
+}
+
+func validateResourceIdentity(properties map[string]any, context, kindName string) error {
+	apiVersion, err := mapField(properties, "apiVersion")
+	if err != nil {
+		return err
+	}
+	kind, err := mapField(properties, "kind")
+	if err != nil {
+		return err
+	}
+	if apiVersion["type"] != "string" || apiVersion["const"] != "v1alpha1" ||
+		kind["type"] != "string" || kind["const"] != kindName {
+		return fmt.Errorf("%s identity contract drifted", context)
+	}
+	return nil
+}
+
+func validateResourceExamples(schemas map[string]any) error {
+	type exampleNode struct {
+		kind        string
+		workspaceID string
+	}
+	seen := make(map[string]exampleNode, len(resourceSchemaContracts))
+	for _, contract := range resourceSchemaContracts {
+		schema, err := mapField(schemas, contract.kind)
+		if err != nil {
+			return err
+		}
+		example, err := mapField(schema, "example")
+		if err != nil {
+			return fmt.Errorf("%s example: %w", contract.kind, err)
+		}
+		if !mapKeySetEquals(example, []string{"apiVersion", "kind", "metadata", "spec", "status"}) ||
+			example["apiVersion"] != "v1alpha1" || example["kind"] != contract.kind {
+			return fmt.Errorf("%s example envelope drifted", contract.kind)
+		}
+		metadata, err := mapField(example, "metadata")
+		if err != nil {
+			return fmt.Errorf("%s example metadata: %w", contract.kind, err)
+		}
+		metadataKeys := []string{
+			"id", "workspaceId", "displayName", "labels", "generation", "resourceVersion", "createdAt", "updatedAt",
+		}
+		if contract.parentKind != "" {
+			metadataKeys = append(metadataKeys, "parent")
+		}
+		if !mapKeySetEquals(metadata, metadataKeys) || !numberEquals(metadata["generation"], "1") {
+			return fmt.Errorf("%s example metadata shape drifted", contract.kind)
+		}
+		id, idOK := metadata["id"].(string)
+		workspaceID, workspaceOK := metadata["workspaceId"].(string)
+		displayName, displayNameOK := metadata["displayName"].(string)
+		resourceVersion, versionOK := metadata["resourceVersion"].(string)
+		createdAt, createdOK := metadata["createdAt"].(string)
+		updatedAt, updatedOK := metadata["updatedAt"].(string)
+		if !idOK || id == "" || !workspaceOK || workspaceID == "" ||
+			!displayNameOK || displayName == "" || !versionOK || resourceVersion == "" ||
+			!createdOK || !updatedOK || !validTimestamp(createdAt) || !validTimestamp(updatedAt) {
+			return fmt.Errorf("%s example metadata values drifted", contract.kind)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return fmt.Errorf("%s example duplicates resource ID %s", contract.kind, id)
+		}
+		if contract.parentKind == "" {
+			if id != workspaceID {
+				return errors.New("workspace example workspaceId must equal its id")
+			}
+		} else {
+			parentID, ok := metadata["parent"].(string)
+			if !ok || parentID == "" {
+				return fmt.Errorf("%s example parent is missing", contract.kind)
+			}
+			parent, exists := seen[parentID]
+			if !exists {
+				return fmt.Errorf("%s example parent is orphaned or cyclic", contract.kind)
+			}
+			if parent.kind != contract.parentKind {
+				return fmt.Errorf("%s example parent kind must be %s", contract.kind, contract.parentKind)
+			}
+			if parent.workspaceID != workspaceID {
+				return fmt.Errorf("%s example crosses workspace ownership", contract.kind)
+			}
+		}
+		spec, err := mapField(example, "spec")
+		if err != nil {
+			return err
+		}
+		if contract.specIsEmpty {
+			if len(spec) != 0 {
+				return fmt.Errorf("%s example spec must be empty", contract.kind)
+			}
+		} else if len(spec) != 1 || spec["suspendReconciliation"] != false {
+			return errors.New("workspace example spec drifted")
+		}
+		status, err := mapField(example, "status")
+		if err != nil {
+			return err
+		}
+		conditions, conditionsOK := status["conditions"].([]any)
+		if !mapKeySetEquals(status, []string{"observedGeneration", "conditions"}) ||
+			!numberEquals(status["observedGeneration"], "0") || !conditionsOK || len(conditions) != 0 {
+			return fmt.Errorf("%s example status drifted", contract.kind)
+		}
+		seen[id] = exampleNode{kind: contract.kind, workspaceID: workspaceID}
 	}
 	return nil
 }
@@ -2717,7 +3411,7 @@ func validateWorkspaceReadSchema(schemas map[string]any) error {
 		return err
 	}
 	for property, target := range map[string]string{
-		"metadata": "ResourceMetadata",
+		"metadata": "RootResourceMetadata",
 		"spec":     "WorkspaceSpec",
 		"status":   "WorkspaceStatus",
 	} {
@@ -2734,6 +3428,7 @@ func workspaceExampleContract() map[string]any {
 		"kind":       "Workspace",
 		"metadata": map[string]any{
 			"id":          "wsp_01J00000000000000000000000",
+			"workspaceId": "wsp_01J00000000000000000000000",
 			"displayName": "payments",
 			"labels": map[string]any{
 				"environment": "production",

@@ -61,6 +61,7 @@ func (generation Generation) Int64() int64 { return int64(generation) }
 // Its fields are private so changes must use Resource transitions.
 type Metadata struct {
 	id              ID
+	workspaceID     ID
 	displayName     string
 	parent          *ID
 	labels          map[string]string
@@ -72,6 +73,10 @@ type Metadata struct {
 
 // ID returns the stable resource identity.
 func (metadata Metadata) ID() ID { return metadata.id }
+
+// WorkspaceID returns the immutable stable owner for this resource. A
+// Workspace owns itself; every descendant retains the root Workspace ID.
+func (metadata Metadata) WorkspaceID() ID { return metadata.workspaceID }
 
 // DisplayName returns the mutable human-readable name.
 func (metadata Metadata) DisplayName() string { return metadata.displayName }
@@ -108,12 +113,14 @@ type GenerationObservations interface {
 	ObservedGenerations() []int64
 }
 
-// CreateInput supplies server-issued identity/version values and already
-// admitted desired and observed state. Parent is nil only for a root resource.
+// CreateInput supplies server-issued identity, immutable workspace ownership,
+// version values, and already admitted desired and observed state. Parent is
+// nil only for a root resource.
 type CreateInput[Spec any, Status GenerationObservations] struct {
 	APIVersion      string
 	Kind            string
 	ID              string
+	WorkspaceID     string
 	DisplayName     string
 	Parent          *ID
 	Labels          map[string]string
@@ -149,6 +156,10 @@ func New[Spec any, Status GenerationObservations](input CreateInput[Spec, Status
 		return zero, err
 	}
 	id, err := validateID(input.ID, "metadata.id")
+	if err != nil {
+		return zero, err
+	}
+	workspaceID, err := validateID(input.WorkspaceID, "metadata.workspaceId")
 	if err != nil {
 		return zero, err
 	}
@@ -188,6 +199,7 @@ func New[Spec any, Status GenerationObservations](input CreateInput[Spec, Status
 		kind:       input.Kind,
 		metadata: Metadata{
 			id:              id,
+			workspaceID:     workspaceID,
 			displayName:     input.DisplayName,
 			parent:          parent,
 			labels:          labels,
@@ -393,6 +405,12 @@ func validateID(value, field string) (ID, error) {
 		return "", fmt.Errorf("%s must be a 16..128 character opaque ID", field)
 	}
 	return ID(value), nil
+}
+
+// ParseID validates and returns an opaque resource identifier for domain
+// boundaries that receive an already issued ID.
+func ParseID(value string) (ID, error) {
+	return validateID(value, "resource ID")
 }
 
 func validateDisplayName(value string) error {
