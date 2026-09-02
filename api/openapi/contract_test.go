@@ -257,6 +257,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: `operationId "replaceWorkspaceStatus" observed-generation upper bound drifted`,
 		},
 		{
+			name: "status condition generation pointer template drifts",
+			mutate: func(root map[string]any) {
+				upperBound := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "x-veer-observed-generation-upper-bound")
+				upperBound["conditionObservedGenerationPointerTemplate"] = "/status/conditions/0/observedGeneration"
+			},
+			message: `operationId "replaceWorkspaceStatus" observed-generation upper bound drifted`,
+		},
+		{
 			name: "status response exceeds non-read contract",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "responses")
@@ -1650,6 +1658,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(response, "x-veer-retry-after-body-pointer")
 			},
 			message: "error response Throttled Retry-After body binding drifted",
+		},
+		{
+			name: "success response declares retry body binding",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "Workspace")
+				response["x-veer-retry-after-body-pointer"] = "/retryAfterSeconds"
+			},
+			message: `uses unreviewed extension "x-veer-retry-after-body-pointer"`,
 		},
 	}
 

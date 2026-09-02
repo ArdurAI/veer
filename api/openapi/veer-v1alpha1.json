@@ -443,6 +443,7 @@
         },
         "x-veer-observed-generation-upper-bound": {
           "observedGenerationPointer": "/status/observedGeneration",
+          "conditionObservedGenerationPointerTemplate": "/status/conditions/{index}/observedGeneration",
           "resourceGenerationPointer": "/metadata/generation"
         },
         "parameters": [
@@ -1555,6 +1556,7 @@
         "x-veer-maximum-json-bytes": 262144,
         "x-veer-observed-generation-upper-bound": {
           "observedGenerationPointer": "/status/observedGeneration",
+          "conditionObservedGenerationPointerTemplate": "/status/conditions/{index}/observedGeneration",
           "resourceGenerationPointer": "/metadata/generation"
         },
         "required": [

@@ -216,18 +216,19 @@ desired-spec change racing a status write changes the ETag; the stale status
 writer receives `412` and must reload, confirm its observed generation is still
 current, and retry through the same bounded status schema.
 
-An observation may describe the current generation or an older generation, but
-never a future generation. The Workspace schema's
+An outer status or individual condition observation may describe the current
+generation or an older generation, but never a future generation. The Workspace schema's
 `x-veer-observed-generation-upper-bound` compares `/status/observedGeneration`
-with `/metadata/generation` in the same representation. On
+and every `/status/conditions/{index}/observedGeneration` with
+`/metadata/generation` in the same representation. On
 `replaceWorkspaceStatus`, the same pointers resolve respectively against the
 request body and the current addressed Workspace selected by `If-Match`; the
 comparison is made in the same atomic precondition and persistence decision.
 `x-veer-request-response-body-binding` also requires the successful receipt's
 `/observedGeneration` to equal the submitted
 `/status/observedGeneration`, including on idempotent replay. A future
-observation is a `400 validation-failed` at `/status/observedGeneration`; a
-stale resource version remains `412`.
+outer or condition observation is a `400 validation-failed` at its exact field
+pointer; a stale resource version remains `412`.
 
 Every point-resource `GET` and successful status response returns a strong
 `ETag` containing the opaque resource version. Replacement, status, and delete

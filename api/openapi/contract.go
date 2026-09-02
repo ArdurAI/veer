@@ -489,9 +489,11 @@ func isReviewedExtension(path, name string) bool {
 		"x-veer-location-operation-id-pointer",
 		"x-veer-request-id-body-pointer",
 		"x-veer-required-header-sets",
-		"x-veer-required-headers",
-		"x-veer-retry-after-body-pointer":
+		"x-veer-required-headers":
 		return isResponseComponentPath(path)
+	case "x-veer-retry-after-body-pointer":
+		return path == "$/components/responses/Throttled" ||
+			path == "$/components/responses/Unavailable"
 	case "x-veer-free-form-map":
 		return true
 	case "x-veer-instance-request-id-template":
@@ -1034,8 +1036,10 @@ func validateOperationGenerationContracts(operationID string, operation map[stri
 func validObservedGenerationUpperBound(raw any) bool {
 	contract, ok := raw.(map[string]any)
 	return ok && mapKeySetEquals(contract, []string{
-		"observedGenerationPointer", "resourceGenerationPointer",
+		"conditionObservedGenerationPointerTemplate", "observedGenerationPointer",
+		"resourceGenerationPointer",
 	}) && contract["observedGenerationPointer"] == "/status/observedGeneration" &&
+		contract["conditionObservedGenerationPointerTemplate"] == "/status/conditions/{index}/observedGeneration" &&
 		contract["resourceGenerationPointer"] == "/metadata/generation"
 }
 
