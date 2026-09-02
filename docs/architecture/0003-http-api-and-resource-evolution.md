@@ -155,7 +155,9 @@ with `400 validation-failed` and an RFC 6901 JSON Pointer. This prevents a
 misspelling or version mismatch from becoming silently ignored intent.
 Free-form objects exist only where the schema opts in with a bounded value
 schema, property count, key grammar, and size limit; `metadata.labels` is the
-only such object in the baseline.
+only such object in the baseline. The semantic verifier recognizes
+`x-veer-free-form-map` only at the canonical `Labels` schema path; copying the
+marker and schema-valued `additionalProperties` to any other object is rejected.
 
 Clients must ignore an unknown response field while preserving every field
 they forward without interpretation. A client that reads and writes a resource
@@ -284,7 +286,7 @@ All error bodies use `application/problem+json`. The five RFC 9457 members are
 used as follows:
 
 - `type` is a stable `urn:veer:problem:<code>` identifier;
-- `title` is a stable short summary for that type;
+- `title` is a stable short summary fixed by the response-specific type;
 - `status` repeats the HTTP status;
 - `detail`, when present, is a bounded safe explanation for this occurrence;
   and
@@ -296,6 +298,12 @@ optional `retryAfterSeconds`. Field errors contain an RFC 6901 JSON Pointer,
 stable code, and safe message. Raw tokens, credentials, SQL, stack traces,
 provider bodies, connection strings, internal hostnames, and cross-workspace
 identifiers are forbidden.
+
+Field pointers accept arbitrary RFC 6901 member names, including spaces and
+Unicode, while requiring `~0` and `~1` escapes for literal tilde and slash. A
+pointer is capped at 96 code points and its encoded JSON string, including
+quotes and escape expansion, is capped at 98 bytes. The server omits the
+optional field violation if the exact pointer cannot fit that byte budget.
 
 A problem response contains at most one field violation. Its pointer, code,
 and message are capped at 96, 32, and 96 characters respectively; the
@@ -334,6 +342,11 @@ The baseline includes validated examples for every issue-required class:
 also carries `Retry-After`. A server under resource-exhaustion attack may drop
 work before constructing a problem body; RFC 6585 does not require a `429`
 response when doing so would amplify the attack.
+
+The `rate-limited` and `unavailable` problem refinements require
+`retryAfterSeconds` between 1 and 86,400. Their response components declare
+`x-veer-retry-after-body-pointer: /retryAfterSeconds`; the decimal Retry-After
+header and body integer therefore carry the same bounded delay.
 
 `Veer-Request-Id` is optional on requests, validated before use, at most 64
 characters, and echoed on every response. The server generates a value when it

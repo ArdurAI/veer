@@ -790,6 +790,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "FieldViolation.message bound drifted",
 		},
 		{
+			name: "field pointer encoded byte ceiling removed",
+			mutate: func(root map[string]any) {
+				field := nestedMap(t, root, "components", "schemas", "FieldViolation", "properties", "field")
+				delete(field, "x-veer-maximum-encoded-json-bytes")
+			},
+			message: "FieldViolation primitive contract drifted",
+		},
+		{
+			name: "field pointer grammar excludes unknown member names",
+			mutate: func(root map[string]any) {
+				field := nestedMap(t, root, "components", "schemas", "FieldViolation", "properties", "field")
+				field["pattern"] = "^(/([A-Za-z0-9._:-]|~0|~1)*)+$"
+			},
+			message: "FieldViolation primitive contract drifted",
+		},
+		{
 			name: "problem encoded byte ceiling removed",
 			mutate: func(root map[string]any) {
 				problem := nestedMap(t, root, "components", "schemas", "Problem")
@@ -812,6 +828,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(problem, "x-veer-instance-request-id-template")
 			},
 			message: "problem instance/request-ID binding drifted",
+		},
+		{
+			name: "problem retry bound removed",
+			mutate: func(root map[string]any) {
+				retry := nestedMap(t, root, "components", "schemas", "Problem", "properties", "retryAfterSeconds")
+				delete(retry, "maximum")
+			},
+			message: "problem.retryAfterSeconds contract drifted",
 		},
 		{
 			name: "problem diagnostic text admits escaping Unicode",
@@ -867,7 +891,16 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				labels := nestedMap(t, root, "components", "schemas", "Labels")
 				delete(labels, "x-veer-free-form-map")
 			},
-			message: "map schema lacks x-veer-free-form-map",
+			message: "is not the reviewed free-form Labels map",
+		},
+		{
+			name: "request schema opts into free-form fields",
+			mutate: func(root map[string]any) {
+				create := nestedMap(t, root, "components", "schemas", "WorkspaceCreate")
+				create["x-veer-free-form-map"] = true
+				create["additionalProperties"] = map[string]any{"type": "string", "maxLength": json.Number("64")}
+			},
+			message: "is not the reviewed free-form Labels map",
 		},
 		{
 			name: "labels property count bound removed",
@@ -920,6 +953,27 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				property["const"] = json.Number("412")
 			},
 			message: "IdempotencyConflictProblem constants drifted for response Conflict",
+		},
+		{
+			name: "conflict response title schema mismatched",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "IdempotencyConflictProblem")
+				allOf := schema["allOf"].([]any)
+				refinement := allOf[1].(map[string]any)
+				title := nestedMap(t, refinement, "properties", "title")
+				title["const"] = "Internal failure"
+			},
+			message: "IdempotencyConflictProblem constants drifted for response Conflict",
+		},
+		{
+			name: "throttled response makes retry delay optional",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "ThrottledProblem")
+				allOf := schema["allOf"].([]any)
+				refinement := allOf[1].(map[string]any)
+				delete(refinement, "required")
+			},
+			message: "ThrottledProblem does not refine Problem",
 		},
 		{
 			name: "conflict response drops lifecycle variant",
@@ -986,6 +1040,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			},
 			message: "error response Conflict request-ID body binding drifted",
 		},
+		{
+			name: "retry header body binding removed",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "Throttled")
+				delete(response, "x-veer-retry-after-body-pointer")
+			},
+			message: "error response Throttled Retry-After body binding drifted",
+		},
 	}
 
 	for _, test := range tests {
@@ -1041,6 +1103,42 @@ func TestMaximumProblemEncoding(t *testing.T) {
 	}
 	if len(encoded) > 1024 {
 		t.Fatalf("maximal problem encoding is %d bytes, want at most 1024", len(encoded))
+	}
+}
+
+func TestFieldPointerValues(t *testing.T) {
+	t.Parallel()
+	pointer := regexp.MustCompile(fieldPointerPattern)
+	tests := []struct {
+		value string
+		valid bool
+	}{
+		{value: "/bad key", valid: true},
+		{value: "/☃", valid: true},
+		{value: "/a~1b", valid: true},
+		{value: "/~0", valid: true},
+		{value: "/", valid: true},
+		{value: "", valid: false},
+		{value: "bad", valid: false},
+		{value: "/bad~2escape", valid: false},
+		{value: "/bad~", valid: false},
+	}
+	for _, test := range tests {
+		if got := pointer.MatchString(test.value); got != test.valid {
+			t.Errorf("field pointer %q validity = %t, want %t", test.value, got, test.valid)
+		}
+	}
+
+	withinBudget, err := json.Marshal("/" + strings.Repeat("☃", 31))
+	if err != nil {
+		t.Fatalf("json.Marshal(withinBudget) error = %v", err)
+	}
+	overBudget, err := json.Marshal("/" + strings.Repeat("☃", 32))
+	if err != nil {
+		t.Fatalf("json.Marshal(overBudget) error = %v", err)
+	}
+	if len(withinBudget) > 98 || len(overBudget) <= 98 {
+		t.Fatalf("encoded pointer sizes = %d and %d, want <= 98 then > 98", len(withinBudget), len(overBudget))
 	}
 }
 

@@ -1169,6 +1169,7 @@
       "Throttled": {
         "description": "The caller or scoped admission budget is temporarily exhausted.",
         "x-veer-request-id-body-pointer": "/requestId",
+        "x-veer-retry-after-body-pointer": "/retryAfterSeconds",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "Retry-After"
@@ -1221,6 +1222,7 @@
       "Unavailable": {
         "description": "A system-wide safety or availability boundary temporarily prevents service.",
         "x-veer-request-id-body-pointer": "/requestId",
+        "x-veer-retry-after-body-pointer": "/retryAfterSeconds",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "Retry-After"
@@ -1781,12 +1783,13 @@
           "message"
         ],
         "properties": {
-          "field": {
-            "type": "string",
-            "example": "/spec/unknownField",
-            "minLength": 1,
-            "maxLength": 96,
-            "pattern": "^(/([A-Za-z0-9._:-]|~0|~1)*)+$"
+            "field": {
+              "type": "string",
+              "example": "/spec/unknownField",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^(/([^~/]|~0|~1)*)+$",
+              "x-veer-maximum-encoded-json-bytes": 98
           },
           "code": {
             "type": "string",
@@ -1891,6 +1894,9 @@
               "type": {
                 "const": "urn:veer:problem:validation-failed"
               },
+              "title": {
+                "const": "Request validation failed"
+              },
               "status": {
                 "const": 400
               },
@@ -1912,6 +1918,9 @@
             "properties": {
               "type": {
                 "const": "urn:veer:problem:authentication-required"
+              },
+              "title": {
+                "const": "Authentication required"
               },
               "status": {
                 "const": 401
@@ -1935,6 +1944,9 @@
               "type": {
                 "const": "urn:veer:problem:authorization-denied"
               },
+              "title": {
+                "const": "Authorization denied"
+              },
               "status": {
                 "const": 403
               },
@@ -1956,6 +1968,9 @@
             "properties": {
               "type": {
                 "const": "urn:veer:problem:not-found"
+              },
+              "title": {
+                "const": "Resource not found"
               },
               "status": {
                 "const": 404
@@ -1996,6 +2011,9 @@
               "type": {
                 "const": "urn:veer:problem:idempotency-key-reused"
               },
+              "title": {
+                "const": "Request conflicts with a prior mutation"
+              },
               "status": {
                 "const": 409
               },
@@ -2017,6 +2035,9 @@
             "properties": {
               "type": {
                 "const": "urn:veer:problem:uniqueness-conflict"
+              },
+              "title": {
+                "const": "Resource uniqueness conflict"
               },
               "status": {
                 "const": 409
@@ -2040,6 +2061,9 @@
               "type": {
                 "const": "urn:veer:problem:lifecycle-conflict"
               },
+              "title": {
+                "const": "Resource lifecycle conflict"
+              },
               "status": {
                 "const": 409
               },
@@ -2061,6 +2085,9 @@
             "properties": {
               "type": {
                 "const": "urn:veer:problem:policy-conflict"
+              },
+              "title": {
+                "const": "Resource policy conflict"
               },
               "status": {
                 "const": 409
@@ -2084,6 +2111,9 @@
               "type": {
                 "const": "urn:veer:problem:precondition-failed"
               },
+              "title": {
+                "const": "Resource version is stale"
+              },
               "status": {
                 "const": 412
               },
@@ -2105,6 +2135,9 @@
             "properties": {
               "type": {
                 "const": "urn:veer:problem:request-too-large"
+              },
+              "title": {
+                "const": "Request body is too large"
               },
               "status": {
                 "const": 413
@@ -2128,6 +2161,9 @@
               "type": {
                 "const": "urn:veer:problem:unsupported-media-type"
               },
+              "title": {
+                "const": "Unsupported request media type"
+              },
               "status": {
                 "const": 415
               },
@@ -2150,6 +2186,9 @@
               "type": {
                 "const": "urn:veer:problem:precondition-required"
               },
+              "title": {
+                "const": "Mutation precondition required"
+              },
               "status": {
                 "const": 428
               },
@@ -2168,9 +2207,15 @@
           },
           {
             "x-veer-refinement": true,
+            "required": [
+              "retryAfterSeconds"
+            ],
             "properties": {
               "type": {
                 "const": "urn:veer:problem:rate-limited"
+              },
+              "title": {
+                "const": "Request rate limited"
               },
               "status": {
                 "const": 429
@@ -2194,6 +2239,9 @@
               "type": {
                 "const": "urn:veer:problem:internal-failure"
               },
+              "title": {
+                "const": "Internal failure"
+              },
               "status": {
                 "const": 500
               },
@@ -2212,9 +2260,15 @@
           },
           {
             "x-veer-refinement": true,
+            "required": [
+              "retryAfterSeconds"
+            ],
             "properties": {
               "type": {
                 "const": "urn:veer:problem:unavailable"
+              },
+              "title": {
+                "const": "Service temporarily unavailable"
               },
               "status": {
                 "const": 503

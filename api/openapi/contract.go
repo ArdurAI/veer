@@ -19,6 +19,7 @@ const (
 	maxContractBytes       = 1 << 20
 	maxJSONDepth           = 64
 	maxJSONNodes           = 50000
+	fieldPointerPattern    = `^(/([^~/]|~0|~1)*)+$`
 	safeProblemTextPattern = `^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$`
 	sunsetPattern          = `^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (0[1-9]|[12][0-9]|3[01]) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] GMT$`
 	timestampPattern       = `^((\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|02-(0[1-9]|1\d|2[0-8])))|((\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$`
@@ -32,14 +33,18 @@ type operationContract struct {
 }
 
 type problemVariant struct {
-	schema string
-	code   string
+	schema   string
+	code     string
+	title    string
+	required []string
 }
 
 type problemContract struct {
 	schema   string
 	status   string
 	code     string
+	title    string
+	required []string
 	variants []problemVariant
 }
 
@@ -86,27 +91,58 @@ var operationContracts = map[string]operationContract{
 }
 
 var problemContracts = map[string]problemContract{
-	"ValidationFailure":      {schema: "ValidationProblem", status: "400", code: "validation-failed"},
-	"AuthenticationRequired": {schema: "AuthenticationProblem", status: "401", code: "authentication-required"},
-	"AuthorizationDenied":    {schema: "AuthorizationProblem", status: "403", code: "authorization-denied"},
-	"NotFound":               {schema: "NotFoundProblem", status: "404", code: "not-found"},
+	"ValidationFailure": {
+		schema: "ValidationProblem", status: "400", code: "validation-failed", title: "Request validation failed",
+	},
+	"AuthenticationRequired": {
+		schema: "AuthenticationProblem", status: "401", code: "authentication-required", title: "Authentication required",
+	},
+	"AuthorizationDenied": {
+		schema: "AuthorizationProblem", status: "403", code: "authorization-denied", title: "Authorization denied",
+	},
+	"NotFound": {schema: "NotFoundProblem", status: "404", code: "not-found", title: "Resource not found"},
 	"Conflict": {
 		schema: "ConflictProblem",
 		status: "409",
 		variants: []problemVariant{
-			{schema: "IdempotencyConflictProblem", code: "idempotency-key-reused"},
-			{schema: "UniquenessConflictProblem", code: "uniqueness-conflict"},
-			{schema: "LifecycleConflictProblem", code: "lifecycle-conflict"},
-			{schema: "PolicyConflictProblem", code: "policy-conflict"},
+			{
+				schema: "IdempotencyConflictProblem", code: "idempotency-key-reused",
+				title: "Request conflicts with a prior mutation",
+			},
+			{
+				schema: "UniquenessConflictProblem", code: "uniqueness-conflict", title: "Resource uniqueness conflict",
+			},
+			{
+				schema: "LifecycleConflictProblem", code: "lifecycle-conflict", title: "Resource lifecycle conflict",
+			},
+			{schema: "PolicyConflictProblem", code: "policy-conflict", title: "Resource policy conflict"},
 		},
 	},
-	"PreconditionFailed":   {schema: "PreconditionFailedProblem", status: "412", code: "precondition-failed"},
-	"RequestTooLarge":      {schema: "RequestTooLargeProblem", status: "413", code: "request-too-large"},
-	"UnsupportedMediaType": {schema: "UnsupportedMediaTypeProblem", status: "415", code: "unsupported-media-type"},
-	"PreconditionRequired": {schema: "PreconditionRequiredProblem", status: "428", code: "precondition-required"},
-	"Throttled":            {schema: "ThrottledProblem", status: "429", code: "rate-limited"},
-	"InternalFailure":      {schema: "InternalFailureProblem", status: "500", code: "internal-failure"},
-	"Unavailable":          {schema: "UnavailableProblem", status: "503", code: "unavailable"},
+	"PreconditionFailed": {
+		schema: "PreconditionFailedProblem", status: "412", code: "precondition-failed", title: "Resource version is stale",
+	},
+	"RequestTooLarge": {
+		schema: "RequestTooLargeProblem", status: "413", code: "request-too-large", title: "Request body is too large",
+	},
+	"UnsupportedMediaType": {
+		schema: "UnsupportedMediaTypeProblem", status: "415", code: "unsupported-media-type",
+		title: "Unsupported request media type",
+	},
+	"PreconditionRequired": {
+		schema: "PreconditionRequiredProblem", status: "428", code: "precondition-required",
+		title: "Mutation precondition required",
+	},
+	"Throttled": {
+		schema: "ThrottledProblem", status: "429", code: "rate-limited", title: "Request rate limited",
+		required: []string{"retryAfterSeconds"},
+	},
+	"InternalFailure": {
+		schema: "InternalFailureProblem", status: "500", code: "internal-failure", title: "Internal failure",
+	},
+	"Unavailable": {
+		schema: "UnavailableProblem", status: "503", code: "unavailable", title: "Service temporarily unavailable",
+		required: []string{"retryAfterSeconds"},
+	},
 }
 
 var httpMethods = map[string]bool{
@@ -303,6 +339,10 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 
 	switch typed := value.(type) {
 	case map[string]any:
+		if _, markedFreeForm := typed["x-veer-free-form-map"]; markedFreeForm &&
+			!isReviewedFreeFormMap(path, typed) {
+			return fmt.Errorf("%s is not the reviewed free-form Labels map", path)
+		}
 		if rawProperties, hasProperties := typed["properties"]; hasProperties {
 			if typed["type"] != "object" && !isReviewedProblemRefinement(path, typed) {
 				return fmt.Errorf("%s schema with properties must declare type object", path)
@@ -330,8 +370,8 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 					return fmt.Errorf("%s permits unconstrained additional properties", path)
 				}
 			} else {
-				if typed["x-veer-free-form-map"] != true {
-					return fmt.Errorf("%s map schema lacks x-veer-free-form-map", path)
+				if !isReviewedFreeFormMap(path, typed) {
+					return fmt.Errorf("%s is not the reviewed free-form Labels map", path)
 				}
 				if _, schema := additional.(map[string]any); !schema {
 					return fmt.Errorf("%s map additionalProperties is not a schema", path)
@@ -382,11 +422,17 @@ func isReviewedProblemRefinement(path string, schema map[string]any) bool {
 	return false
 }
 
+func isReviewedFreeFormMap(path string, schema map[string]any) bool {
+	return path == "$/components/schemas/Labels" && schema["x-veer-free-form-map"] == true
+}
+
 func problemVariantsFor(contract problemContract) []problemVariant {
 	if len(contract.variants) > 0 {
 		return contract.variants
 	}
-	return []problemVariant{{schema: contract.schema, code: contract.code}}
+	return []problemVariant{{
+		schema: contract.schema, code: contract.code, title: contract.title, required: contract.required,
+	}}
 }
 
 func validateRoot(root map[string]any) error {
@@ -1164,6 +1210,10 @@ func validateResponses(responses map[string]any) error {
 		"StatusUpdated": "/resourceVersion",
 		"Workspace":     "/metadata/resourceVersion",
 	}
+	retryAfterPointers := map[string]string{
+		"Throttled":   "/retryAfterSeconds",
+		"Unavailable": "/retryAfterSeconds",
+	}
 
 	for name, raw := range responses {
 		if !successNames[name] && !errorNames[name] {
@@ -1258,6 +1308,13 @@ func validateResponses(responses map[string]any) error {
 			}
 			if response["x-veer-request-id-body-pointer"] != "/requestId" {
 				return fmt.Errorf("error response %s request-ID body binding drifted", name)
+			}
+			if pointer, mustBind := retryAfterPointers[name]; mustBind {
+				if response["x-veer-retry-after-body-pointer"] != pointer {
+					return fmt.Errorf("error response %s Retry-After body binding drifted", name)
+				}
+			} else if _, exists := response["x-veer-retry-after-body-pointer"]; exists {
+				return fmt.Errorf("error response %s declares an unexpected Retry-After binding", name)
 			}
 			for _, forbidden := range []string{
 				"x-veer-etag-resource-version-pointer",
@@ -1745,6 +1802,15 @@ func validateSchemas(schemas map[string]any) error {
 	if err := requireReference(errorsProperty, "items", "#/components/schemas/FieldViolation"); err != nil {
 		return fmt.Errorf("problem.errors: %w", err)
 	}
+	retryAfterSeconds, err := mapField(problemProperties, "retryAfterSeconds")
+	if err != nil {
+		return err
+	}
+	if retryAfterSeconds["type"] != "integer" || retryAfterSeconds["format"] != "int32" ||
+		!numberEquals(retryAfterSeconds["minimum"], "1") ||
+		!numberEquals(retryAfterSeconds["maximum"], "86400") {
+		return errors.New("problem.retryAfterSeconds contract drifted")
+	}
 	fieldViolation, err := mapField(schemas, "FieldViolation")
 	if err != nil {
 		return err
@@ -1770,7 +1836,8 @@ func validateSchemas(schemas map[string]any) error {
 	fieldCode, _ := mapField(fieldProperties, "code")
 	fieldMessage, _ := mapField(fieldProperties, "message")
 	if field["type"] != "string" || !numberEquals(field["minLength"], "1") ||
-		field["pattern"] != "^(/([A-Za-z0-9._:-]|~0|~1)*)+$" ||
+		field["pattern"] != fieldPointerPattern ||
+		!numberEquals(field["x-veer-maximum-encoded-json-bytes"], "98") ||
 		fieldCode["type"] != "string" || !numberEquals(fieldCode["minLength"], "1") ||
 		fieldCode["pattern"] != "^[a-z][a-z0-9-]*$" ||
 		fieldMessage["type"] != "string" || fieldMessage["pattern"] != safeProblemTextPattern {
@@ -2052,18 +2119,33 @@ func validateProblemVariant(
 	}
 	base, baseOK := allOf[0].(map[string]any)
 	constraints, constraintsOK := allOf[1].(map[string]any)
+	wantConstraintFields := 2
+	if len(variant.required) > 0 {
+		wantConstraintFields = 3
+	}
 	if !baseOK || base["$ref"] != "#/components/schemas/Problem" || !constraintsOK ||
-		len(constraints) != 2 || constraints["x-veer-refinement"] != true {
+		len(constraints) != wantConstraintFields || constraints["x-veer-refinement"] != true {
 		return fmt.Errorf("%s does not refine Problem", variant.schema)
+	}
+	if len(variant.required) > 0 {
+		if !stringSetEquals(constraints["required"], variant.required) {
+			return fmt.Errorf("%s refinement required fields drifted", variant.schema)
+		}
+	} else if _, exists := constraints["required"]; exists {
+		return fmt.Errorf("%s declares unexpected refinement required fields", variant.schema)
 	}
 	properties, err := mapField(constraints, "properties")
 	if err != nil {
 		return fmt.Errorf("%s: %w", variant.schema, err)
 	}
-	if len(properties) != 3 {
-		return fmt.Errorf("%s must constrain exactly type, status, and code", variant.schema)
+	if len(properties) != 4 {
+		return fmt.Errorf("%s must constrain exactly type, title, status, and code", variant.schema)
 	}
 	problemType, err := mapField(properties, "type")
+	if err != nil {
+		return err
+	}
+	title, err := mapField(properties, "title")
 	if err != nil {
 		return err
 	}
@@ -2075,7 +2157,7 @@ func validateProblemVariant(
 	if err != nil {
 		return err
 	}
-	if problemType["const"] != "urn:veer:problem:"+variant.code ||
+	if problemType["const"] != "urn:veer:problem:"+variant.code || title["const"] != variant.title ||
 		!numberEquals(status["const"], statusCode) || code["const"] != variant.code {
 		return fmt.Errorf("%s constants drifted for response %s", variant.schema, responseName)
 	}
@@ -2094,14 +2176,15 @@ func validateExamples(root map[string]any) error {
 	type exampleContract struct {
 		status string
 		code   string
+		title  string
 	}
 	want := map[string]exampleContract{
-		"ValidationFailure":      {status: "400", code: "validation-failed"},
-		"AuthenticationRequired": {status: "401", code: "authentication-required"},
-		"AuthorizationDenied":    {status: "403", code: "authorization-denied"},
-		"Conflict":               {status: "409", code: "idempotency-key-reused"},
-		"Throttled":              {status: "429", code: "rate-limited"},
-		"InternalFailure":        {status: "500", code: "internal-failure"},
+		"ValidationFailure":      {status: "400", code: "validation-failed", title: "Request validation failed"},
+		"AuthenticationRequired": {status: "401", code: "authentication-required", title: "Authentication required"},
+		"AuthorizationDenied":    {status: "403", code: "authorization-denied", title: "Authorization denied"},
+		"Conflict":               {status: "409", code: "idempotency-key-reused", title: "Request conflicts with a prior mutation"},
+		"Throttled":              {status: "429", code: "rate-limited", title: "Request rate limited"},
+		"InternalFailure":        {status: "500", code: "internal-failure", title: "Internal failure"},
 	}
 	if len(examples) != len(want) {
 		return fmt.Errorf("expected %d canonical problem examples, got %d", len(want), len(examples))
@@ -2115,7 +2198,7 @@ func validateExamples(root map[string]any) error {
 		if err != nil {
 			return err
 		}
-		if err := validateProblemExample(name, value, expected.status, expected.code); err != nil {
+		if err := validateProblemExample(name, value, expected.status, expected.code, expected.title); err != nil {
 			return err
 		}
 	}
@@ -2125,12 +2208,12 @@ func validateExamples(root map[string]any) error {
 		return err
 	}
 	inline := map[string]exampleContract{
-		"NotFound":             {status: "404", code: "not-found"},
-		"PreconditionFailed":   {status: "412", code: "precondition-failed"},
-		"PreconditionRequired": {status: "428", code: "precondition-required"},
-		"RequestTooLarge":      {status: "413", code: "request-too-large"},
-		"UnsupportedMediaType": {status: "415", code: "unsupported-media-type"},
-		"Unavailable":          {status: "503", code: "unavailable"},
+		"NotFound":             {status: "404", code: "not-found", title: "Resource not found"},
+		"PreconditionFailed":   {status: "412", code: "precondition-failed", title: "Resource version is stale"},
+		"PreconditionRequired": {status: "428", code: "precondition-required", title: "Mutation precondition required"},
+		"RequestTooLarge":      {status: "413", code: "request-too-large", title: "Request body is too large"},
+		"UnsupportedMediaType": {status: "415", code: "unsupported-media-type", title: "Unsupported request media type"},
+		"Unavailable":          {status: "503", code: "unavailable", title: "Service temporarily unavailable"},
 	}
 	for name, expected := range inline {
 		response, err := mapField(responses, name)
@@ -2149,19 +2232,22 @@ func validateExamples(root map[string]any) error {
 		if err != nil {
 			return fmt.Errorf("inline example %s: %w", name, err)
 		}
-		if err := validateProblemExample(name, value, expected.status, expected.code); err != nil {
+		if err := validateProblemExample(name, value, expected.status, expected.code, expected.title); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateProblemExample(name string, value map[string]any, status, code string) error {
+func validateProblemExample(name string, value map[string]any, status, code, title string) error {
 	if !numberEquals(value["status"], status) || value["code"] != code {
 		return fmt.Errorf("example %s status or code drifted", name)
 	}
 	if value["type"] != "urn:veer:problem:"+code {
 		return fmt.Errorf("example %s type is not bound to its code", name)
+	}
+	if value["title"] != title {
+		return fmt.Errorf("example %s title drifted", name)
 	}
 	requestID, requestOK := value["requestId"].(string)
 	instance, instanceOK := value["instance"].(string)
