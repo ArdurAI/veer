@@ -33,6 +33,7 @@ func TestPropertyRenameNeverChangesStableIdentity(t *testing.T) {
 		beforeStatus, beforeStatusErr := initial.Status()
 		afterStatus, afterStatusErr := updated.Status()
 		return before.ID() == after.ID() &&
+			before.WorkspaceID() == after.WorkspaceID() &&
 			before.Generation() == after.Generation() &&
 			before.CreatedAt().Equal(after.CreatedAt()) &&
 			beforeParent == afterParent && beforePresent == afterPresent &&

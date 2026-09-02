@@ -53,6 +53,7 @@ type wireResource struct {
 
 type wireMetadata struct {
 	ID              string            `json:"id"`
+	WorkspaceID     string            `json:"workspaceId"`
 	DisplayName     string            `json:"displayName"`
 	Parent          *string           `json:"parent,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
@@ -72,6 +73,7 @@ type wireResourceInput struct {
 
 type wireMetadataInput struct {
 	ID              string                             `json:"id"`
+	WorkspaceID     string                             `json:"workspaceId"`
 	DisplayName     string                             `json:"displayName"`
 	Parent          nonNullOptional[string]            `json:"parent"`
 	Labels          nonNullOptional[map[string]string] `json:"labels"`
@@ -122,6 +124,9 @@ func marshalCanonical[Spec any, Status GenerationObservations](resource Resource
 	if _, err := validateID(resource.metadata.id.String(), "metadata.id"); err != nil {
 		return nil, err
 	}
+	if _, err := validateID(resource.metadata.workspaceID.String(), "metadata.workspaceId"); err != nil {
+		return nil, err
+	}
 	if err := validateDisplayName(resource.metadata.displayName); err != nil {
 		return nil, err
 	}
@@ -154,6 +159,7 @@ func marshalCanonical[Spec any, Status GenerationObservations](resource Resource
 		Kind:       resource.kind,
 		Metadata: wireMetadata{
 			ID:              resource.metadata.id.String(),
+			WorkspaceID:     resource.metadata.workspaceID.String(),
 			DisplayName:     resource.metadata.displayName,
 			Parent:          parent,
 			Labels:          cloneLabels(resource.metadata.labels),
@@ -197,6 +203,10 @@ func UnmarshalCanonical[Spec any, Status GenerationObservations](data []byte) (R
 	}
 
 	id, err := validateID(wire.Metadata.ID, "metadata.id")
+	if err != nil {
+		return zero, err
+	}
+	workspaceID, err := validateID(wire.Metadata.WorkspaceID, "metadata.workspaceId")
 	if err != nil {
 		return zero, err
 	}
@@ -258,6 +268,7 @@ func UnmarshalCanonical[Spec any, Status GenerationObservations](data []byte) (R
 		kind:       wire.Kind,
 		metadata: Metadata{
 			id:              id,
+			workspaceID:     workspaceID,
 			displayName:     wire.Metadata.DisplayName,
 			parent:          parent,
 			labels:          labels,
@@ -435,6 +446,7 @@ func decodeWireResource(data []byte) (wireResource, error) {
 		Kind:       input.Kind,
 		Metadata: wireMetadata{
 			ID:              input.Metadata.ID,
+			WorkspaceID:     input.Metadata.WorkspaceID,
 			DisplayName:     input.Metadata.DisplayName,
 			Generation:      input.Metadata.Generation,
 			ResourceVersion: input.Metadata.ResourceVersion,

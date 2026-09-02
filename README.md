@@ -73,6 +73,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [Alpha implementation stack](docs/architecture/0002-alpha-implementation-stack.md)
 - [HTTP API and resource evolution conventions](docs/architecture/0003-http-api-and-resource-evolution.md)
 - [Common resource envelope](docs/architecture/0004-common-resource-envelope.md)
+- [Resource hierarchy and ownership](docs/architecture/0005-resource-hierarchy-and-ownership.md)
 - [OpenAPI v1alpha1 baseline](api/openapi/veer-v1alpha1.json)
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)

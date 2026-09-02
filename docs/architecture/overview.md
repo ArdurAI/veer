@@ -41,13 +41,18 @@ Workspace
 - An **Application** groups components that ship and operate together.
 - A **Component** declares a workload or managed-service dependency.
 
-Resources use stable identifiers and explicit API versions. Display names are
-mutable metadata and must never serve as authorization keys.
+Resources use stable identifiers and explicit API versions. Every resource
+retains an immutable, server-derived Workspace ID; children also retain their
+immediate parent's stable ID. Display names are mutable, need not be unique,
+and must never serve as authorization keys.
 
-The implemented identity, parent, generation, resource-version, lifecycle,
-transition, and deterministic serialization rules are fixed by
-[ADR 0004](0004-common-resource-envelope.md). Concrete hierarchy validation
-remains owned by the resource schemas and admission pipeline.
+The identity, generation, resource-version, transition, and deterministic
+serialization rules are fixed by
+[ADR 0004](0004-common-resource-envelope.md). The four-kind registry,
+server-derived ownership, graph validation, immutable placement, and RESTRICT
+deletion rules are fixed by
+[ADR 0005](0005-resource-hierarchy-and-ownership.md). OpenAPI validates each
+document; the domain hierarchy validates complete cross-resource graphs.
 
 ## Reconciliation contract
 

@@ -74,7 +74,7 @@ with an instruction to rerun bootstrap.
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
-| `./hack/dev api` | Validate the OpenAPI document and Veer-specific HTTP and evolution invariants without remote references. |
+| `./hack/dev api` | Validate OpenAPI, hierarchy/schema examples, and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify checked-in architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
 
@@ -104,9 +104,11 @@ variables or credentials.
   with `GOENV=off`, `GOWORK=off`, `GOPROXY=off`, `GOVCS=*:off`, and
   `GOTOOLCHAIN=local`.
 - API validation runs Vacuum with a repository-owned configuration, update
-  checks disabled, remote references disabled, and HTTP, private-network, and
-  insecure TLS access denied. Veer-specific contract tests use only the Go
-  standard library and bound document size, nesting, and traversal work.
+  checks disabled, remote references disabled, extension-reference traversal
+  enabled, and HTTP, private-network, and insecure TLS access denied. The
+  pinned binary validates in-schema positive examples; Veer's standard-library
+  semantic tests exercise the bounded negative hierarchy and schema mutations
+  and also bound document size, nesting, and traversal work.
 - Bootstrap clears `TAR_OPTIONS` and `GZIP`; lint clears `SHELLCHECK_OPTS` and
   passes `--norc`. Archive behavior and ShellCheck policy therefore do not
   inherit user or CI defaults.
