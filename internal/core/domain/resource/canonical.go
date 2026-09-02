@@ -142,7 +142,7 @@ func marshalCanonical[Spec any, Status GenerationObservations](resource Resource
 	if _, err := validateResourceVersion(resource.metadata.resourceVersion.String()); err != nil {
 		return nil, err
 	}
-	if resource.metadata.createdAt.IsZero() || resource.metadata.updatedAt.Before(resource.metadata.createdAt) {
+	if resource.metadata.updatedAt.Before(resource.metadata.createdAt) {
 		return nil, errors.New("resource timestamps are invalid")
 	}
 	if len(resource.spec) == 0 || len(resource.status) == 0 {

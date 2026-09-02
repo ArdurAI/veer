@@ -29,7 +29,9 @@ The initial hierarchy is intentionally small:
 
 ```text
 Workspace
+├── Policy
 └── Environment
+    ├── ProviderConnection
     └── Application
         └── Component
 ```
@@ -40,6 +42,10 @@ Workspace
   and lifecycle policy.
 - An **Application** groups components that ship and operate together.
 - A **Component** declares a workload or managed-service dependency.
+- A **Policy** is a Workspace-owned control resource whose authorization
+  language is defined separately.
+- A **ProviderConnection** is an Environment-owned, reference-only boundary
+  for provider authority, capabilities, and quota observations.
 
 Resources use stable identifiers and explicit API versions. Every resource
 retains an immutable, server-derived Workspace ID; children also retain their
@@ -48,11 +54,14 @@ and must never serve as authorization keys.
 
 The identity, generation, resource-version, transition, and deterministic
 serialization rules are fixed by
-[ADR 0004](0004-common-resource-envelope.md). The four-kind registry,
+[ADR 0004](0004-common-resource-envelope.md). The six-kind registry,
 server-derived ownership, graph validation, immutable placement, and RESTRICT
 deletion rules are fixed by
 [ADR 0005](0005-resource-hierarchy-and-ownership.md). OpenAPI validates each
 document; the domain hierarchy validates complete cross-resource graphs.
+The provider-neutral control resources, explicit unknown evidence states,
+operation phases, and condition transitions are fixed by
+[ADR 0006](0006-control-execution-and-evidence.md).
 
 ## Reconciliation contract
 

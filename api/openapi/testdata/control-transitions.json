@@ -1,0 +1,254 @@
+{
+  "operations": [
+    {
+      "name": "pending to waiting",
+      "valid": true,
+      "before": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "environmentId": "env_01J00000000000000000000000",
+        "providerConnectionId": "pvc_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000030",
+        "phase": "Pending",
+        "reason": "Accepted",
+        "message": "The operation was durably accepted.",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:00.000Z"
+      },
+      "after": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "environmentId": "env_01J00000000000000000000000",
+        "providerConnectionId": "pvc_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000031",
+        "phase": "Waiting",
+        "reason": "ProviderPending",
+        "message": "The provider accepted the request and has not reported completion.",
+        "costEstimate": {
+          "state": "Known",
+          "amount": "12.34",
+          "currency": "USD",
+          "region": "us-east-1",
+          "source": "provider-observation",
+          "observedAt": "2026-09-03T01:02:03.000Z",
+          "confidence": "High",
+          "reason": "ProviderEstimate"
+        },
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:03.000Z"
+      }
+    },
+    {
+      "name": "waiting evidence refresh",
+      "valid": true,
+      "before": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000031",
+        "phase": "Waiting",
+        "reason": "ProviderPending",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000032",
+        "phase": "Waiting",
+        "reason": "RetryScheduled",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:04.000Z"
+      }
+    },
+    {
+      "name": "running cannot return to pending",
+      "valid": false,
+      "before": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000031",
+        "phase": "Running",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000032",
+        "phase": "Pending",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:04.000Z"
+      }
+    },
+    {
+      "name": "material change requires new revision",
+      "valid": false,
+      "before": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000031",
+        "phase": "Waiting",
+        "reason": "ProviderPending",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000031",
+        "phase": "Running",
+        "reason": "Reconciling",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:04.000Z"
+      }
+    },
+    {
+      "name": "terminal mutation rejected",
+      "valid": false,
+      "before": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000033",
+        "phase": "Succeeded",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:05.000Z"
+      },
+      "after": {
+        "id": "op_01J000000000000000000000000",
+        "workspaceId": "wsp_01J00000000000000000000000",
+        "resourceId": "pvc_01J00000000000000000000000",
+        "generation": 1,
+        "resourceVersion": "rv_01J00000000000000000000034",
+        "phase": "Succeeded",
+        "message": "A different terminal result.",
+        "createdAt": "2026-09-03T01:02:00.000Z",
+        "updatedAt": "2026-09-03T01:02:06.000Z"
+      }
+    }
+  ],
+  "conditions": [
+    {
+      "name": "same status preserves timestamp",
+      "resourceGeneration": 3,
+      "valid": true,
+      "before": {
+        "type": "Ready",
+        "status": "Unknown",
+        "reason": "ObservationPending",
+        "message": "The provider has not reported readiness.",
+        "observedGeneration": 1,
+        "lastTransitionAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "type": "Ready",
+        "status": "Unknown",
+        "reason": "RetryScheduled",
+        "message": "A new observation attempt is scheduled.",
+        "observedGeneration": 2,
+        "lastTransitionAt": "2026-09-03T01:02:03.000Z"
+      }
+    },
+    {
+      "name": "changed status advances timestamp",
+      "resourceGeneration": 3,
+      "valid": true,
+      "before": {
+        "type": "Ready",
+        "status": "Unknown",
+        "reason": "ObservationPending",
+        "message": "The provider has not reported readiness.",
+        "observedGeneration": 1,
+        "lastTransitionAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "type": "Ready",
+        "status": "True",
+        "reason": "Reconciled",
+        "message": "The resource is ready.",
+        "observedGeneration": 2,
+        "lastTransitionAt": "2026-09-03T01:02:04.000Z"
+      }
+    },
+    {
+      "name": "same status cannot advance timestamp",
+      "resourceGeneration": 3,
+      "valid": false,
+      "before": {
+        "type": "Ready",
+        "status": "Unknown",
+        "reason": "ObservationPending",
+        "message": "The provider has not reported readiness.",
+        "observedGeneration": 1,
+        "lastTransitionAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "type": "Ready",
+        "status": "Unknown",
+        "reason": "RetryScheduled",
+        "message": "A new observation attempt is scheduled.",
+        "observedGeneration": 2,
+        "lastTransitionAt": "2026-09-03T01:02:04.000Z"
+      }
+    },
+    {
+      "name": "changed status must advance timestamp",
+      "resourceGeneration": 3,
+      "valid": false,
+      "before": {
+        "type": "Ready",
+        "status": "Unknown",
+        "reason": "ObservationPending",
+        "message": "The provider has not reported readiness.",
+        "observedGeneration": 1,
+        "lastTransitionAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "type": "Ready",
+        "status": "True",
+        "reason": "Reconciled",
+        "message": "The resource is ready.",
+        "observedGeneration": 2,
+        "lastTransitionAt": "2026-09-03T01:02:03.000Z"
+      }
+    },
+    {
+      "name": "observed generation cannot regress",
+      "resourceGeneration": 3,
+      "valid": false,
+      "before": {
+        "type": "Ready",
+        "status": "Unknown",
+        "reason": "ObservationPending",
+        "message": "The provider has not reported readiness.",
+        "observedGeneration": 2,
+        "lastTransitionAt": "2026-09-03T01:02:03.000Z"
+      },
+      "after": {
+        "type": "Ready",
+        "status": "True",
+        "reason": "Reconciled",
+        "message": "The resource is ready.",
+        "observedGeneration": 1,
+        "lastTransitionAt": "2026-09-03T01:02:04.000Z"
+      }
+    }
+  ]
+}

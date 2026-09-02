@@ -506,7 +506,10 @@ The semantic verifier rejects:
   URI-reference drift;
 - hierarchy ownership or deletion-policy drift, invalid parent-kind edges,
   writable placement fields, metadata refinement drift, or mismatched
-  Workspace, Environment, Application, and Component schema-family refs;
+  Workspace, Environment, Application, Component, Policy, and
+  ProviderConnection schema-family refs;
+- control, credential-reference, explicit-unknown evidence, operation-phase,
+  or condition-transition contract drift;
 - unreviewed primitive-schema assertion keywords or additions to the closed
   Problem property set, pagination token/size schemas, generation counters, or
   resource-version fields;

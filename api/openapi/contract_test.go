@@ -3,6 +3,7 @@ package openapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +36,34 @@ type schemaExampleMetadata struct {
 type schemaExampleStatus struct {
 	ObservedGeneration int64             `json:"observedGeneration"`
 	Conditions         []json.RawMessage `json:"conditions"`
+}
+
+type controlSchemaInstanceFixture struct {
+	Name          string         `json:"name"`
+	Schema        string         `json:"schema"`
+	SchemaValid   bool           `json:"schemaValid"`
+	SemanticValid bool           `json:"semanticValid"`
+	Instance      map[string]any `json:"instance"`
+}
+
+type controlTransitionFixture struct {
+	Operations []operationTransitionFixture `json:"operations"`
+	Conditions []conditionTransitionFixture `json:"conditions"`
+}
+
+type operationTransitionFixture struct {
+	Name   string         `json:"name"`
+	Valid  bool           `json:"valid"`
+	Before map[string]any `json:"before"`
+	After  map[string]any `json:"after"`
+}
+
+type conditionTransitionFixture struct {
+	Name               string         `json:"name"`
+	ResourceGeneration int64          `json:"resourceGeneration"`
+	Valid              bool           `json:"valid"`
+	Before             map[string]any `json:"before"`
+	After              map[string]any `json:"after"`
 }
 
 func TestBaselineContract(t *testing.T) {
@@ -107,6 +136,225 @@ func TestHierarchyGoldensMatchContractExamples(t *testing.T) {
 				t.Fatalf("%s fixture does not match the schema example:\n fixture %#v\n example %#v", contract.kind, fixture, example)
 			}
 		})
+	}
+}
+
+func TestControlGoldensMatchContractExamples(t *testing.T) {
+	t.Parallel()
+	contractData, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, contractData)
+	for _, contract := range []struct {
+		schema  string
+		fixture string
+	}{
+		{schema: "Policy", fixture: "../../internal/core/domain/control/testdata/policy.golden.json"},
+		{
+			schema:  "ProviderConnection",
+			fixture: "../../internal/core/domain/control/testdata/provider-connection.golden.json",
+		},
+		{schema: "Operation", fixture: "../../internal/core/domain/operation/testdata/provider-bound.golden.json"},
+	} {
+		contract := contract
+		t.Run(contract.schema, func(t *testing.T) {
+			t.Parallel()
+			fixtureData, err := os.ReadFile(contract.fixture)
+			if err != nil {
+				t.Fatalf("os.ReadFile() error = %v", err)
+			}
+			fixture := decodeForMutation(t, fixtureData)
+			example := nestedMap(t, root, "components", "schemas", contract.schema, "example")
+			if !reflect.DeepEqual(fixture, example) {
+				t.Fatalf("%s golden does not match the OpenAPI example:\n fixture %#v\n example %#v", contract.schema, fixture, example)
+			}
+		})
+	}
+}
+
+func TestControlSchemaSemanticFixtureMatrix(t *testing.T) {
+	t.Parallel()
+	var fixtures []controlSchemaInstanceFixture
+	decodeStrictFixture(t, "testdata/control-schema-instances.json", &fixtures)
+	want := map[string]struct {
+		schema        string
+		schemaValid   bool
+		semanticValid bool
+	}{
+		"credential reference":               {"CredentialReference", true, true},
+		"provider spec":                      {"ProviderConnectionSpec", true, true},
+		"embedded credential secret":         {"ProviderConnectionSpec", false, false},
+		"raw provider credential":            {"ProviderConnectionSpec", false, false},
+		"explicit unknown capability":        {"ProviderCapability", true, true},
+		"year zero observation timestamp":    {"ProviderCapability", true, true},
+		"capability state omitted":           {"ProviderCapability", false, false},
+		"unsorted capability observations":   {"ProviderConnectionStatus", true, false},
+		"explicit unknown quota":             {"QuotaCheck", true, true},
+		"known quota":                        {"QuotaCheck", true, true},
+		"known zero quota":                   {"QuotaCheck", true, true},
+		"unknown quota carries operands":     {"QuotaCheck", false, false},
+		"quota comparator mismatch":          {"QuotaCheck", true, false},
+		"explicit unknown cost":              {"CostEstimate", true, true},
+		"known cost":                         {"CostEstimate", true, true},
+		"known zero cost":                    {"CostEstimate", true, true},
+		"unknown cost carries amount":        {"CostEstimate", false, false},
+		"unknown cost uses known confidence": {"CostEstimate", false, false},
+		"operation update precedes creation": {"Operation", true, false},
+	}
+	if len(fixtures) != len(want) {
+		t.Fatalf("fixture count = %d, want exactly %d", len(fixtures), len(want))
+	}
+	seen := make(map[string]struct{}, len(fixtures))
+	for _, fixture := range fixtures {
+		fixture := fixture
+		expected, exists := want[fixture.Name]
+		if !exists {
+			t.Fatalf("unexpected fixture %q", fixture.Name)
+		}
+		if _, duplicate := seen[fixture.Name]; duplicate {
+			t.Fatalf("duplicate fixture %q", fixture.Name)
+		}
+		seen[fixture.Name] = struct{}{}
+		if fixture.Schema != expected.schema || fixture.SchemaValid != expected.schemaValid ||
+			fixture.SemanticValid != expected.semanticValid {
+			t.Fatalf("fixture %q contract = (%s,%t,%t), want (%s,%t,%t)",
+				fixture.Name, fixture.Schema, fixture.SchemaValid, fixture.SemanticValid,
+				expected.schema, expected.schemaValid, expected.semanticValid)
+		}
+		t.Run(fixture.Name, func(t *testing.T) {
+			t.Parallel()
+			err := validateControlFixtureSemantic(fixture.Schema, fixture.Instance)
+			if (err == nil) != fixture.SemanticValid {
+				t.Fatalf("semantic validity = %t, want %t (error %v)", err == nil, fixture.SemanticValid, err)
+			}
+		})
+	}
+}
+
+func TestSemanticMessageRuneBounds(t *testing.T) {
+	t.Parallel()
+	contractData, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	for _, test := range []struct {
+		name  string
+		runes int
+		valid bool
+	}{
+		{name: "512 multibyte code points", runes: 512, valid: true},
+		{name: "513 multibyte code points", runes: 513, valid: false},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			message := strings.Repeat("界", test.runes)
+			condition := map[string]any{
+				"type":               "Ready",
+				"status":             "Unknown",
+				"reason":             "ObservationPending",
+				"message":            message,
+				"observedGeneration": json.Number("1"),
+				"lastTransitionAt":   "2026-09-03T01:02:03.000Z",
+			}
+			_, conditionErr := validateConditionValue(condition, 1)
+			if (conditionErr == nil) != test.valid {
+				t.Fatalf("Condition validity = %t, want %t (error %v)", conditionErr == nil, test.valid, conditionErr)
+			}
+
+			root := decodeForMutation(t, contractData)
+			operation := nestedMap(t, root, "components", "schemas", "Operation", "example")
+			operation["message"] = message
+			_, operationErr := validateOperationValue(operation)
+			if (operationErr == nil) != test.valid {
+				t.Fatalf("Operation validity = %t, want %t (error %v)", operationErr == nil, test.valid, operationErr)
+			}
+		})
+	}
+}
+
+func TestControlTransitionFixtureMatrix(t *testing.T) {
+	t.Parallel()
+	var fixtures controlTransitionFixture
+	decodeStrictFixture(t, "testdata/control-transitions.json", &fixtures)
+	wantOperations := map[string]bool{
+		"pending to waiting":                    true,
+		"waiting evidence refresh":              true,
+		"running cannot return to pending":      false,
+		"material change requires new revision": false,
+		"terminal mutation rejected":            false,
+	}
+	wantConditions := map[string]bool{
+		"same status preserves timestamp":       true,
+		"changed status advances timestamp":     true,
+		"same status cannot advance timestamp":  false,
+		"changed status must advance timestamp": false,
+		"observed generation cannot regress":    false,
+	}
+	if len(fixtures.Operations) != len(wantOperations) || len(fixtures.Conditions) != len(wantConditions) {
+		t.Fatalf("transition fixture counts = %d/%d, want %d/%d",
+			len(fixtures.Operations), len(fixtures.Conditions), len(wantOperations), len(wantConditions))
+	}
+	seenOperations := make(map[string]struct{}, len(fixtures.Operations))
+	for _, fixture := range fixtures.Operations {
+		fixture := fixture
+		wantValid, exists := wantOperations[fixture.Name]
+		if !exists || fixture.Valid != wantValid {
+			t.Fatalf("operation fixture %q validity = %t, want registered value", fixture.Name, fixture.Valid)
+		}
+		if _, duplicate := seenOperations[fixture.Name]; duplicate {
+			t.Fatalf("duplicate operation fixture %q", fixture.Name)
+		}
+		seenOperations[fixture.Name] = struct{}{}
+		t.Run("Operation/"+fixture.Name, func(t *testing.T) {
+			t.Parallel()
+			err := validateOperationTransition(fixture.Before, fixture.After)
+			if (err == nil) != fixture.Valid {
+				t.Fatalf("transition validity = %t, want %t (error %v)", err == nil, fixture.Valid, err)
+			}
+		})
+	}
+	seenConditions := make(map[string]struct{}, len(fixtures.Conditions))
+	for _, fixture := range fixtures.Conditions {
+		fixture := fixture
+		wantValid, exists := wantConditions[fixture.Name]
+		if !exists || fixture.Valid != wantValid {
+			t.Fatalf("condition fixture %q validity = %t, want registered value", fixture.Name, fixture.Valid)
+		}
+		if _, duplicate := seenConditions[fixture.Name]; duplicate {
+			t.Fatalf("duplicate condition fixture %q", fixture.Name)
+		}
+		seenConditions[fixture.Name] = struct{}{}
+		t.Run("Condition/"+fixture.Name, func(t *testing.T) {
+			t.Parallel()
+			err := validateConditionTransition(fixture.Before, fixture.After, fixture.ResourceGeneration)
+			if (err == nil) != fixture.Valid {
+				t.Fatalf("transition validity = %t, want %t (error %v)", err == nil, fixture.Valid, err)
+			}
+		})
+	}
+}
+
+func validateControlFixtureSemantic(schema string, instance map[string]any) error {
+	switch schema {
+	case "CredentialReference":
+		return validateCredentialReferenceValue(instance)
+	case "ProviderConnectionSpec":
+		return validateProviderConnectionSpecValue(instance)
+	case "ProviderCapability":
+		return validateProviderCapabilityValue(instance)
+	case "QuotaCheck":
+		return validateQuotaCheckValue(instance)
+	case "CostEstimate":
+		return validateCostEstimateValue(instance)
+	case "ProviderConnectionStatus":
+		return validateProviderConnectionStatusValue(instance, 1)
+	case "Operation":
+		_, err := validateOperationValue(instance)
+		return err
+	default:
+		return errors.New("unsupported fixture schema " + schema)
 	}
 }
 
@@ -331,6 +579,96 @@ func runVacuumSchemaExamples(
 	return command.CombinedOutput()
 }
 
+func TestVacuumControlSchemaInstanceMatrix(t *testing.T) {
+	vacuumPath := os.Getenv("VEER_TEST_VACUUM_BIN")
+	if vacuumPath == "" {
+		t.Skip("schema-instance matrix runs through ./hack/dev api")
+	}
+	expectedVacuumPath, err := filepath.Abs(filepath.Join("..", "..", ".tools", "bin", "vacuum"))
+	if err != nil {
+		t.Fatalf("resolve repository Vacuum path: %v", err)
+	}
+	if filepath.Clean(vacuumPath) != expectedVacuumPath {
+		t.Fatalf("Vacuum path = %q, want repository-pinned %q", vacuumPath, expectedVacuumPath)
+	}
+	info, err := os.Lstat(vacuumPath)
+	if err != nil {
+		t.Fatalf("inspect repository Vacuum: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("Vacuum must be a regular non-symlink executable: mode %s", info.Mode())
+	}
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	configPath, err := filepath.Abs("vacuum.conf.yaml")
+	if err != nil {
+		t.Fatalf("resolve Vacuum config: %v", err)
+	}
+
+	var fixtures []controlSchemaInstanceFixture
+	decodeStrictFixture(t, "testdata/control-schema-instances.json", &fixtures)
+	for _, fixture := range fixtures {
+		fixture := fixture
+		t.Run(fixture.Name, func(t *testing.T) {
+			output, err := runVacuumInstance(t, vacuumPath, configPath, baseline, fixture.Schema, fixture.Instance)
+			if fixture.SchemaValid {
+				if bytes.Contains(output, []byte("oas3-valid-schema-example")) ||
+					(err != nil && !bytes.Contains(output, []byte("oas3-missing-example"))) {
+					t.Fatalf("Vacuum rejected valid %s instance: %v\n%s", fixture.Schema, err, output)
+				}
+				return
+			}
+			if err == nil || !bytes.Contains(output, []byte("oas3-valid-schema-example")) {
+				t.Fatalf("Vacuum accepted invalid %s instance: %v\n%s", fixture.Schema, err, output)
+			}
+		})
+	}
+
+	var transitions controlTransitionFixture
+	decodeStrictFixture(t, "testdata/control-transitions.json", &transitions)
+	for _, fixture := range transitions.Operations {
+		for label, instance := range map[string]map[string]any{"before": fixture.Before, "after": fixture.After} {
+			output, err := runVacuumInstance(t, vacuumPath, configPath, baseline, "Operation", instance)
+			if bytes.Contains(output, []byte("oas3-valid-schema-example")) ||
+				(err != nil && !bytes.Contains(output, []byte("oas3-missing-example"))) {
+				t.Fatalf("Vacuum rejected structurally valid Operation transition %s %s: %v\n%s", fixture.Name, label, err, output)
+			}
+		}
+	}
+	for _, fixture := range transitions.Conditions {
+		for label, instance := range map[string]map[string]any{"before": fixture.Before, "after": fixture.After} {
+			output, err := runVacuumInstance(t, vacuumPath, configPath, baseline, "Condition", instance)
+			if bytes.Contains(output, []byte("oas3-valid-schema-example")) ||
+				(err != nil && !bytes.Contains(output, []byte("oas3-missing-example"))) {
+				t.Fatalf("Vacuum rejected structurally valid Condition transition %s %s: %v\n%s", fixture.Name, label, err, output)
+			}
+		}
+	}
+}
+
+func runVacuumInstance(
+	t *testing.T,
+	vacuumPath, configPath string,
+	baseline []byte,
+	schemaName string,
+	instance map[string]any,
+) ([]byte, error) {
+	t.Helper()
+	root := decodeForMutation(t, baseline)
+	nestedMap(t, root, "components", "schemas", schemaName)["example"] = instance
+	mutated, err := json.Marshal(root)
+	if err != nil {
+		t.Fatalf("json.Marshal(%s fixture) error = %v", schemaName, err)
+	}
+	contractPath := filepath.Join(t.TempDir(), "schema-instance.json")
+	if err := os.WriteFile(contractPath, mutated, 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+	return runVacuumSchemaExamples(t, vacuumPath, configPath, contractPath)
+}
+
 func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 	t.Parallel()
 	baseline, err := Load("veer-v1alpha1.json")
@@ -439,7 +777,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 			name: "wrong parent kind",
 			mutate: func(root map[string]any) {
 				resources := nestedMap(t, root, "x-veer-hierarchy")["resources"].([]any)
-				resources[2].(map[string]any)["parentKind"] = "Workspace"
+				resources[4].(map[string]any)["parentKind"] = "Workspace"
 			},
 			message: "Application parent kind must be Environment",
 		},
@@ -447,7 +785,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 			name: "wrong schema reference",
 			mutate: func(root map[string]any) {
 				resources := nestedMap(t, root, "x-veer-hierarchy")["resources"].([]any)
-				nestedMap(t, resources[3].(map[string]any), "schema")["$ref"] = "#/components/schemas/Application"
+				nestedMap(t, resources[5].(map[string]any), "schema")["$ref"] = "#/components/schemas/Application"
 			},
 			message: "Component schema reference drifted",
 		},
@@ -455,7 +793,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 			name: "wrong status write schema reference",
 			mutate: func(root map[string]any) {
 				resources := nestedMap(t, root, "x-veer-hierarchy")["resources"].([]any)
-				nestedMap(t, resources[1].(map[string]any), "statusWriteSchema")["$ref"] =
+				nestedMap(t, resources[2].(map[string]any), "statusWriteSchema")["$ref"] =
 					"#/components/schemas/WorkspaceStatusWrite"
 			},
 			message: "Environment status write schema reference drifted",
@@ -505,7 +843,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 			mutate: func(root map[string]any) {
 				delete(nestedMap(t, root, "components", "schemas"), "ComponentList")
 			},
-			message: "expected exactly 60 schemas, got 59",
+			message: "expected exactly 78 schemas, got 77",
 		},
 		{
 			name: "schema added",
@@ -514,7 +852,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 					"type": "object", "additionalProperties": false, "properties": map[string]any{},
 				}
 			},
-			message: "expected exactly 60 schemas, got 61",
+			message: "expected exactly 78 schemas, got 79",
 		},
 		{
 			name: "workspace ownership no longer required",
@@ -589,6 +927,188 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 		},
 	}
 
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			err = Validate(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestControlContractRejectsSemanticDrift(t *testing.T) {
+	t.Parallel()
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		message string
+	}{
+		{
+			name: "operation transition manifest gains field",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-operation-transitions")["retry"] = true
+			},
+			message: "operation transition manifest field set drifted",
+		},
+		{
+			name: "operation transition edge disappears",
+			mutate: func(root map[string]any) {
+				transitions := nestedMap(t, root, "x-veer-operation-transitions", "transitions")
+				transitions["Pending"] = []any{"Waiting", "Running", "Failed", "Canceled"}
+			},
+			message: "operation transition graph drifted",
+		},
+		{
+			name: "terminal replay relaxes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-operation-transitions")["terminalReplay"] = "phase-only"
+			},
+			message: "operation terminal transition policy drifted",
+		},
+		{
+			name: "unknown phase behavior authorizes side effects",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-operation-transitions")["unknownPhase"] = "execute"
+			},
+			message: "operation terminal transition policy drifted",
+		},
+		{
+			name: "condition transition pointer drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-condition-transitions")["transitionTimePointer"] = "/updatedAt"
+			},
+			message: "condition transition policy drifted",
+		},
+		{
+			name: "condition set ordering relaxes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-condition-transitions")["setOrder"] = "caller-order"
+			},
+			message: "condition transition policy drifted",
+		},
+		{
+			name: "condition schema changes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Condition")["description"] = "Changed"
+			},
+			message: "condition schema changed outside the accepted transition-manifest boundary",
+		},
+		{
+			name: "policy spec gains field",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "PolicySpec", "properties")["provider"] =
+					map[string]any{"type": "string"}
+			},
+			message: "PolicySpec must remain a closed empty provider-neutral object",
+		},
+		{
+			name: "provider spec accepts raw field",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "ProviderConnectionSpec", "properties")["accessKey"] =
+					map[string]any{"type": "string"}
+			},
+			message: "providerConnectionSpec shape drifted",
+		},
+		{
+			name: "credential reference accepts secret",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "CredentialReference", "properties")["secret"] =
+					map[string]any{"type": "string"}
+			},
+			message: "credentialReference shape drifted",
+		},
+		{
+			name: "capability unknown state disappears",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "ProviderCapability", "properties", "state")["enum"] =
+					[]any{"Supported", "Unsupported"}
+			},
+			message: "ProviderCapability.state contract drifted",
+		},
+		{
+			name: "observation list loses bound",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "components", "schemas", "ProviderConnectionStatus", "properties", "capabilities"), "maxItems")
+			},
+			message: "providerConnectionStatus.capabilities list contract drifted",
+		},
+		{
+			name: "observation ordering relaxes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "ProviderConnectionStatus", "properties", "quotaChecks")["x-veer-list-order"] = "none"
+			},
+			message: "providerConnectionStatus.quotaChecks list contract drifted",
+		},
+		{
+			name: "quota comparator drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "QuotaCheck", "x-veer-quota-comparison")["Exceeded"] =
+					"requested>=available"
+			},
+			message: "quotaCheck comparison manifest drifted",
+		},
+		{
+			name: "unknown quota admits operand",
+			mutate: func(root map[string]any) {
+				branches := nestedMap(t, root, "components", "schemas", "QuotaCheck")["oneOf"].([]any)
+				delete(branches[1].(map[string]any), "not")
+			},
+			message: "quotaCheck unknown-state refinement drifted",
+		},
+		{
+			name: "unknown cost admits amount",
+			mutate: func(root map[string]any) {
+				branches := nestedMap(t, root, "components", "schemas", "CostEstimate")["oneOf"].([]any)
+				delete(branches[1].(map[string]any), "not")
+			},
+			message: "costEstimate unknown-state refinement drifted",
+		},
+		{
+			name: "operation workspace binding becomes optional",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "components", "schemas", "Operation")
+				operation["required"] = []any{"id", "resourceId", "generation", "resourceVersion", "phase", "createdAt", "updatedAt"}
+			},
+			message: "operation shape drifted",
+		},
+		{
+			name: "operation provider binding becomes partial",
+			mutate: func(root map[string]any) {
+				branches := nestedMap(t, root, "components", "schemas", "Operation")["oneOf"].([]any)
+				branches[0].(map[string]any)["required"] = []any{"providerConnectionId"}
+			},
+			message: "operation provider-bound refinement drifted",
+		},
+		{
+			name: "operation byte bound grows",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Operation")["x-veer-maximum-json-bytes"] = json.Number("8192")
+			},
+			message: "operation shape drifted",
+		},
+		{
+			name: "operation response example drifts",
+			mutate: func(root map[string]any) {
+				nestedMap(
+					t, root, "components", "responses", "Operation", "content", "application/json", "example",
+				)["phase"] = "Succeeded"
+			},
+			message: "operation schema and response examples drifted",
+		},
+	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -1654,7 +2174,7 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				message := nestedMap(t, root, "components", "schemas", "Condition", "properties", "message")
 				message["const"] = "Only this message"
 			},
-			message: "Condition.message schema has unreviewed keywords",
+			message: "condition schema changed outside the accepted transition-manifest boundary",
 		},
 		{
 			name: "workspace status conditions gains minimum",
@@ -2621,6 +3141,29 @@ func decodeForMutation(t *testing.T, data []byte) map[string]any {
 		t.Fatalf("json.Decode() error = %v", err)
 	}
 	return root
+}
+
+func decodeStrictFixture(t *testing.T, path string, target any) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%s) error = %v", path, err)
+	}
+	if len(data) > maxContractBytes {
+		t.Fatalf("fixture %s is %d bytes, maximum %d", path, len(data), maxContractBytes)
+	}
+	if err := rejectDuplicateKeys(data); err != nil {
+		t.Fatalf("fixture %s contains duplicate keys: %v", path, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		t.Fatalf("strict decode %s: %v", path, err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		t.Fatalf("fixture %s trailing data: %v", path, err)
+	}
 }
 
 func nestedMap(t *testing.T, root map[string]any, path ...string) map[string]any {

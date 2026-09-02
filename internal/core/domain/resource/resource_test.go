@@ -697,7 +697,9 @@ func TestResourceValidationBounds(t *testing.T) {
 		{name: "workspace ID", mutate: func(input *CreateInput[testSpec, testStatus]) { input.WorkspaceID = "short" }, message: "metadata.workspaceId"},
 		{name: "display name", mutate: func(input *CreateInput[testSpec, testStatus]) { input.DisplayName = "" }, message: "displayName"},
 		{name: "resource version", mutate: func(input *CreateInput[testSpec, testStatus]) { input.ResourceVersion = "has spaces" }, message: "resourceVersion"},
-		{name: "timestamp", mutate: func(input *CreateInput[testSpec, testStatus]) { input.CreatedAt = time.Time{} }, message: "createdAt"},
+		{name: "timestamp", mutate: func(input *CreateInput[testSpec, testStatus]) {
+			input.CreatedAt = time.Date(-1, time.January, 1, 0, 0, 0, 0, time.UTC)
+		}, message: "createdAt"},
 		{name: "label key", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Labels = map[string]string{"Invalid": "value"} }, message: "labels key"},
 		{name: "future status", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Status = testStatus{ObservedGeneration: 2} }, message: "exceeds"},
 		{name: "invalid UTF-8 spec", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Spec.Region = string([]byte{0xff}) }, message: "UTF-8"},
@@ -721,6 +723,72 @@ func TestResourceValidationBounds(t *testing.T) {
 	oversized.Spec.Config = map[string]string{"payload": strings.Repeat("x", MaxCanonicalBytes)}
 	if _, err := New(oversized); !errors.Is(err, ErrRepresentationTooLarge) {
 		t.Fatalf("New(oversized) error = %v, want ErrRepresentationTooLarge", err)
+	}
+}
+
+func TestYearZeroTimestampCanonicalRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	value, err := New(CreateInput[testSpec, testStatus]{
+		APIVersion:      "v1alpha1",
+		Kind:            "Workspace",
+		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
+		DisplayName:     "year-zero",
+		ResourceVersion: "rv_year_zero",
+		CreatedAt:       time.Date(0, time.January, 1, 0, 0, 0, 0, time.UTC),
+		Spec:            testSpec{Region: "us-east-1"},
+		Status:          testStatus{Conditions: []testCondition{}},
+	})
+	if err != nil {
+		t.Fatalf("New(year zero) error = %v", err)
+	}
+	encoded, err := MarshalCanonical(value)
+	if err != nil {
+		t.Fatalf("MarshalCanonical(year zero) error = %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"createdAt":"0000-01-01T00:00:00.000Z"`)) {
+		t.Fatalf("canonical year-zero timestamp missing: %s", encoded)
+	}
+	decoded, err := UnmarshalCanonical[testSpec, testStatus](encoded)
+	if err != nil {
+		t.Fatalf("UnmarshalCanonical(year zero) error = %v", err)
+	}
+	roundTrip, err := MarshalCanonical(decoded)
+	if err != nil {
+		t.Fatalf("round-trip MarshalCanonical(year zero) error = %v", err)
+	}
+	if !bytes.Equal(roundTrip, encoded) {
+		t.Fatalf("year-zero round trip changed bytes:\n got %s\nwant %s", roundTrip, encoded)
+	}
+}
+
+func TestGoZeroTimestampCanonicalRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	value, err := New(CreateInput[testSpec, testStatus]{
+		APIVersion:      "v1alpha1",
+		Kind:            "Workspace",
+		ID:              "wsp_01J00000000000000000000000",
+		WorkspaceID:     "wsp_01J00000000000000000000000",
+		DisplayName:     "go-zero",
+		ResourceVersion: "rv_go_zero",
+		CreatedAt:       time.Time{},
+		Spec:            testSpec{Region: "us-east-1"},
+		Status:          testStatus{Conditions: []testCondition{}},
+	})
+	if err != nil {
+		t.Fatalf("New(Go zero) error = %v", err)
+	}
+	encoded, err := MarshalCanonical(value)
+	if err != nil {
+		t.Fatalf("MarshalCanonical(Go zero) error = %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"createdAt":"0001-01-01T00:00:00.000Z"`)) {
+		t.Fatalf("canonical Go-zero timestamp missing: %s", encoded)
+	}
+	if _, err := UnmarshalCanonical[testSpec, testStatus](encoded); err != nil {
+		t.Fatalf("UnmarshalCanonical(Go zero) error = %v", err)
 	}
 }
 

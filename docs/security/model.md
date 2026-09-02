@@ -56,6 +56,8 @@ strong authentication plus dedicated audit controls.
 - Prefer workload identity, role assumption, and short-lived tokens.
 - Store unavoidable secrets in an external secret manager.
 - Persist references and versions, never plaintext secret values.
+- Parent each ProviderConnection to one Environment and retain its derived
+  Workspace owner; provider-bound operations carry both scopes.
 - Redact authorization headers, cookies, tokens, and provider credential fields
   before logging.
 - Prevent secret values from entering plans, diffs, metrics, traces, and error

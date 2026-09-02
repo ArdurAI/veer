@@ -53,6 +53,7 @@ hosts, individual commands, resource use, and troubleshooting.
 | Application | Deployable product or service group |
 | Component | Workload or managed-service unit |
 | Policy | Authorization, security, and operational constraints |
+| Provider connection | Environment-scoped reference to provider authority and observed capabilities |
 | Reconciliation | Convergence from desired state to observed state |
 
 ## Initial scope
@@ -74,6 +75,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [HTTP API and resource evolution conventions](docs/architecture/0003-http-api-and-resource-evolution.md)
 - [Common resource envelope](docs/architecture/0004-common-resource-envelope.md)
 - [Resource hierarchy and ownership](docs/architecture/0005-resource-hierarchy-and-ownership.md)
+- [Control, execution, and evidence contracts](docs/architecture/0006-control-execution-and-evidence.md)
 - [OpenAPI v1alpha1 baseline](api/openapi/veer-v1alpha1.json)
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)

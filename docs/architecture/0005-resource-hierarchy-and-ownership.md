@@ -21,7 +21,9 @@ database, provider account, network call, or generated transport type.
 
 ### Kind registry and edges
 
-The `v1alpha1` hierarchy contains exactly four resource kinds:
+The `v1alpha1` hierarchy contains exactly six resource kinds. Control-resource
+semantics are recorded by
+[ADR 0006](0006-control-execution-and-evidence.md):
 
 | Kind | Required parent | Ownership rule |
 | --- | --- | --- |
@@ -29,6 +31,8 @@ The `v1alpha1` hierarchy contains exactly four resource kinds:
 | `Environment` | `Workspace` | inherit the resolved parent's Workspace ID |
 | `Application` | `Environment` | inherit the resolved parent's Workspace ID |
 | `Component` | `Application` | inherit the resolved parent's Workspace ID |
+| `Policy` | `Workspace` | inherit the resolved parent's Workspace ID |
+| `ProviderConnection` | `Environment` | inherit the resolved parent's Workspace ID |
 
 The registry is closed for this version. A new kind or edge changes both the
 domain registry and the independently checked OpenAPI hierarchy manifest.
@@ -55,10 +59,11 @@ does not infer graph relationships by itself.
 ### Complete-snapshot validation
 
 The provider-free reference model validates a complete retained view of one
-Workspace. Before allocating an index, it rejects more than 61,001 records:
-one Workspace plus the 1,000 Environment, 10,000 Application, and 50,000
-Component target maxima in ADR 0001. Within that ceiling it builds bounded
-indexes and performs iterative traversal in `O(V + E)` time and `O(V)` memory:
+Workspace. Before allocating an index, it rejects more than 64,001 records:
+one Workspace plus the 1,000 Environment, 10,000 Application, 50,000
+Component, 2,500 Policy, and 500 ProviderConnection target maxima in ADR 0001.
+Within that ceiling it builds bounded indexes and performs iterative traversal
+in `O(V + E)` time and `O(V)` memory:
 
 1. Validate the requested Workspace ID, record versions and kinds, scoped ID
    uniqueness, and each record's Workspace ownership.
@@ -67,7 +72,7 @@ indexes and performs iterative traversal in `O(V + E)` time and `O(V)` memory:
 3. Resolve every child parent inside the same snapshot.
 4. Detect self, two-node, and longer cycles iteratively before evaluating edge
    kinds.
-5. Enforce the four allowed parent-kind edges and build a direct-child index.
+5. Enforce the six allowed parent-kind edges and build a direct-child index.
 
 Record order does not affect the result. A parent outside the supplied
 snapshot is an orphan even if a caller claims the same Workspace ID. A record
@@ -90,12 +95,13 @@ finalizers, or cascade behavior.
 
 ### Transport and enforcement boundaries
 
-OpenAPI publishes four closed schema families and a reviewed
+OpenAPI publishes six closed schema families and a reviewed
 `x-veer-hierarchy` manifest. Workspace read schemas require root metadata;
-Environment, Application, and Component read schemas require child metadata.
-Write schemas omit server-owned placement fields. The child spec schemas are
-closed empty objects until their owning roadmap issues adopt fields; no
-provider-specific intent is invented here.
+Environment, Application, Component, Policy, and ProviderConnection read
+schemas require child metadata. Write schemas omit server-owned placement
+fields. The workload child specs and Policy spec are closed empty objects until
+their owning roadmap issues adopt fields; ProviderConnection intent remains a
+provider identifier and credential reference only.
 
 JSON Schema proves individual document shape. The hierarchy package proves
 cross-resource parent existence, ownership equality, edge kinds, cycles,
@@ -127,7 +133,7 @@ latency and cost budgets.
 
 ### Version evidence
 
-All four kinds round-trip through the common canonical `v1alpha1` envelope.
+All six kinds round-trip through the common canonical `v1alpha1` envelope.
 The evidence proves same-version byte stability only. It does not claim a
 conversion path or compatibility with a future version; issue #20 owns those
 decisions and fixtures.
@@ -143,7 +149,7 @@ decisions and fixtures.
 - RESTRICT deletion requires callers to delete leaves first but avoids hidden
   cascades and ambiguous partial failure.
 - OpenAPI and domain registries remain independent drift oracles and therefore
-  intentionally duplicate the four-kind table.
+  intentionally duplicate the six-kind table.
 
 ## Alternatives considered
 
@@ -183,7 +189,6 @@ cross-record equality, cycles, previous-state immutability, or descendants.
 - Concrete Environment, Application, and Component spec fields.
 - Child HTTP route topology and the external parent-selection surface.
 - Global versus Workspace-local durable ID issuance.
-- Policy and ProviderConnection ownership interactions from issue #19.
 - Tombstone, finalizer, and cascade exceptions from issue #36.
 - Atomic hierarchy reads and create/delete race closure from issue #30.
 
@@ -191,7 +196,7 @@ cross-record equality, cycles, previous-state immutability, or descendants.
 
 The evidence includes positive and negative schema fixtures, complete and
 multi-Workspace graph matrices, transition and deletion tests, canonical
-fixtures for all four kinds, order-invariance property tests, and bounded fuzz
+fixtures for all six kinds, order-invariance property tests, and bounded fuzz
 execution:
 
 ```sh

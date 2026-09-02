@@ -22,6 +22,10 @@ const (
 	applicationBID resource.ID = "app_01J11111111111111111111111"
 	componentAID   resource.ID = "cmp_01J00000000000000000000000"
 	componentBID   resource.ID = "cmp_01J11111111111111111111111"
+	policyAID      resource.ID = "pol_01J00000000000000000000000"
+	policyBID      resource.ID = "pol_01J11111111111111111111111"
+	connectionAID  resource.ID = "pvc_01J00000000000000000000000"
+	connectionBID  resource.ID = "pvc_01J11111111111111111111111"
 )
 
 var fixtureTime = time.Date(2026, 9, 2, 17, 30, 0, 0, time.UTC)
@@ -70,7 +74,14 @@ type hierarchyFixture struct {
 func TestParseKind(t *testing.T) {
 	t.Parallel()
 
-	for _, want := range []Kind{KindWorkspace, KindEnvironment, KindApplication, KindComponent} {
+	for _, want := range []Kind{
+		KindWorkspace,
+		KindEnvironment,
+		KindApplication,
+		KindComponent,
+		KindPolicy,
+		KindProviderConnection,
+	} {
 		got, err := ParseKind(want.String())
 		if err != nil || got != want {
 			t.Fatalf("ParseKind(%q) = %q, %v", want, got, err)
@@ -80,6 +91,81 @@ func TestParseKind(t *testing.T) {
 		if _, err := ParseKind(value); !errors.Is(err, ErrUnsupportedKind) {
 			t.Fatalf("ParseKind(%q) error = %v, want ErrUnsupportedKind", value, err)
 		}
+	}
+}
+
+func TestControlResourceEdges(t *testing.T) {
+	t.Parallel()
+
+	root := rawRecord(workspaceAID, KindWorkspace, workspaceAID, "")
+	environment := rawRecord(environmentAID, KindEnvironment, workspaceAID, workspaceAID)
+	policy := rawRecord(policyAID, KindPolicy, workspaceAID, workspaceAID)
+	connection := rawRecord(connectionAID, KindProviderConnection, workspaceAID, environmentAID)
+	records := []Record{root, environment, policy, connection}
+
+	snapshot, err := NewSnapshot(workspaceAID, records)
+	if err != nil {
+		t.Fatalf("NewSnapshot(control resources) error = %v", err)
+	}
+	if snapshot.Len() != len(records) {
+		t.Fatalf("snapshot len = %d, want %d", snapshot.Len(), len(records))
+	}
+
+	policyPlacement, err := snapshot.DeriveChild(KindPolicy, policyBID, workspaceAID)
+	if err != nil {
+		t.Fatalf("DeriveChild(Policy) error = %v", err)
+	}
+	if parent, present := policyPlacement.Parent(); !present || parent != workspaceAID {
+		t.Fatalf("Policy parent = %q, %t", parent, present)
+	}
+	connectionPlacement, err := snapshot.DeriveChild(KindProviderConnection, connectionBID, environmentAID)
+	if err != nil {
+		t.Fatalf("DeriveChild(ProviderConnection) error = %v", err)
+	}
+	if parent, present := connectionPlacement.Parent(); !present || parent != environmentAID {
+		t.Fatalf("ProviderConnection parent = %q, %t", parent, present)
+	}
+
+	if _, err := snapshot.DeriveChild(KindPolicy, policyBID, environmentAID); !errors.Is(err, ErrParentKindMismatch) {
+		t.Fatalf("DeriveChild(Policy under Environment) error = %v", err)
+	}
+	if _, err := snapshot.DeriveChild(KindProviderConnection, connectionBID, workspaceAID); !errors.Is(err, ErrParentKindMismatch) {
+		t.Fatalf("DeriveChild(ProviderConnection under Workspace) error = %v", err)
+	}
+
+	for _, id := range []resource.ID{workspaceAID, environmentAID} {
+		if err := snapshot.CheckDelete(id); !errors.Is(err, ErrDeleteRestricted) {
+			t.Fatalf("CheckDelete(%q) error = %v, want ErrDeleteRestricted", id, err)
+		}
+	}
+	for _, id := range []resource.ID{policyAID, connectionAID} {
+		if err := snapshot.CheckDelete(id); err != nil {
+			t.Fatalf("CheckDelete(%q) error = %v", id, err)
+		}
+	}
+}
+
+func TestControlResourceWrongParentKinds(t *testing.T) {
+	t.Parallel()
+
+	root := rawRecord(workspaceAID, KindWorkspace, workspaceAID, "")
+	environment := rawRecord(environmentAID, KindEnvironment, workspaceAID, workspaceAID)
+	tests := []struct {
+		name   string
+		record Record
+	}{
+		{name: "Policy under Environment", record: rawRecord(policyAID, KindPolicy, workspaceAID, environmentAID)},
+		{name: "ProviderConnection under Workspace", record: rawRecord(connectionAID, KindProviderConnection, workspaceAID, workspaceAID)},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewSnapshot(workspaceAID, []Record{root, environment, test.record})
+			if !errors.Is(err, ErrParentKindMismatch) {
+				t.Fatalf("NewSnapshot() error = %v, want ErrParentKindMismatch", err)
+			}
+		})
 	}
 }
 
@@ -140,19 +226,31 @@ func TestParentKindMatrix(t *testing.T) {
 	t.Parallel()
 
 	fixture := newHierarchyFixture(t, workspaceAID, "workspace", "environment", "application", "component")
-	byKind := make(map[Kind]Record, len(fixture.records))
-	for _, record := range fixture.records {
+	baseline := append(
+		cloneRecords(fixture.records),
+		rawRecord(policyAID, KindPolicy, workspaceAID, workspaceAID),
+		rawRecord(connectionAID, KindProviderConnection, workspaceAID, environmentAID),
+	)
+	byKind := make(map[Kind]Record, len(baseline))
+	for _, record := range baseline {
 		byKind[record.kind] = record
 	}
 
-	kinds := []Kind{KindWorkspace, KindEnvironment, KindApplication, KindComponent}
+	kinds := []Kind{
+		KindWorkspace,
+		KindEnvironment,
+		KindApplication,
+		KindComponent,
+		KindPolicy,
+		KindProviderConnection,
+	}
 	for _, childKind := range kinds {
 		childKind := childKind
 		for _, parentKind := range kinds {
 			parentKind := parentKind
 			t.Run(childKind.String()+"_under_"+parentKind.String(), func(t *testing.T) {
 				t.Parallel()
-				records := cloneRecords(fixture.records)
+				records := cloneRecords(baseline)
 				parent := byKind[parentKind]
 
 				if childKind == KindWorkspace {
@@ -347,6 +445,9 @@ func TestInvalidSnapshotMatrix(t *testing.T) {
 
 func TestSnapshotRecordLimitPrecedesAllocation(t *testing.T) {
 	t.Parallel()
+	if MaxSnapshotRecords != 64_001 {
+		t.Fatalf("MaxSnapshotRecords = %d, want 64001", MaxSnapshotRecords)
+	}
 
 	records := make([]Record, MaxSnapshotRecords+1)
 	if _, err := NewSnapshot(workspaceAID, records[:MaxSnapshotRecords]); !errors.Is(err, ErrUnsupportedAPIVersion) {
@@ -888,6 +989,10 @@ func subjectID(kind Kind) resource.ID {
 		return "app_01J22222222222222222222222"
 	case KindComponent:
 		return "cmp_01J22222222222222222222222"
+	case KindPolicy:
+		return "pol_01J22222222222222222222222"
+	case KindProviderConnection:
+		return "pvc_01J22222222222222222222222"
 	default:
 		return "wsp_01J22222222222222222222222"
 	}

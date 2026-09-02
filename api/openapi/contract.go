@@ -3,10 +3,12 @@ package openapi
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/url"
 	"os"
 	"reflect"
@@ -15,14 +17,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	maxContractBytes             = 1 << 20
 	maxJSONDepth                 = 64
 	maxJSONNodes                 = 50000
-	expectedSchemaCount          = 60
+	expectedSchemaCount          = 78
 	minimumDeprecationNoticeDays = 90
+	canonicalDecimalPattern      = `^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$`
+	providerTokenPattern         = `^[a-z][a-z0-9.-]*$`
+	conditionReasonPattern       = `^[A-Z][A-Za-z0-9]*$`
+	currencyPattern              = `^[A-Z]{3}$`
+	regionPattern                = `^[a-z0-9][a-z0-9-]{0,62}$`
+	opaqueVersionPattern         = `^[A-Za-z0-9_-]+$`
+	conditionSchemaSHA256        = "000a505985f5d58cd805721c687ab85e98dc98db606e5c6a0777fbcdf6ec123f"
 	deprecationPattern           = `^@[0-9]{10,12}$`
 	deprecationLinkTargetPattern = `[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{1,900}`
 	deprecationLinkPattern       = `^<` + deprecationLinkTargetPattern + `>; rel="deprecation"(, <` + deprecationLinkTargetPattern + `>; rel="sunset")?$`
@@ -104,11 +114,47 @@ type hierarchyResource struct {
 	ListSchema        hierarchyReference `json:"listSchema"`
 }
 
+type operationTransitionContract struct {
+	PhasePointer   string              `json:"phasePointer"`
+	Transitions    map[string][]string `json:"transitions"`
+	TerminalPhases []string            `json:"terminalPhases"`
+	TerminalReplay string              `json:"terminalReplay"`
+	UnknownPhase   string              `json:"unknownPhase"`
+}
+
+type conditionTransitionContract struct {
+	IdentityPointer           string   `json:"identityPointer"`
+	StatusPointer             string   `json:"statusPointer"`
+	ObservedGenerationPointer string   `json:"observedGenerationPointer"`
+	TransitionTimePointer     string   `json:"transitionTimePointer"`
+	Statuses                  []string `json:"statuses"`
+	SameStatusTimestamp       string   `json:"sameStatusTimestamp"`
+	ChangedStatusTimestamp    string   `json:"changedStatusTimestamp"`
+	ObservedGeneration        string   `json:"observedGeneration"`
+	SetOrder                  string   `json:"setOrder"`
+}
+
+type resourceSpecShape uint8
+
+const (
+	resourceSpecWorkspace resourceSpecShape = iota
+	resourceSpecEmpty
+	resourceSpecProviderConnection
+)
+
+type resourceStatusShape uint8
+
+const (
+	resourceStatusConditions resourceStatusShape = iota
+	resourceStatusProviderConnection
+)
+
 type resourceSchemaContract struct {
 	kind           string
 	parentKind     string
 	metadataSchema string
-	specIsEmpty    bool
+	specShape      resourceSpecShape
+	statusShape    resourceStatusShape
 }
 
 func (contract resourceSchemaContract) schema(suffix string) string {
@@ -116,10 +162,86 @@ func (contract resourceSchemaContract) schema(suffix string) string {
 }
 
 var resourceSchemaContracts = []resourceSchemaContract{
-	{kind: "Workspace", metadataSchema: "RootResourceMetadata"},
-	{kind: "Environment", parentKind: "Workspace", metadataSchema: "ChildResourceMetadata", specIsEmpty: true},
-	{kind: "Application", parentKind: "Environment", metadataSchema: "ChildResourceMetadata", specIsEmpty: true},
-	{kind: "Component", parentKind: "Application", metadataSchema: "ChildResourceMetadata", specIsEmpty: true},
+	{kind: "Workspace", metadataSchema: "RootResourceMetadata", specShape: resourceSpecWorkspace},
+	{kind: "Policy", parentKind: "Workspace", metadataSchema: "ChildResourceMetadata", specShape: resourceSpecEmpty},
+	{kind: "Environment", parentKind: "Workspace", metadataSchema: "ChildResourceMetadata", specShape: resourceSpecEmpty},
+	{
+		kind: "ProviderConnection", parentKind: "Environment", metadataSchema: "ChildResourceMetadata",
+		specShape: resourceSpecProviderConnection, statusShape: resourceStatusProviderConnection,
+	},
+	{kind: "Application", parentKind: "Environment", metadataSchema: "ChildResourceMetadata", specShape: resourceSpecEmpty},
+	{kind: "Component", parentKind: "Application", metadataSchema: "ChildResourceMetadata", specShape: resourceSpecEmpty},
+}
+
+type credentialReferenceWire struct {
+	ReferenceID string `json:"referenceId"`
+	Version     string `json:"version"`
+}
+
+type providerConnectionSpecWire struct {
+	Provider      string                  `json:"provider"`
+	CredentialRef credentialReferenceWire `json:"credentialRef"`
+}
+
+type providerCapabilityWire struct {
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Source     string `json:"source"`
+	ObservedAt string `json:"observedAt"`
+	Reason     string `json:"reason"`
+}
+
+type quotaCheckWire struct {
+	Name       string  `json:"name"`
+	State      string  `json:"state"`
+	Requested  *string `json:"requested,omitempty"`
+	Available  *string `json:"available,omitempty"`
+	Source     string  `json:"source"`
+	ObservedAt string  `json:"observedAt"`
+	Reason     string  `json:"reason"`
+}
+
+type costEstimateWire struct {
+	State      string  `json:"state"`
+	Amount     *string `json:"amount,omitempty"`
+	Currency   string  `json:"currency"`
+	Region     string  `json:"region"`
+	Source     string  `json:"source"`
+	ObservedAt string  `json:"observedAt"`
+	Confidence string  `json:"confidence"`
+	Reason     string  `json:"reason"`
+}
+
+type providerConnectionStatusWire struct {
+	ObservedGeneration int64                    `json:"observedGeneration"`
+	Conditions         []json.RawMessage        `json:"conditions"`
+	Capabilities       []providerCapabilityWire `json:"capabilities"`
+	QuotaChecks        []quotaCheckWire         `json:"quotaChecks"`
+}
+
+type operationWire struct {
+	ID                   string            `json:"id"`
+	WorkspaceID          string            `json:"workspaceId"`
+	EnvironmentID        *string           `json:"environmentId,omitempty"`
+	ProviderConnectionID *string           `json:"providerConnectionId,omitempty"`
+	ResourceID           string            `json:"resourceId"`
+	Generation           int64             `json:"generation"`
+	ResourceVersion      string            `json:"resourceVersion"`
+	Phase                string            `json:"phase"`
+	Reason               *string           `json:"reason,omitempty"`
+	Message              *string           `json:"message,omitempty"`
+	CostEstimate         *costEstimateWire `json:"costEstimate,omitempty"`
+	CreatedAt            string            `json:"createdAt"`
+	UpdatedAt            string            `json:"updatedAt"`
+}
+
+type conditionWire struct {
+	Type               string `json:"type"`
+	Status             string `json:"status"`
+	Reason             string `json:"reason"`
+	Message            string `json:"message"`
+	ObservedGeneration int64  `json:"observedGeneration"`
+	LastTransitionAt   string `json:"lastTransitionAt"`
 }
 
 var operationContracts = map[string]operationContract{
@@ -235,10 +357,17 @@ var pathItemMetadata = map[string]bool{
 }
 
 var (
-	deprecationLinkValuePattern = regexp.MustCompile(deprecationLinkPattern)
-	deprecationValuePattern     = regexp.MustCompile(deprecationPattern)
-	lowerCamelCaseProperty      = regexp.MustCompile(`^[a-z][a-z0-9]*([A-Z][a-z0-9]+)*$`)
-	timestampValuePattern       = regexp.MustCompile(timestampPattern)
+	deprecationLinkValuePattern  = regexp.MustCompile(deprecationLinkPattern)
+	deprecationValuePattern      = regexp.MustCompile(deprecationPattern)
+	canonicalDecimalValuePattern = regexp.MustCompile(canonicalDecimalPattern)
+	conditionReasonValuePattern  = regexp.MustCompile(conditionReasonPattern)
+	currencyValuePattern         = regexp.MustCompile(currencyPattern)
+	lowerCamelCaseProperty       = regexp.MustCompile(`^[a-z][a-z0-9]*([A-Z][a-z0-9]+)*$`)
+	opaqueIDValuePattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$`)
+	opaqueVersionValuePattern    = regexp.MustCompile(opaqueVersionPattern)
+	providerTokenValuePattern    = regexp.MustCompile(providerTokenPattern)
+	regionValuePattern           = regexp.MustCompile(regionPattern)
+	timestampValuePattern        = regexp.MustCompile(timestampPattern)
 )
 
 // Load reads one bounded, regular, non-symlink contract file.
@@ -303,6 +432,8 @@ func Validate(data []byte) error {
 		{name: "root", fn: validateRoot},
 		{name: "evolution", fn: validateEvolution},
 		{name: "hierarchy", fn: validateHierarchy},
+		{name: "operation transitions", fn: validateOperationTransitions},
+		{name: "condition transitions", fn: validateConditionTransitions},
 		{name: "operations", fn: validateOperations},
 		{name: "components", fn: validateComponents},
 		{name: "examples", fn: validateExamples},
@@ -451,7 +582,7 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 				return fmt.Errorf("%s object schema omits additionalProperties", path)
 			}
 			if allowed, boolean := additional.(bool); boolean {
-				if allowed && !isReviewedRootParentExclusion(path, typed) {
+				if allowed && !isReviewedOpenObjectRefinement(path, typed) {
 					return fmt.Errorf("%s permits unconstrained additional properties", path)
 				}
 			} else {
@@ -499,9 +630,18 @@ func isReviewedRootParentExclusion(path string, schema map[string]any) bool {
 		stringSetEquals(schema["required"], []string{"parent"})
 }
 
+func isReviewedOpenObjectRefinement(path string, schema map[string]any) bool {
+	if isReviewedRootParentExclusion(path, schema) {
+		return true
+	}
+	return path == "$/components/schemas/CostEstimate/oneOf/1/not" &&
+		schema["type"] == "object" && schema["additionalProperties"] == true &&
+		stringSetEquals(schema["required"], []string{"amount"})
+}
+
 func isReviewedProblemRefinement(path string, schema map[string]any) bool {
 	if schema["x-veer-refinement"] != true {
-		return false
+		return isReviewedControlRefinement(path)
 	}
 	for _, contract := range problemContracts {
 		for _, variant := range problemVariantsFor(contract) {
@@ -513,13 +653,25 @@ func isReviewedProblemRefinement(path string, schema map[string]any) bool {
 	return false
 }
 
+func isReviewedControlRefinement(path string) bool {
+	for _, prefix := range []string{
+		"$/components/schemas/QuotaCheck/oneOf/",
+		"$/components/schemas/CostEstimate/oneOf/",
+	} {
+		if strings.HasPrefix(path, prefix) && !strings.Contains(strings.TrimPrefix(path, prefix), "/") {
+			return true
+		}
+	}
+	return false
+}
+
 func isReviewedFreeFormMap(path string, schema map[string]any) bool {
 	return path == "$/components/schemas/Labels" && schema["x-veer-free-form-map"] == true
 }
 
 func isReviewedExtension(path, name string) bool {
 	switch name {
-	case "x-veer-evolution", "x-veer-hierarchy":
+	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-operation-transitions", "x-veer-condition-transitions":
 		return path == "$"
 	case "x-veer-write-class":
 		return strings.HasPrefix(path, "$/paths/") &&
@@ -577,6 +729,7 @@ func isReviewedExtension(path, name string) bool {
 	case "x-veer-maximum-json-bytes":
 		switch path {
 		case "$/components/schemas/MutationReceipt",
+			"$/components/schemas/Operation",
 			"$/components/schemas/Problem",
 			"$/components/schemas/StatusReceipt",
 			"$/components/schemas/WorkspaceList":
@@ -586,6 +739,11 @@ func isReviewedExtension(path, name string) bool {
 		}
 	case "x-veer-page-byte-policy":
 		return isResourceSchemaPath(path, "List")
+	case "x-veer-list-order", "x-veer-list-unique-key":
+		return path == "$/components/schemas/ProviderConnectionStatus/properties/capabilities" ||
+			path == "$/components/schemas/ProviderConnectionStatus/properties/quotaChecks"
+	case "x-veer-quota-comparison":
+		return path == "$/components/schemas/QuotaCheck"
 	case "x-veer-refinement":
 		for _, contract := range problemContracts {
 			for _, variant := range problemVariantsFor(contract) {
@@ -775,6 +933,70 @@ func validateHierarchyFieldSets(raw any) error {
 				return fmt.Errorf("x-veer-hierarchy.resources[%d].%s field set drifted", index, name)
 			}
 		}
+	}
+	return nil
+}
+
+func validateOperationTransitions(root map[string]any) error {
+	raw, exists := root["x-veer-operation-transitions"]
+	if !exists {
+		return errors.New("x-veer-operation-transitions is missing")
+	}
+	manifest, ok := raw.(map[string]any)
+	if !ok || !mapKeySetEquals(manifest, []string{
+		"phasePointer", "transitions", "terminalPhases", "terminalReplay", "unknownPhase",
+	}) {
+		return errors.New("operation transition manifest field set drifted")
+	}
+	var contract operationTransitionContract
+	if err := decodeStrictValue(raw, &contract); err != nil {
+		return fmt.Errorf("operation transition manifest shape: %w", err)
+	}
+	if contract.PhasePointer != "/phase" || contract.TerminalReplay != "exact-only" ||
+		contract.UnknownPhase != "nonterminal-no-side-effects" ||
+		!reflect.DeepEqual(contract.TerminalPhases, []string{"Succeeded", "Failed", "Canceled"}) {
+		return errors.New("operation terminal transition policy drifted")
+	}
+	want := map[string][]string{
+		"Pending": {"Waiting", "Running", "Succeeded", "Failed", "Canceled"},
+		"Waiting": {"Pending", "Running", "Succeeded", "Failed", "Canceled"},
+		"Running": {"Waiting", "Succeeded", "Failed", "Canceled"},
+	}
+	if !reflect.DeepEqual(contract.Transitions, want) {
+		return errors.New("operation transition graph drifted")
+	}
+	return nil
+}
+
+func validateConditionTransitions(root map[string]any) error {
+	raw, exists := root["x-veer-condition-transitions"]
+	if !exists {
+		return errors.New("x-veer-condition-transitions is missing")
+	}
+	manifest, ok := raw.(map[string]any)
+	if !ok || !mapKeySetEquals(manifest, []string{
+		"identityPointer", "statusPointer", "observedGenerationPointer", "transitionTimePointer",
+		"statuses", "sameStatusTimestamp", "changedStatusTimestamp", "observedGeneration", "setOrder",
+	}) {
+		return errors.New("condition transition manifest field set drifted")
+	}
+	var contract conditionTransitionContract
+	if err := decodeStrictValue(raw, &contract); err != nil {
+		return fmt.Errorf("condition transition manifest shape: %w", err)
+	}
+	want := conditionTransitionContract{
+		IdentityPointer:           "/type",
+		StatusPointer:             "/status",
+		ObservedGenerationPointer: "/observedGeneration",
+		TransitionTimePointer:     "/lastTransitionAt",
+		Statuses:                  []string{"True", "False", "Unknown"},
+		SameStatusTimestamp:       "preserve",
+		ChangedStatusTimestamp:    "advance",
+		ObservedGeneration:        "nondecreasing-and-not-above-resource-generation",
+		SetOrder:                  "ascending-unique-type",
+	}
+	if !reflect.DeepEqual(contract, want) {
+		return errors.New("condition transition policy drifted")
 	}
 	return nil
 }
@@ -1959,7 +2181,7 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 		{name: "Condition"},
 		{name: "FieldViolation"},
 		{name: "MutationReceipt", extras: []string{"x-veer-maximum-json-bytes"}},
-		{name: "Operation"},
+		{name: "Operation", extras: []string{"example", "oneOf", "x-veer-maximum-json-bytes"}},
 		{name: "Problem", extras: []string{"x-veer-instance-request-id-template", "x-veer-maximum-json-bytes"}},
 		{name: "ResourceMetadata", extras: []string{"example"}},
 		{name: "StatusReceipt", extras: []string{"x-veer-maximum-json-bytes"}},
@@ -1973,6 +2195,10 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 		{name: "WorkspaceStatus", extras: []string{"example"}},
 		{name: "WorkspaceStatusWrite"},
 		{name: "WritableMetadata", extras: []string{"example"}},
+		{name: "CredentialReference", extras: []string{"example"}},
+		{name: "ProviderCapability", extras: []string{"example"}},
+		{name: "QuotaCheck", extras: []string{"example", "oneOf", "x-veer-quota-comparison"}},
+		{name: "CostEstimate", extras: []string{"example", "oneOf"}},
 	} {
 		schema, err := mapField(schemas, contract.name)
 		if err != nil {
@@ -2058,9 +2284,9 @@ func validateSchemas(schemas map[string]any) error {
 		return fmt.Errorf("expected exactly %d schemas, got %d", expectedSchemaCount, len(schemas))
 	}
 	required := []string{
-		"Condition", "FieldViolation", "IdempotencyKey", "Labels", "MutationReceipt",
+		"Condition", "CostEstimate", "CredentialReference", "FieldViolation", "IdempotencyKey", "Labels", "MutationReceipt",
 		"OpaqueId", "Operation", "Problem", "RequestId", "ResourceMetadata", "StatusReceipt", "StrongETag",
-		"Timestamp", "Workspace", "WorkspaceCreate", "WorkspaceList", "WorkspaceReplace",
+		"Timestamp", "ProviderCapability", "QuotaCheck", "Workspace", "WorkspaceCreate", "WorkspaceList", "WorkspaceReplace",
 		"WorkspaceSpec", "WorkspaceStatus", "WorkspaceStatusWrite", "WritableMetadata",
 		"RootResourceMetadata", "ChildResourceMetadata",
 	}
@@ -2301,6 +2527,9 @@ func validateSchemas(schemas map[string]any) error {
 		return err
 	}
 	if err := validateOperationSchema(schemas); err != nil {
+		return err
+	}
+	if err := validateControlValueSchemas(schemas); err != nil {
 		return err
 	}
 	if err := validateMetadataRefinements(schemas); err != nil {
@@ -2717,14 +2946,40 @@ func validateNestedSchemaKeywords(schemas map[string]any) error {
 		{schema: "MutationReceipt", property: "resourceVersion", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
 		{schema: "MutationReceipt", property: "acceptedAt", keywords: []string{"$ref"}},
 		{schema: "Operation", property: "id", keywords: []string{"$ref", "example", "type"}},
+		{schema: "Operation", property: "workspaceId", keywords: []string{"$ref", "example", "type"}},
+		{schema: "Operation", property: "environmentId", keywords: []string{"$ref", "example", "type"}},
+		{schema: "Operation", property: "providerConnectionId", keywords: []string{"$ref", "example", "type"}},
 		{schema: "Operation", property: "resourceId", keywords: []string{"$ref", "example", "type"}},
 		{schema: "Operation", property: "generation", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
 		{schema: "Operation", property: "resourceVersion", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
 		{schema: "Operation", property: "phase", keywords: []string{"enum", "example", "type"}},
 		{schema: "Operation", property: "reason", keywords: []string{"example", "maxLength", "pattern", "type"}},
 		{schema: "Operation", property: "message", keywords: []string{"description", "example", "maxLength", "type"}},
+		{schema: "Operation", property: "costEstimate", keywords: []string{"$ref"}},
 		{schema: "Operation", property: "createdAt", keywords: []string{"$ref"}},
 		{schema: "Operation", property: "updatedAt", keywords: []string{"$ref"}},
+		{schema: "CredentialReference", property: "referenceId", keywords: []string{"$ref", "example", "type"}},
+		{schema: "CredentialReference", property: "version", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "ProviderCapability", property: "name", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "ProviderCapability", property: "state", keywords: []string{"enum", "type"}},
+		{schema: "ProviderCapability", property: "source", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "ProviderCapability", property: "observedAt", keywords: []string{"$ref"}},
+		{schema: "ProviderCapability", property: "reason", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "QuotaCheck", property: "name", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "QuotaCheck", property: "state", keywords: []string{"enum", "type"}},
+		{schema: "QuotaCheck", property: "requested", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "QuotaCheck", property: "available", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "QuotaCheck", property: "source", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "QuotaCheck", property: "observedAt", keywords: []string{"$ref"}},
+		{schema: "QuotaCheck", property: "reason", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "CostEstimate", property: "state", keywords: []string{"enum", "type"}},
+		{schema: "CostEstimate", property: "amount", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "CostEstimate", property: "currency", keywords: []string{"pattern", "type"}},
+		{schema: "CostEstimate", property: "region", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "CostEstimate", property: "source", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "CostEstimate", property: "observedAt", keywords: []string{"$ref"}},
+		{schema: "CostEstimate", property: "confidence", keywords: []string{"enum", "type"}},
+		{schema: "CostEstimate", property: "reason", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
 		{schema: "FieldViolation", property: "field", keywords: []string{"example", "maxLength", "minLength", "pattern", "type", "x-veer-maximum-encoded-json-bytes"}},
 		{schema: "FieldViolation", property: "code", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
 		{schema: "FieldViolation", property: "message", keywords: []string{"example", "maxLength", "pattern", "type"}},
@@ -2807,6 +3062,32 @@ func validateNestedSchemaKeywords(schemas map[string]any) error {
 			}{schema: contract.schema("List"), property: "nextPageToken", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
 		)
 	}
+	contracts = append(contracts,
+		struct {
+			schema   string
+			property string
+			keywords []string
+		}{schema: "ProviderConnectionSpec", property: "provider", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		struct {
+			schema   string
+			property string
+			keywords []string
+		}{schema: "ProviderConnectionSpec", property: "credentialRef", keywords: []string{"$ref"}},
+		struct {
+			schema   string
+			property string
+			keywords []string
+		}{schema: "ProviderConnectionStatus", property: "capabilities", keywords: []string{
+			"items", "maxItems", "type", "uniqueItems", "x-veer-list-order", "x-veer-list-unique-key",
+		}},
+		struct {
+			schema   string
+			property string
+			keywords []string
+		}{schema: "ProviderConnectionStatus", property: "quotaChecks", keywords: []string{
+			"items", "maxItems", "type", "uniqueItems", "x-veer-list-order", "x-veer-list-unique-key",
+		}},
+	)
 
 	for _, contract := range contracts {
 		schema, err := mapField(schemas, contract.schema)
@@ -2916,14 +3197,27 @@ func validateResourceSchemaFamily(schemas map[string]any, contract resourceSchem
 	if err != nil {
 		return err
 	}
-	if !contract.specIsEmpty || len(properties) != 0 {
-		return fmt.Errorf("%s must remain a closed empty provider-neutral object", contract.schema("Spec"))
-	}
-	if _, exists := spec["required"]; exists {
-		return fmt.Errorf("%s must not declare required properties", contract.schema("Spec"))
+	switch contract.specShape {
+	case resourceSpecEmpty:
+		if len(properties) != 0 {
+			return fmt.Errorf("%s must remain a closed empty provider-neutral object", contract.schema("Spec"))
+		}
+		if _, exists := spec["required"]; exists {
+			return fmt.Errorf("%s must not declare required properties", contract.schema("Spec"))
+		}
+	case resourceSpecProviderConnection:
+		if err := validateProviderConnectionSpecSchema(schemas, spec, properties); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%s uses an unsupported resource spec shape", contract.kind)
 	}
 
-	if err := validateResourceStatusSchema(schemas, contract); err != nil {
+	if contract.statusShape == resourceStatusProviderConnection {
+		if err := validateProviderConnectionStatusSchema(schemas); err != nil {
+			return err
+		}
+	} else if err := validateResourceStatusSchema(schemas, contract); err != nil {
 		return err
 	}
 	if err := validateResourceReadSchema(schemas, contract); err != nil {
@@ -2978,6 +3272,758 @@ func validateResourceStatusSchema(schemas map[string]any, contract resourceSchem
 	}
 	if err := requireReference(conditions, "items", "#/components/schemas/Condition"); err != nil {
 		return fmt.Errorf("%s.conditions: %w", name, err)
+	}
+	return nil
+}
+
+func validateProviderConnectionSpecSchema(
+	schemas, spec, properties map[string]any,
+) error {
+	if spec["type"] != "object" || spec["additionalProperties"] != false ||
+		!stringSetEquals(spec["required"], []string{"provider", "credentialRef"}) || len(properties) != 2 {
+		return errors.New("providerConnectionSpec shape drifted")
+	}
+	provider, err := mapField(properties, "provider")
+	if err != nil {
+		return err
+	}
+	if provider["type"] != "string" || !numberEquals(provider["minLength"], "1") ||
+		!numberEquals(provider["maxLength"], "64") || provider["pattern"] != providerTokenPattern {
+		return errors.New("providerConnectionSpec.provider contract drifted")
+	}
+	if err := requireReference(properties, "credentialRef", "#/components/schemas/CredentialReference"); err != nil {
+		return fmt.Errorf("providerConnectionSpec: %w", err)
+	}
+	if _, err := mapField(schemas, "CredentialReference"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProviderConnectionStatusSchema(schemas map[string]any) error {
+	status, err := mapField(schemas, "ProviderConnectionStatus")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(status, "properties")
+	if err != nil {
+		return err
+	}
+	if status["type"] != "object" || status["additionalProperties"] != false ||
+		!stringSetEquals(status["required"], []string{
+			"observedGeneration", "conditions", "capabilities", "quotaChecks",
+		}) || len(properties) != 4 {
+		return errors.New("providerConnectionStatus shape drifted")
+	}
+	if err := validateInt64Property(
+		schemas,
+		"ProviderConnectionStatus",
+		"observedGeneration",
+		"0",
+		[]string{"type", "format", "minimum", "maximum"},
+	); err != nil {
+		return err
+	}
+	conditions, err := mapField(properties, "conditions")
+	if err != nil {
+		return err
+	}
+	if conditions["type"] != "array" || !numberEquals(conditions["maxItems"], "32") {
+		return errors.New("providerConnectionStatus.conditions contract drifted")
+	}
+	if err := requireReference(conditions, "items", "#/components/schemas/Condition"); err != nil {
+		return fmt.Errorf("providerConnectionStatus.conditions: %w", err)
+	}
+	for _, contract := range []struct {
+		property string
+		target   string
+	}{
+		{property: "capabilities", target: "ProviderCapability"},
+		{property: "quotaChecks", target: "QuotaCheck"},
+	} {
+		list, err := mapField(properties, contract.property)
+		if err != nil {
+			return err
+		}
+		if list["type"] != "array" || !numberEquals(list["maxItems"], "128") ||
+			list["uniqueItems"] != true || list["x-veer-list-unique-key"] != "/name" ||
+			list["x-veer-list-order"] != "ascending" {
+			return fmt.Errorf("providerConnectionStatus.%s list contract drifted", contract.property)
+		}
+		if err := requireReference(list, "items", "#/components/schemas/"+contract.target); err != nil {
+			return fmt.Errorf("providerConnectionStatus.%s: %w", contract.property, err)
+		}
+	}
+	example, err := mapField(status, "example")
+	if err != nil {
+		return err
+	}
+	if err := validateProviderConnectionStatusValue(example, 1); err != nil {
+		return fmt.Errorf("providerConnectionStatus example: %w", err)
+	}
+	return nil
+}
+
+func validateControlValueSchemas(schemas map[string]any) error {
+	if err := validateCredentialReferenceSchema(schemas); err != nil {
+		return err
+	}
+	if err := validateProviderCapabilitySchema(schemas); err != nil {
+		return err
+	}
+	if err := validateQuotaCheckSchema(schemas); err != nil {
+		return err
+	}
+	return validateCostEstimateSchema(schemas)
+}
+
+func validateCredentialReferenceSchema(schemas map[string]any) error {
+	schema, err := mapField(schemas, "CredentialReference")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if schema["type"] != "object" || schema["additionalProperties"] != false ||
+		!stringSetEquals(schema["required"], []string{"referenceId", "version"}) || len(properties) != 2 {
+		return errors.New("credentialReference shape drifted")
+	}
+	if err := requireAnnotatedReference(
+		properties,
+		"referenceId",
+		"#/components/schemas/OpaqueId",
+		map[string]any{"type": "string", "example": "cred_01J0000000000000000000000"},
+	); err != nil {
+		return fmt.Errorf("credentialReference: %w", err)
+	}
+	version, err := mapField(properties, "version")
+	if err != nil {
+		return err
+	}
+	if version["type"] != "string" || !numberEquals(version["minLength"], "1") ||
+		!numberEquals(version["maxLength"], "128") || version["pattern"] != "^[A-Za-z0-9_-]+$" ||
+		version["example"] != "ver_01J00000000000000000000000" {
+		return errors.New("credentialReference.version contract drifted")
+	}
+	example, err := mapField(schema, "example")
+	if err != nil {
+		return err
+	}
+	return validateCredentialReferenceValue(example)
+}
+
+func validateProviderCapabilitySchema(schemas map[string]any) error {
+	schema, err := mapField(schemas, "ProviderCapability")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if schema["type"] != "object" || schema["additionalProperties"] != false ||
+		!stringSetEquals(schema["required"], []string{"name", "state", "source", "observedAt", "reason"}) ||
+		len(properties) != 5 {
+		return errors.New("providerCapability shape drifted")
+	}
+	if err := validateObservationSchemaFields(
+		properties,
+		"ProviderCapability",
+		[]string{"Supported", "Unsupported", "Unknown"},
+	); err != nil {
+		return err
+	}
+	example, err := mapField(schema, "example")
+	if err != nil {
+		return err
+	}
+	return validateProviderCapabilityValue(example)
+}
+
+func validateQuotaCheckSchema(schemas map[string]any) error {
+	schema, err := mapField(schemas, "QuotaCheck")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if schema["type"] != "object" || schema["additionalProperties"] != false ||
+		!stringSetEquals(schema["required"], []string{"name", "state", "source", "observedAt", "reason"}) ||
+		len(properties) != 7 {
+		return errors.New("quotaCheck shape drifted")
+	}
+	if err := validateObservationSchemaFields(
+		properties,
+		"QuotaCheck",
+		[]string{"WithinLimit", "Exceeded", "Unknown"},
+	); err != nil {
+		return err
+	}
+	for _, name := range []string{"requested", "available"} {
+		property, err := mapField(properties, name)
+		if err != nil {
+			return err
+		}
+		if property["type"] != "string" || !numberEquals(property["minLength"], "1") ||
+			!numberEquals(property["maxLength"], "64") || property["pattern"] != canonicalDecimalPattern {
+			return fmt.Errorf("quotaCheck.%s decimal contract drifted", name)
+		}
+	}
+	comparison, err := mapField(schema, "x-veer-quota-comparison")
+	if err != nil || !reflect.DeepEqual(comparison, map[string]any{
+		"WithinLimit": "requested<=available",
+		"Exceeded":    "requested>available",
+		"Unknown":     "operands-absent",
+	}) {
+		return errors.New("quotaCheck comparison manifest drifted")
+	}
+	if err := validateQuotaCheckRefinement(schema["oneOf"]); err != nil {
+		return err
+	}
+	example, err := mapField(schema, "example")
+	if err != nil {
+		return err
+	}
+	return validateQuotaCheckValue(example)
+}
+
+func validateCostEstimateSchema(schemas map[string]any) error {
+	schema, err := mapField(schemas, "CostEstimate")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(schema, "properties")
+	if err != nil {
+		return err
+	}
+	if schema["type"] != "object" || schema["additionalProperties"] != false ||
+		!stringSetEquals(schema["required"], []string{
+			"state", "currency", "region", "source", "observedAt", "confidence", "reason",
+		}) || len(properties) != 8 {
+		return errors.New("costEstimate shape drifted")
+	}
+	state, err := mapField(properties, "state")
+	if err != nil {
+		return err
+	}
+	confidence, err := mapField(properties, "confidence")
+	if err != nil {
+		return err
+	}
+	if state["type"] != "string" || !stringSetEquals(state["enum"], []string{"Known", "Unknown"}) ||
+		confidence["type"] != "string" || !stringSetEquals(
+		confidence["enum"], []string{"Low", "Medium", "High", "Unknown"},
+	) {
+		return errors.New("costEstimate tagged state contract drifted")
+	}
+	amount, err := mapField(properties, "amount")
+	if err != nil {
+		return err
+	}
+	if amount["type"] != "string" || !numberEquals(amount["minLength"], "1") ||
+		!numberEquals(amount["maxLength"], "64") || amount["pattern"] != canonicalDecimalPattern {
+		return errors.New("costEstimate.amount contract drifted")
+	}
+	currency, err := mapField(properties, "currency")
+	if err != nil {
+		return err
+	}
+	if currency["type"] != "string" || currency["pattern"] != currencyPattern {
+		return errors.New("costEstimate.currency contract drifted")
+	}
+	region, err := mapField(properties, "region")
+	if err != nil {
+		return err
+	}
+	if region["type"] != "string" || !numberEquals(region["minLength"], "1") ||
+		!numberEquals(region["maxLength"], "63") || region["pattern"] != regionPattern {
+		return errors.New("costEstimate.region contract drifted")
+	}
+	if err := validateSourceReasonTimestampSchema(properties, "CostEstimate"); err != nil {
+		return err
+	}
+	if err := validateCostEstimateRefinement(schema["oneOf"]); err != nil {
+		return err
+	}
+	example, err := mapField(schema, "example")
+	if err != nil {
+		return err
+	}
+	return validateCostEstimateValue(example)
+}
+
+func validateObservationSchemaFields(
+	properties map[string]any,
+	context string,
+	states []string,
+) error {
+	name, err := mapField(properties, "name")
+	if err != nil {
+		return err
+	}
+	if name["type"] != "string" || !numberEquals(name["minLength"], "1") ||
+		!numberEquals(name["maxLength"], "128") || name["pattern"] != providerTokenPattern {
+		return fmt.Errorf("%s.name contract drifted", context)
+	}
+	state, err := mapField(properties, "state")
+	if err != nil {
+		return err
+	}
+	if state["type"] != "string" || !stringSetEquals(state["enum"], states) {
+		return fmt.Errorf("%s.state contract drifted", context)
+	}
+	return validateSourceReasonTimestampSchema(properties, context)
+}
+
+func validateSourceReasonTimestampSchema(properties map[string]any, context string) error {
+	source, err := mapField(properties, "source")
+	if err != nil {
+		return err
+	}
+	if source["type"] != "string" || !numberEquals(source["minLength"], "1") ||
+		!numberEquals(source["maxLength"], "64") || source["pattern"] != providerTokenPattern {
+		return fmt.Errorf("%s.source contract drifted", context)
+	}
+	reason, err := mapField(properties, "reason")
+	if err != nil {
+		return err
+	}
+	if reason["type"] != "string" || !numberEquals(reason["minLength"], "1") ||
+		!numberEquals(reason["maxLength"], "64") || reason["pattern"] != conditionReasonPattern {
+		return fmt.Errorf("%s.reason contract drifted", context)
+	}
+	if err := requireReference(properties, "observedAt", "#/components/schemas/Timestamp"); err != nil {
+		return fmt.Errorf("%s.observedAt: %w", context, err)
+	}
+	return nil
+}
+
+func validateQuotaCheckRefinement(raw any) error {
+	branches, ok := raw.([]any)
+	if !ok || len(branches) != 2 {
+		return errors.New("quotaCheck must contain exactly two tagged oneOf branches")
+	}
+	known, ok := branches[0].(map[string]any)
+	if !ok || !mapKeySetEquals(known, []string{"required", "properties"}) ||
+		!stringSetEquals(known["required"], []string{"requested", "available"}) {
+		return errors.New("quotaCheck known-state refinement drifted")
+	}
+	knownProperties, err := mapField(known, "properties")
+	if err != nil || !mapKeySetEquals(knownProperties, []string{"state"}) {
+		return errors.New("quotaCheck known-state properties drifted")
+	}
+	knownState, err := mapField(knownProperties, "state")
+	if err != nil || !mapKeySetEquals(knownState, []string{"enum"}) ||
+		!stringSetEquals(knownState["enum"], []string{"WithinLimit", "Exceeded"}) {
+		return errors.New("quotaCheck known-state tag drifted")
+	}
+	unknown, ok := branches[1].(map[string]any)
+	if !ok || !mapKeySetEquals(unknown, []string{"properties", "not"}) {
+		return errors.New("quotaCheck unknown-state refinement drifted")
+	}
+	unknownProperties, err := mapField(unknown, "properties")
+	if err != nil || !mapKeySetEquals(unknownProperties, []string{"state"}) {
+		return errors.New("quotaCheck unknown-state properties drifted")
+	}
+	unknownState, err := mapField(unknownProperties, "state")
+	if err != nil || !mapKeySetEquals(unknownState, []string{"const"}) || unknownState["const"] != "Unknown" {
+		return errors.New("quotaCheck unknown-state tag drifted")
+	}
+	not, err := mapField(unknown, "not")
+	if err != nil || !mapKeySetEquals(not, []string{"anyOf"}) ||
+		!requiredBranchSetEquals(not["anyOf"], [][]string{{"requested"}, {"available"}}) {
+		return errors.New("quotaCheck unknown-state operand exclusion drifted")
+	}
+	return nil
+}
+
+func validateCostEstimateRefinement(raw any) error {
+	branches, ok := raw.([]any)
+	if !ok || len(branches) != 2 {
+		return errors.New("costEstimate must contain exactly two tagged oneOf branches")
+	}
+	known, ok := branches[0].(map[string]any)
+	if !ok || !mapKeySetEquals(known, []string{"required", "properties"}) ||
+		!stringSetEquals(known["required"], []string{"amount"}) {
+		return errors.New("costEstimate known-state refinement drifted")
+	}
+	knownProperties, err := mapField(known, "properties")
+	if err != nil || !mapKeySetEquals(knownProperties, []string{"state", "confidence"}) {
+		return errors.New("costEstimate known-state properties drifted")
+	}
+	knownState, err := mapField(knownProperties, "state")
+	if err != nil || !mapKeySetEquals(knownState, []string{"const"}) || knownState["const"] != "Known" {
+		return errors.New("costEstimate known-state tag drifted")
+	}
+	knownConfidence, err := mapField(knownProperties, "confidence")
+	if err != nil || !mapKeySetEquals(knownConfidence, []string{"enum"}) ||
+		!stringSetEquals(knownConfidence["enum"], []string{"Low", "Medium", "High"}) {
+		return errors.New("costEstimate known confidence contract drifted")
+	}
+	unknown, ok := branches[1].(map[string]any)
+	if !ok || !mapKeySetEquals(unknown, []string{"properties", "not"}) {
+		return errors.New("costEstimate unknown-state refinement drifted")
+	}
+	unknownProperties, err := mapField(unknown, "properties")
+	if err != nil || !mapKeySetEquals(unknownProperties, []string{"state", "confidence"}) {
+		return errors.New("costEstimate unknown-state properties drifted")
+	}
+	for name, want := range map[string]string{"state": "Unknown", "confidence": "Unknown"} {
+		property, err := mapField(unknownProperties, name)
+		if err != nil || !mapKeySetEquals(property, []string{"const"}) || property["const"] != want {
+			return fmt.Errorf("costEstimate unknown %s contract drifted", name)
+		}
+	}
+	not, err := mapField(unknown, "not")
+	if err != nil || !mapKeySetEquals(not, []string{"type", "additionalProperties", "required"}) ||
+		not["type"] != "object" || not["additionalProperties"] != true ||
+		!stringSetEquals(not["required"], []string{"amount"}) {
+		return errors.New("costEstimate unknown amount exclusion drifted")
+	}
+	return nil
+}
+
+func requiredBranchSetEquals(raw any, want [][]string) bool {
+	branches, ok := raw.([]any)
+	if !ok || len(branches) != len(want) {
+		return false
+	}
+	for index, rawBranch := range branches {
+		branch, ok := rawBranch.(map[string]any)
+		if !ok || !mapKeySetEquals(branch, []string{"required"}) ||
+			!stringSetEquals(branch["required"], want[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateCredentialReferenceValue(raw any) error {
+	var value credentialReferenceWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return fmt.Errorf("credentialReference strict decode: %w", err)
+	}
+	if !opaqueIDValuePattern.MatchString(value.ReferenceID) {
+		return errors.New("credentialReference.referenceId is not an opaque ID")
+	}
+	if len(value.Version) < 1 || len(value.Version) > 128 ||
+		!opaqueVersionValuePattern.MatchString(value.Version) {
+		return errors.New("credentialReference.version is invalid")
+	}
+	return nil
+}
+
+func validateProviderConnectionSpecValue(raw any) error {
+	var value providerConnectionSpecWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return fmt.Errorf("providerConnectionSpec strict decode: %w", err)
+	}
+	if !validProviderToken(value.Provider, 64) {
+		return errors.New("providerConnectionSpec.provider is invalid")
+	}
+	return validateCredentialReferenceValue(value.CredentialRef)
+}
+
+func validateProviderCapabilityValue(raw any) error {
+	var value providerCapabilityWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return fmt.Errorf("providerCapability strict decode: %w", err)
+	}
+	if err := validateObservationValue(value.Name, value.Source, value.ObservedAt, value.Reason); err != nil {
+		return err
+	}
+	switch value.State {
+	case "Supported", "Unsupported", "Unknown":
+		return nil
+	default:
+		return fmt.Errorf("providerCapability.state %q is invalid", value.State)
+	}
+}
+
+func validateQuotaCheckValue(raw any) error {
+	var value quotaCheckWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return fmt.Errorf("quotaCheck strict decode: %w", err)
+	}
+	if err := validateObservationValue(value.Name, value.Source, value.ObservedAt, value.Reason); err != nil {
+		return err
+	}
+	if value.State == "Unknown" {
+		if value.Requested != nil || value.Available != nil {
+			return errors.New("unknown quota must omit requested and available")
+		}
+		return nil
+	}
+	if value.State != "WithinLimit" && value.State != "Exceeded" {
+		return fmt.Errorf("quotaCheck.state %q is invalid", value.State)
+	}
+	if value.Requested == nil || value.Available == nil ||
+		!validCanonicalDecimal(*value.Requested) || !validCanonicalDecimal(*value.Available) {
+		return errors.New("known quota requires canonical requested and available decimals")
+	}
+	requested, requestedOK := new(big.Rat).SetString(*value.Requested)
+	available, availableOK := new(big.Rat).SetString(*value.Available)
+	if !requestedOK || !availableOK {
+		return errors.New("quota decimal parse failed")
+	}
+	comparison := requested.Cmp(available)
+	if value.State == "WithinLimit" && comparison > 0 {
+		return errors.New("withinLimit quota requires requested <= available")
+	}
+	if value.State == "Exceeded" && comparison <= 0 {
+		return errors.New("exceeded quota requires requested > available")
+	}
+	return nil
+}
+
+func validateCostEstimateValue(raw any) error {
+	var value costEstimateWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return fmt.Errorf("costEstimate strict decode: %w", err)
+	}
+	if !currencyValuePattern.MatchString(value.Currency) || !regionValuePattern.MatchString(value.Region) ||
+		!validProviderToken(value.Source, 64) || !validTimestamp(value.ObservedAt) ||
+		!validConditionReason(value.Reason) {
+		return errors.New("costEstimate common observation fields are invalid")
+	}
+	if value.State == "Unknown" {
+		if value.Amount != nil || value.Confidence != "Unknown" {
+			return errors.New("unknown cost must omit amount and use Unknown confidence")
+		}
+		return nil
+	}
+	if value.State != "Known" || value.Amount == nil || !validCanonicalDecimal(*value.Amount) {
+		return errors.New("known cost requires a canonical nonnegative amount")
+	}
+	switch value.Confidence {
+	case "Low", "Medium", "High":
+		return nil
+	default:
+		return errors.New("known cost requires non-Unknown confidence")
+	}
+}
+
+func validateProviderConnectionStatusValue(raw any, resourceGeneration int64) error {
+	var value providerConnectionStatusWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return fmt.Errorf("providerConnectionStatus strict decode: %w", err)
+	}
+	if value.ObservedGeneration < 0 || value.ObservedGeneration > resourceGeneration {
+		return errors.New("providerConnectionStatus observedGeneration is outside the resource generation")
+	}
+	if len(value.Conditions) > 32 || len(value.Capabilities) > 128 || len(value.QuotaChecks) > 128 {
+		return errors.New("providerConnectionStatus contains an oversized bounded list")
+	}
+	previousCondition := ""
+	for index, rawCondition := range value.Conditions {
+		condition, err := validateConditionValue(rawCondition, resourceGeneration)
+		if err != nil {
+			return fmt.Errorf("condition %d: %w", index, err)
+		}
+		if previousCondition != "" && condition.Type <= previousCondition {
+			return errors.New("conditions must be strictly ascending and unique by type")
+		}
+		previousCondition = condition.Type
+	}
+	previousName := ""
+	for index, capability := range value.Capabilities {
+		if err := validateProviderCapabilityValue(capability); err != nil {
+			return fmt.Errorf("capability %d: %w", index, err)
+		}
+		if previousName != "" && capability.Name <= previousName {
+			return errors.New("capabilities must be strictly ascending and unique by name")
+		}
+		previousName = capability.Name
+	}
+	previousName = ""
+	for index, quota := range value.QuotaChecks {
+		if err := validateQuotaCheckValue(quota); err != nil {
+			return fmt.Errorf("quota check %d: %w", index, err)
+		}
+		if previousName != "" && quota.Name <= previousName {
+			return errors.New("quota checks must be strictly ascending and unique by name")
+		}
+		previousName = quota.Name
+	}
+	return nil
+}
+
+func validateObservationValue(name, source, observedAt, reason string) error {
+	if !validProviderToken(name, 128) || !validProviderToken(source, 64) ||
+		!validTimestamp(observedAt) || !validConditionReason(reason) {
+		return errors.New("provider observation fields are invalid")
+	}
+	return nil
+}
+
+func validProviderToken(value string, maximum int) bool {
+	return len(value) >= 1 && len(value) <= maximum && providerTokenValuePattern.MatchString(value)
+}
+
+func validConditionReason(value string) bool {
+	return len(value) >= 1 && len(value) <= 64 && conditionReasonValuePattern.MatchString(value)
+}
+
+func validCanonicalDecimal(value string) bool {
+	return len(value) >= 1 && len(value) <= 64 && canonicalDecimalValuePattern.MatchString(value)
+}
+
+func validateConditionValue(raw any, resourceGeneration int64) (conditionWire, error) {
+	var value conditionWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return value, fmt.Errorf("condition strict decode: %w", err)
+	}
+	if !validConditionReason(value.Type) || !validConditionReason(value.Reason) ||
+		!utf8.ValidString(value.Message) || utf8.RuneCountInString(value.Message) > 512 ||
+		!validTimestamp(value.LastTransitionAt) ||
+		value.ObservedGeneration < 0 || value.ObservedGeneration > resourceGeneration {
+		return value, errors.New("condition fields are invalid")
+	}
+	switch value.Status {
+	case "True", "False", "Unknown":
+		return value, nil
+	default:
+		return value, fmt.Errorf("condition.status %q is invalid", value.Status)
+	}
+}
+
+func validateOperationValue(raw any) (operationWire, error) {
+	var value operationWire
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return value, fmt.Errorf("encode operation: %w", err)
+	}
+	if len(encoded) > 4096 {
+		return value, errors.New("operation exceeds 4096 canonical JSON bytes")
+	}
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return value, fmt.Errorf("operation strict decode: %w", err)
+	}
+	for name, identifier := range map[string]string{
+		"id": value.ID, "workspaceId": value.WorkspaceID, "resourceId": value.ResourceID,
+	} {
+		if !opaqueIDValuePattern.MatchString(identifier) {
+			return value, fmt.Errorf("operation.%s is not an opaque ID", name)
+		}
+	}
+	if (value.EnvironmentID == nil) != (value.ProviderConnectionID == nil) {
+		return value, errors.New("operation environmentId and providerConnectionId must both be present or absent")
+	}
+	for name, identifier := range map[string]*string{
+		"environmentId": value.EnvironmentID, "providerConnectionId": value.ProviderConnectionID,
+	} {
+		if identifier != nil && !opaqueIDValuePattern.MatchString(*identifier) {
+			return value, fmt.Errorf("operation.%s is not an opaque ID", name)
+		}
+	}
+	if value.Generation < 1 || len(value.ResourceVersion) < 1 || len(value.ResourceVersion) > 128 ||
+		!opaqueVersionValuePattern.MatchString(value.ResourceVersion) ||
+		!validTimestamp(value.CreatedAt) || !validTimestamp(value.UpdatedAt) {
+		return value, errors.New("operation revision or timestamp fields are invalid")
+	}
+	createdAt, _ := time.Parse("2006-01-02T15:04:05.000Z", value.CreatedAt)
+	updatedAt, _ := time.Parse("2006-01-02T15:04:05.000Z", value.UpdatedAt)
+	if updatedAt.Before(createdAt) {
+		return value, errors.New("operation.updatedAt cannot precede createdAt")
+	}
+	switch value.Phase {
+	case "Pending", "Waiting", "Running", "Succeeded", "Failed", "Canceled":
+	default:
+		return value, fmt.Errorf("operation.phase %q is invalid", value.Phase)
+	}
+	if value.Reason != nil && !validConditionReason(*value.Reason) {
+		return value, errors.New("operation.reason is invalid")
+	}
+	if value.Message != nil && (!utf8.ValidString(*value.Message) || utf8.RuneCountInString(*value.Message) > 512) {
+		return value, errors.New("operation.message exceeds 512 characters")
+	}
+	if value.CostEstimate != nil {
+		if err := validateCostEstimateValue(*value.CostEstimate); err != nil {
+			return value, fmt.Errorf("operation.costEstimate: %w", err)
+		}
+	}
+	return value, nil
+}
+
+func validateOperationTransition(beforeRaw, afterRaw any) error {
+	before, err := validateOperationValue(beforeRaw)
+	if err != nil {
+		return fmt.Errorf("before: %w", err)
+	}
+	after, err := validateOperationValue(afterRaw)
+	if err != nil {
+		return fmt.Errorf("after: %w", err)
+	}
+	if before.Phase == "Succeeded" || before.Phase == "Failed" || before.Phase == "Canceled" {
+		if !reflect.DeepEqual(before, after) {
+			return errors.New("terminal operation permits exact replay only")
+		}
+		return nil
+	}
+	if before.ID != after.ID || before.WorkspaceID != after.WorkspaceID ||
+		before.ResourceID != after.ResourceID || before.Generation != after.Generation ||
+		before.CreatedAt != after.CreatedAt || !reflect.DeepEqual(before.EnvironmentID, after.EnvironmentID) ||
+		!reflect.DeepEqual(before.ProviderConnectionID, after.ProviderConnectionID) {
+		return errors.New("operation identity, ownership, binding, generation, and creation time are immutable")
+	}
+	if reflect.DeepEqual(before, after) {
+		return nil
+	}
+	allowed := map[string]map[string]bool{
+		"Pending": {"Waiting": true, "Running": true, "Succeeded": true, "Failed": true, "Canceled": true},
+		"Waiting": {"Pending": true, "Running": true, "Succeeded": true, "Failed": true, "Canceled": true},
+		"Running": {"Waiting": true, "Succeeded": true, "Failed": true, "Canceled": true},
+	}
+	phaseChanged := before.Phase != after.Phase
+	if phaseChanged && !allowed[before.Phase][after.Phase] {
+		return fmt.Errorf("operation transition %s -> %s is not allowed", before.Phase, after.Phase)
+	}
+	materialChanged := phaseChanged || !reflect.DeepEqual(before.Reason, after.Reason) ||
+		!reflect.DeepEqual(before.Message, after.Message) ||
+		!reflect.DeepEqual(before.CostEstimate, after.CostEstimate)
+	if !materialChanged {
+		return errors.New("operation revision fields cannot advance without material evidence")
+	}
+	if before.ResourceVersion == after.ResourceVersion {
+		return errors.New("material operation transition must advance resourceVersion")
+	}
+	beforeUpdated, _ := time.Parse("2006-01-02T15:04:05.000Z", before.UpdatedAt)
+	afterUpdated, _ := time.Parse("2006-01-02T15:04:05.000Z", after.UpdatedAt)
+	if afterUpdated.Before(beforeUpdated) {
+		return errors.New("material operation transition cannot regress updatedAt")
+	}
+	return nil
+}
+
+func validateConditionTransition(beforeRaw, afterRaw any, resourceGeneration int64) error {
+	before, err := validateConditionValue(beforeRaw, resourceGeneration)
+	if err != nil {
+		return fmt.Errorf("before: %w", err)
+	}
+	after, err := validateConditionValue(afterRaw, resourceGeneration)
+	if err != nil {
+		return fmt.Errorf("after: %w", err)
+	}
+	if before.Type != after.Type {
+		return errors.New("condition.type is immutable across a transition")
+	}
+	if after.ObservedGeneration < before.ObservedGeneration {
+		return errors.New("condition.observedGeneration must be nondecreasing")
+	}
+	if before.Status == after.Status {
+		if before.LastTransitionAt != after.LastTransitionAt {
+			return errors.New("same-status condition transition must preserve lastTransitionAt")
+		}
+		return nil
+	}
+	beforeTime, _ := time.Parse("2006-01-02T15:04:05.000Z", before.LastTransitionAt)
+	afterTime, _ := time.Parse("2006-01-02T15:04:05.000Z", after.LastTransitionAt)
+	if !afterTime.After(beforeTime) {
+		return errors.New("changed-status condition transition must advance lastTransitionAt")
 	}
 	return nil
 }
@@ -3190,21 +4236,36 @@ func validateResourceExamples(schemas map[string]any) error {
 		if err != nil {
 			return err
 		}
-		if contract.specIsEmpty {
+		switch contract.specShape {
+		case resourceSpecEmpty:
 			if len(spec) != 0 {
 				return fmt.Errorf("%s example spec must be empty", contract.kind)
 			}
-		} else if len(spec) != 1 || spec["suspendReconciliation"] != false {
-			return errors.New("workspace example spec drifted")
+		case resourceSpecWorkspace:
+			if len(spec) != 1 || spec["suspendReconciliation"] != false {
+				return errors.New("workspace example spec drifted")
+			}
+		case resourceSpecProviderConnection:
+			if err := validateProviderConnectionSpecValue(spec); err != nil {
+				return fmt.Errorf("providerConnection example spec: %w", err)
+			}
+		default:
+			return fmt.Errorf("%s example has an unsupported spec shape", contract.kind)
 		}
 		status, err := mapField(example, "status")
 		if err != nil {
 			return err
 		}
-		conditions, conditionsOK := status["conditions"].([]any)
-		if !mapKeySetEquals(status, []string{"observedGeneration", "conditions"}) ||
-			!numberEquals(status["observedGeneration"], "0") || !conditionsOK || len(conditions) != 0 {
-			return fmt.Errorf("%s example status drifted", contract.kind)
+		if contract.statusShape == resourceStatusProviderConnection {
+			if err := validateProviderConnectionStatusValue(status, 1); err != nil {
+				return fmt.Errorf("providerConnection example status: %w", err)
+			}
+		} else {
+			conditions, conditionsOK := status["conditions"].([]any)
+			if !mapKeySetEquals(status, []string{"observedGeneration", "conditions"}) ||
+				!numberEquals(status["observedGeneration"], "0") || !conditionsOK || len(conditions) != 0 {
+				return fmt.Errorf("%s example status drifted", contract.kind)
+			}
 		}
 		seen[id] = exampleNode{kind: contract.kind, workspaceID: workspaceID}
 	}
@@ -3278,6 +4339,14 @@ func validateConditionSchema(schemas map[string]any) error {
 	if err := requireReference(properties, "lastTransitionAt", "#/components/schemas/Timestamp"); err != nil {
 		return fmt.Errorf("condition: %w", err)
 	}
+	encoded, err := json.Marshal(condition)
+	if err != nil {
+		return fmt.Errorf("encode condition schema: %w", err)
+	}
+	fingerprint := sha256.Sum256(encoded)
+	if fmt.Sprintf("%x", fingerprint) != conditionSchemaSHA256 {
+		return errors.New("condition schema changed outside the accepted transition-manifest boundary")
+	}
 	return nil
 }
 
@@ -3290,9 +4359,10 @@ func validateOperationSchema(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if !stringSetEquals(operation["required"], []string{
-		"id", "resourceId", "generation", "resourceVersion", "phase", "createdAt", "updatedAt",
-	}) || len(properties) != 9 {
+	if operation["type"] != "object" || operation["additionalProperties"] != false ||
+		!stringSetEquals(operation["required"], []string{
+			"id", "workspaceId", "resourceId", "generation", "resourceVersion", "phase", "createdAt", "updatedAt",
+		}) || len(properties) != 13 || !numberEquals(operation["x-veer-maximum-json-bytes"], "4096") {
 		return errors.New("operation shape drifted")
 	}
 	for _, contract := range []struct {
@@ -3306,9 +4376,24 @@ func validateOperationSchema(schemas map[string]any) error {
 			siblings: map[string]any{"type": "string", "example": "op_01J000000000000000000000000"},
 		},
 		{
-			property: "resourceId",
+			property: "workspaceId",
 			target:   "OpaqueId",
 			siblings: map[string]any{"type": "string", "example": "wsp_01J00000000000000000000000"},
+		},
+		{
+			property: "environmentId",
+			target:   "OpaqueId",
+			siblings: map[string]any{"type": "string", "example": "env_01J00000000000000000000000"},
+		},
+		{
+			property: "providerConnectionId",
+			target:   "OpaqueId",
+			siblings: map[string]any{"type": "string", "example": "pvc_01J00000000000000000000000"},
+		},
+		{
+			property: "resourceId",
+			target:   "OpaqueId",
+			siblings: map[string]any{"type": "string", "example": "cmp_01J00000000000000000000000"},
 		},
 		{property: "createdAt", target: "Timestamp"},
 		{property: "updatedAt", target: "Timestamp"},
@@ -3339,7 +4424,7 @@ func validateOperationSchema(schemas map[string]any) error {
 	}
 	if phase["type"] != "string" || !stringSetEquals(
 		phase["enum"],
-		[]string{"Pending", "Running", "Succeeded", "Failed", "Canceled"},
+		[]string{"Pending", "Waiting", "Running", "Succeeded", "Failed", "Canceled"},
 	) {
 		return errors.New("operation.phase contract drifted")
 	}
@@ -3357,6 +4442,41 @@ func validateOperationSchema(schemas map[string]any) error {
 	}
 	if message["type"] != "string" || !numberEquals(message["maxLength"], "512") {
 		return errors.New("operation.message contract drifted")
+	}
+	if err := requireReference(properties, "costEstimate", "#/components/schemas/CostEstimate"); err != nil {
+		return fmt.Errorf("operation: %w", err)
+	}
+	if err := validateOperationBindingRefinement(operation["oneOf"]); err != nil {
+		return err
+	}
+	example, err := mapField(operation, "example")
+	if err != nil {
+		return err
+	}
+	if _, err := validateOperationValue(example); err != nil {
+		return fmt.Errorf("operation example: %w", err)
+	}
+	return nil
+}
+
+func validateOperationBindingRefinement(raw any) error {
+	branches, ok := raw.([]any)
+	if !ok || len(branches) != 2 {
+		return errors.New("operation binding must contain exactly two oneOf branches")
+	}
+	bound, ok := branches[0].(map[string]any)
+	if !ok || !mapKeySetEquals(bound, []string{"required"}) ||
+		!stringSetEquals(bound["required"], []string{"environmentId", "providerConnectionId"}) {
+		return errors.New("operation provider-bound refinement drifted")
+	}
+	unbound, ok := branches[1].(map[string]any)
+	if !ok || !mapKeySetEquals(unbound, []string{"not"}) {
+		return errors.New("operation unbound refinement drifted")
+	}
+	not, err := mapField(unbound, "not")
+	if err != nil || !mapKeySetEquals(not, []string{"anyOf"}) ||
+		!requiredBranchSetEquals(not["anyOf"], [][]string{{"environmentId"}, {"providerConnectionId"}}) {
+		return errors.New("operation partial provider binding exclusion drifted")
 	}
 	return nil
 }
@@ -3643,6 +4763,37 @@ func validateExamples(root map[string]any) error {
 		if expected.retryAfterSeconds != "" && !numberEquals(value["retryAfterSeconds"], expected.retryAfterSeconds) {
 			return fmt.Errorf("example %s retryAfterSeconds drifted", name)
 		}
+	}
+	schemas, err := mapField(components, "schemas")
+	if err != nil {
+		return err
+	}
+	operationSchema, err := mapField(schemas, "Operation")
+	if err != nil {
+		return err
+	}
+	operationExample, err := mapField(operationSchema, "example")
+	if err != nil {
+		return err
+	}
+	operationResponse, err := mapField(responses, "Operation")
+	if err != nil {
+		return err
+	}
+	operationContent, err := mapField(operationResponse, "content")
+	if err != nil {
+		return err
+	}
+	operationMedia, err := mapField(operationContent, "application/json")
+	if err != nil {
+		return err
+	}
+	responseExample, err := mapField(operationMedia, "example")
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(operationExample, responseExample) {
+		return errors.New("operation schema and response examples drifted")
 	}
 	return nil
 }

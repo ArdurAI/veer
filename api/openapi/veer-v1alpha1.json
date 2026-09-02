@@ -105,6 +105,53 @@
       "breakingChange": "new-route-version"
     }
   },
+  "x-veer-operation-transitions": {
+    "phasePointer": "/phase",
+    "transitions": {
+      "Pending": [
+        "Waiting",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Canceled"
+      ],
+      "Waiting": [
+        "Pending",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Canceled"
+      ],
+      "Running": [
+        "Waiting",
+        "Succeeded",
+        "Failed",
+        "Canceled"
+      ]
+    },
+    "terminalPhases": [
+      "Succeeded",
+      "Failed",
+      "Canceled"
+    ],
+    "terminalReplay": "exact-only",
+    "unknownPhase": "nonterminal-no-side-effects"
+  },
+  "x-veer-condition-transitions": {
+    "identityPointer": "/type",
+    "statusPointer": "/status",
+    "observedGenerationPointer": "/observedGeneration",
+    "transitionTimePointer": "/lastTransitionAt",
+    "statuses": [
+      "True",
+      "False",
+      "Unknown"
+    ],
+    "sameStatusTimestamp": "preserve",
+    "changedStatusTimestamp": "advance",
+    "observedGeneration": "nondecreasing-and-not-above-resource-generation",
+    "setOrder": "ascending-unique-type"
+  },
   "x-veer-hierarchy": {
     "workspaceOwnership": {
       "workspaceIdPointer": "/metadata/workspaceId",
@@ -151,6 +198,28 @@
         }
       },
       {
+        "kind": "Policy",
+        "parentKind": "Workspace",
+        "schema": {
+          "$ref": "#/components/schemas/Policy"
+        },
+        "metadataSchema": {
+          "$ref": "#/components/schemas/ChildResourceMetadata"
+        },
+        "createSchema": {
+          "$ref": "#/components/schemas/PolicyCreate"
+        },
+        "replaceSchema": {
+          "$ref": "#/components/schemas/PolicyReplace"
+        },
+        "statusWriteSchema": {
+          "$ref": "#/components/schemas/PolicyStatusWrite"
+        },
+        "listSchema": {
+          "$ref": "#/components/schemas/PolicyList"
+        }
+      },
+      {
         "kind": "Environment",
         "parentKind": "Workspace",
         "schema": {
@@ -170,6 +239,28 @@
         },
         "listSchema": {
           "$ref": "#/components/schemas/EnvironmentList"
+        }
+      },
+      {
+        "kind": "ProviderConnection",
+        "parentKind": "Environment",
+        "schema": {
+          "$ref": "#/components/schemas/ProviderConnection"
+        },
+        "metadataSchema": {
+          "$ref": "#/components/schemas/ChildResourceMetadata"
+        },
+        "createSchema": {
+          "$ref": "#/components/schemas/ProviderConnectionCreate"
+        },
+        "replaceSchema": {
+          "$ref": "#/components/schemas/ProviderConnectionReplace"
+        },
+        "statusWriteSchema": {
+          "$ref": "#/components/schemas/ProviderConnectionStatusWrite"
+        },
+        "listSchema": {
+          "$ref": "#/components/schemas/ProviderConnectionList"
         }
       },
       {
@@ -1030,14 +1121,27 @@
             },
             "example": {
               "id": "op_01J000000000000000000000000",
-              "resourceId": "wsp_01J00000000000000000000000",
+              "workspaceId": "wsp_01J00000000000000000000000",
+              "resourceId": "cmp_01J00000000000000000000000",
+              "environmentId": "env_01J00000000000000000000000",
+              "providerConnectionId": "pvc_01J00000000000000000000000",
               "generation": 3,
-              "resourceVersion": "rv_01J00000000000000000000001",
+              "resourceVersion": "rv_01J00000000000000000000031",
               "phase": "Running",
               "reason": "Reconciling",
               "message": "The current generation is being reconciled.",
-              "createdAt": "2026-09-01T21:00:00.000Z",
-              "updatedAt": "2026-09-01T21:00:01.000Z"
+              "costEstimate": {
+                "state": "Known",
+                "amount": "12.34",
+                "currency": "USD",
+                "region": "us-east-1",
+                "source": "provider-observation",
+                "observedAt": "2026-09-03T01:02:03.000Z",
+                "confidence": "High",
+                "reason": "ProviderCatalog"
+              },
+              "createdAt": "2026-09-03T01:03:00.000Z",
+              "updatedAt": "2026-09-03T01:04:00.000Z"
             }
           }
         }
@@ -2502,6 +2606,802 @@
           }
         }
       },
+      "Policy": {
+        "type": "object",
+        "description": "A closed provider-neutral policy owned by one Workspace.",
+        "example": {
+          "apiVersion": "v1alpha1",
+          "kind": "Policy",
+          "metadata": {
+            "id": "pol_01J00000000000000000000000",
+            "workspaceId": "wsp_01J00000000000000000000000",
+            "displayName": "workspace-defaults",
+            "parent": "wsp_01J00000000000000000000000",
+            "labels": {
+              "team": "platform"
+            },
+            "generation": 1,
+            "resourceVersion": "rv_01J00000000000000000000010",
+            "createdAt": "2026-09-03T01:01:00.000Z",
+            "updatedAt": "2026-09-03T01:01:00.000Z"
+          },
+          "spec": {},
+          "status": {
+            "observedGeneration": 0,
+            "conditions": []
+          }
+        },
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-observed-generation-upper-bound": {
+          "observedGenerationPointer": "/status/observedGeneration",
+          "conditionObservedGenerationPointerTemplate": "/status/conditions/{index}/observedGeneration",
+          "resourceGenerationPointer": "/metadata/generation"
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Policy"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ChildResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/PolicySpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PolicyStatus"
+          }
+        }
+      },
+      "PolicySpec": {
+        "type": "object",
+        "description": "Closed provider-neutral desired state for a Policy in v1alpha1.",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "PolicyStatus": {
+        "type": "object",
+        "description": "Observed Policy status written only by authorized controllers.",
+        "example": {
+          "observedGeneration": 0,
+          "conditions": []
+        },
+        "additionalProperties": false,
+        "required": [
+          "observedGeneration",
+          "conditions"
+        ],
+        "properties": {
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "conditions": {
+            "type": "array",
+            "maxItems": 32,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            }
+          }
+        }
+      },
+      "PolicyCreate": {
+        "type": "object",
+        "description": "Strict Policy create payload with server-derived hierarchy ownership.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Policy"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/PolicySpec"
+          }
+        }
+      },
+      "PolicyReplace": {
+        "type": "object",
+        "description": "Strict Policy replacement payload; hierarchy ownership is immutable.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Policy"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/PolicySpec"
+          }
+        }
+      },
+      "PolicyStatusWrite": {
+        "type": "object",
+        "description": "Strict controller-only Policy status payload.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "Policy"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PolicyStatus"
+          }
+        }
+      },
+      "PolicyList": {
+        "type": "object",
+        "description": "A deterministic bounded page of Policies.",
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-page-byte-policy": "stop-before-limit",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Policy"
+            }
+          },
+          "nextPageToken": {
+            "type": "string",
+            "example": "eyJjdXJzb3IiOiJvcGFxdWUifQ",
+            "minLength": 16,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "CredentialReference": {
+        "type": "object",
+        "description": "Opaque reference to externally stored provider credentials; secret material is never accepted.",
+        "example": {
+          "referenceId": "cred_01J0000000000000000000000",
+          "version": "ver_01J00000000000000000000000"
+        },
+        "additionalProperties": false,
+        "required": [
+          "referenceId",
+          "version"
+        ],
+        "properties": {
+          "referenceId": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "example": "cred_01J0000000000000000000000"
+          },
+          "version": {
+            "type": "string",
+            "example": "ver_01J00000000000000000000000",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "ProviderCapability": {
+        "type": "object",
+        "description": "One bounded provider capability observation with an explicit Supported, Unsupported, or Unknown state.",
+        "example": {
+          "name": "network.ingress",
+          "state": "Unknown",
+          "source": "provider-observation",
+          "observedAt": "2026-09-03T01:02:03.000Z",
+          "reason": "ObservationUnavailable"
+        },
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "state",
+          "source",
+          "observedAt",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9.-]*$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "Supported",
+              "Unsupported",
+              "Unknown"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9.-]*$"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          }
+        }
+      },
+      "QuotaCheck": {
+        "type": "object",
+        "description": "One bounded quota observation with explicit known operands or an explicit Unknown state.",
+        "example": {
+          "name": "network.load-balancers",
+          "state": "Unknown",
+          "source": "provider-observation",
+          "observedAt": "2026-09-03T01:02:03.000Z",
+          "reason": "ObservationUnavailable"
+        },
+        "additionalProperties": false,
+        "x-veer-quota-comparison": {
+          "WithinLimit": "requested<=available",
+          "Exceeded": "requested>available",
+          "Unknown": "operands-absent"
+        },
+        "required": [
+          "name",
+          "state",
+          "source",
+          "observedAt",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9.-]*$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "WithinLimit",
+              "Exceeded",
+              "Unknown"
+            ]
+          },
+          "requested": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          },
+          "available": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9.-]*$"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "requested",
+              "available"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "WithinLimit",
+                  "Exceeded"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "Unknown"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "requested"
+                  ]
+                },
+                {
+                  "required": [
+                    "available"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "CostEstimate": {
+        "type": "object",
+        "description": "A bounded cost estimate whose Known and Unknown states cannot be confused.",
+        "example": {
+          "state": "Unknown",
+          "currency": "USD",
+          "region": "us-east-1",
+          "source": "provider-observation",
+          "observedAt": "2026-09-03T01:02:03.000Z",
+          "confidence": "Unknown",
+          "reason": "EstimateUnavailable"
+        },
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "currency",
+          "region",
+          "source",
+          "observedAt",
+          "confidence",
+          "reason"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "Known",
+              "Unknown"
+            ]
+          },
+          "amount": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "region": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9.-]*$"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "Low",
+              "Medium",
+              "High",
+              "Unknown"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "amount"
+            ],
+            "properties": {
+              "state": {
+                "const": "Known"
+              },
+              "confidence": {
+                "enum": [
+                  "Low",
+                  "Medium",
+                  "High"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "Unknown"
+              },
+              "confidence": {
+                "const": "Unknown"
+              }
+            },
+            "not": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "amount"
+              ]
+            }
+          }
+        ]
+      },
+      "ProviderConnection": {
+        "type": "object",
+        "description": "A secret-free provider connection owned by one Environment.",
+        "example": {
+          "apiVersion": "v1alpha1",
+          "kind": "ProviderConnection",
+          "metadata": {
+            "id": "pvc_01J00000000000000000000000",
+            "workspaceId": "wsp_01J00000000000000000000000",
+            "displayName": "production-aws",
+            "parent": "env_01J00000000000000000000000",
+            "labels": {
+              "provider": "aws",
+              "team": "platform"
+            },
+            "generation": 1,
+            "resourceVersion": "rv_01J00000000000000000000020",
+            "createdAt": "2026-09-03T01:02:00.000Z",
+            "updatedAt": "2026-09-03T01:02:00.000Z"
+          },
+          "spec": {
+            "provider": "aws",
+            "credentialRef": {
+              "referenceId": "cred_01J0000000000000000000000",
+              "version": "ver_01J00000000000000000000000"
+            }
+          },
+          "status": {
+            "observedGeneration": 1,
+            "conditions": [],
+            "capabilities": [
+              {
+                "name": "compute.instances",
+                "state": "Supported",
+                "source": "provider-observation",
+                "observedAt": "2026-09-03T01:02:03.000Z",
+                "reason": "CapabilityDiscovered"
+              },
+              {
+                "name": "network.ingress",
+                "state": "Unknown",
+                "source": "provider-observation",
+                "observedAt": "2026-09-03T01:02:03.000Z",
+                "reason": "ObservationUnavailable"
+              }
+            ],
+            "quotaChecks": [
+              {
+                "name": "compute.instances",
+                "state": "WithinLimit",
+                "requested": "3",
+                "available": "10",
+                "source": "provider-observation",
+                "observedAt": "2026-09-03T01:02:03.000Z",
+                "reason": "QuotaAvailable"
+              },
+              {
+                "name": "network.load-balancers",
+                "state": "Unknown",
+                "source": "provider-observation",
+                "observedAt": "2026-09-03T01:02:03.000Z",
+                "reason": "ObservationUnavailable"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-observed-generation-upper-bound": {
+          "observedGenerationPointer": "/status/observedGeneration",
+          "conditionObservedGenerationPointerTemplate": "/status/conditions/{index}/observedGeneration",
+          "resourceGenerationPointer": "/metadata/generation"
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "ProviderConnection"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ChildResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ProviderConnectionSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProviderConnectionStatus"
+          }
+        }
+      },
+      "ProviderConnectionSpec": {
+        "type": "object",
+        "description": "Provider identity and an opaque credential reference; embedded secret values are forbidden.",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "credentialRef"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9.-]*$"
+          },
+          "credentialRef": {
+            "$ref": "#/components/schemas/CredentialReference"
+          }
+        }
+      },
+      "ProviderConnectionStatus": {
+        "type": "object",
+        "description": "Bounded provider observations written only by authorized controllers.",
+        "example": {
+          "observedGeneration": 1,
+          "conditions": [],
+          "capabilities": [
+            {
+              "name": "compute.instances",
+              "state": "Supported",
+              "source": "provider-observation",
+              "observedAt": "2026-09-03T01:02:03.000Z",
+              "reason": "CapabilityDiscovered"
+            },
+            {
+              "name": "network.ingress",
+              "state": "Unknown",
+              "source": "provider-observation",
+              "observedAt": "2026-09-03T01:02:03.000Z",
+              "reason": "ObservationUnavailable"
+            }
+          ],
+          "quotaChecks": [
+            {
+              "name": "compute.instances",
+              "state": "WithinLimit",
+              "requested": "3",
+              "available": "10",
+              "source": "provider-observation",
+              "observedAt": "2026-09-03T01:02:03.000Z",
+              "reason": "QuotaAvailable"
+            },
+            {
+              "name": "network.load-balancers",
+              "state": "Unknown",
+              "source": "provider-observation",
+              "observedAt": "2026-09-03T01:02:03.000Z",
+              "reason": "ObservationUnavailable"
+            }
+          ]
+        },
+        "additionalProperties": false,
+        "required": [
+          "observedGeneration",
+          "conditions",
+          "capabilities",
+          "quotaChecks"
+        ],
+        "properties": {
+          "observedGeneration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "conditions": {
+            "type": "array",
+            "maxItems": 32,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            }
+          },
+          "capabilities": {
+            "type": "array",
+            "maxItems": 128,
+            "uniqueItems": true,
+            "x-veer-list-unique-key": "/name",
+            "x-veer-list-order": "ascending",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCapability"
+            }
+          },
+          "quotaChecks": {
+            "type": "array",
+            "maxItems": 128,
+            "uniqueItems": true,
+            "x-veer-list-unique-key": "/name",
+            "x-veer-list-order": "ascending",
+            "items": {
+              "$ref": "#/components/schemas/QuotaCheck"
+            }
+          }
+        }
+      },
+      "ProviderConnectionCreate": {
+        "type": "object",
+        "description": "Strict ProviderConnection create payload with server-derived hierarchy ownership.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "ProviderConnection"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ProviderConnectionSpec"
+          }
+        }
+      },
+      "ProviderConnectionReplace": {
+        "type": "object",
+        "description": "Strict ProviderConnection replacement payload; hierarchy ownership is immutable.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "ProviderConnection"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WritableMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ProviderConnectionSpec"
+          }
+        }
+      },
+      "ProviderConnectionStatusWrite": {
+        "type": "object",
+        "description": "Strict controller-only ProviderConnection status payload.",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1alpha1"
+          },
+          "kind": {
+            "type": "string",
+            "const": "ProviderConnection"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProviderConnectionStatus"
+          }
+        }
+      },
+      "ProviderConnectionList": {
+        "type": "object",
+        "description": "A deterministic bounded page of ProviderConnections.",
+        "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 262144,
+        "x-veer-page-byte-policy": "stop-before-limit",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "example": [],
+            "items": {
+              "$ref": "#/components/schemas/ProviderConnection"
+            }
+          },
+          "nextPageToken": {
+            "type": "string",
+            "example": "eyJjdXJzb3IiOiJvcGFxdWUifQ",
+            "minLength": 16,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
       "MutationReceipt": {
         "type": "object",
         "description": "Bounded receipt returned for a durably accepted asynchronous mutation.",
@@ -2543,9 +3443,35 @@
       "Operation": {
         "type": "object",
         "description": "Durable state of one accepted asynchronous operation.",
+        "example": {
+          "id": "op_01J000000000000000000000000",
+          "workspaceId": "wsp_01J00000000000000000000000",
+          "environmentId": "env_01J00000000000000000000000",
+          "providerConnectionId": "pvc_01J00000000000000000000000",
+          "resourceId": "cmp_01J00000000000000000000000",
+          "generation": 3,
+          "resourceVersion": "rv_01J00000000000000000000031",
+          "phase": "Running",
+          "reason": "Reconciling",
+          "message": "The current generation is being reconciled.",
+          "costEstimate": {
+            "state": "Known",
+            "amount": "12.34",
+            "currency": "USD",
+            "region": "us-east-1",
+            "source": "provider-observation",
+            "observedAt": "2026-09-03T01:02:03.000Z",
+            "confidence": "High",
+            "reason": "ProviderCatalog"
+          },
+          "createdAt": "2026-09-03T01:03:00.000Z",
+          "updatedAt": "2026-09-03T01:04:00.000Z"
+        },
         "additionalProperties": false,
+        "x-veer-maximum-json-bytes": 4096,
         "required": [
           "id",
+          "workspaceId",
           "resourceId",
           "generation",
           "resourceVersion",
@@ -2559,10 +3485,25 @@
             "type": "string",
             "example": "op_01J000000000000000000000000"
           },
-          "resourceId": {
+          "workspaceId": {
             "$ref": "#/components/schemas/OpaqueId",
             "type": "string",
             "example": "wsp_01J00000000000000000000000"
+          },
+          "environmentId": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "example": "env_01J00000000000000000000000"
+          },
+          "providerConnectionId": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "example": "pvc_01J00000000000000000000000"
+          },
+          "resourceId": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "example": "cmp_01J00000000000000000000000"
           },
           "generation": {
             "type": "integer",
@@ -2583,6 +3524,7 @@
             "example": "Running",
             "enum": [
               "Pending",
+              "Waiting",
               "Running",
               "Succeeded",
               "Failed",
@@ -2601,13 +3543,40 @@
             "maxLength": 512,
             "description": "Safe summary without raw provider response data."
           },
+          "costEstimate": {
+            "$ref": "#/components/schemas/CostEstimate"
+          },
           "createdAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
           }
-        }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "environmentId",
+              "providerConnectionId"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "environmentId"
+                  ]
+                },
+                {
+                  "required": [
+                    "providerConnectionId"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
       },
       "FieldViolation": {
         "type": "object",
