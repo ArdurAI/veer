@@ -129,6 +129,10 @@ The accepted-mutation response binds `Location` to the receipt's `operationId`:
 the header value is `/api/v1alpha1/operations/<operationId>`. This relationship
 is declared by `x-veer-location-operation-id-pointer` so adapters and
 conformance tests do not validate the header and body independently.
+`createWorkspace` additionally declares
+`x-veer-response-generation-constant`, binding the success body at
+`/generation` to `1`. Replacement and deletion continue using the shared
+receipt's generation range because they operate on existing resources.
 
 Addressed operations similarly bind the requested path parameter to the
 returned body identity through `x-veer-path-response-id-binding`. `getWorkspace`
@@ -211,6 +215,19 @@ carries its observed generation and cannot modify spec or metadata. A
 desired-spec change racing a status write changes the ETag; the stale status
 writer receives `412` and must reload, confirm its observed generation is still
 current, and retry through the same bounded status schema.
+
+An observation may describe the current generation or an older generation, but
+never a future generation. The Workspace schema's
+`x-veer-observed-generation-upper-bound` compares `/status/observedGeneration`
+with `/metadata/generation` in the same representation. On
+`replaceWorkspaceStatus`, the same pointers resolve respectively against the
+request body and the current addressed Workspace selected by `If-Match`; the
+comparison is made in the same atomic precondition and persistence decision.
+`x-veer-request-response-body-binding` also requires the successful receipt's
+`/observedGeneration` to equal the submitted
+`/status/observedGeneration`, including on idempotent replay. A future
+observation is a `400 validation-failed` at `/status/observedGeneration`; a
+stale resource version remains `412`.
 
 Every point-resource `GET` and successful status response returns a strong
 `ETag` containing the opaque resource version. Replacement, status, and delete

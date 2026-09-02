@@ -477,6 +477,13 @@ func isReviewedExtension(path, name string) bool {
 		default:
 			return false
 		}
+	case "x-veer-response-generation-constant":
+		return path == "$/paths//api/v1alpha1/workspaces/post"
+	case "x-veer-request-response-body-binding":
+		return path == "$/paths//api/v1alpha1/workspaces/{workspaceId}/status/put"
+	case "x-veer-observed-generation-upper-bound":
+		return path == "$/paths//api/v1alpha1/workspaces/{workspaceId}/status/put" ||
+			path == "$/components/schemas/Workspace"
 	case "x-veer-deprecation-sunset-minimum-notice-days",
 		"x-veer-etag-resource-version-pointer",
 		"x-veer-location-operation-id-pointer",
@@ -795,6 +802,9 @@ func validateOperations(root map[string]any) error {
 			if err := validatePathResponseIDBinding(operationID, operation); err != nil {
 				return err
 			}
+			if err := validateOperationGenerationContracts(operationID, operation); err != nil {
+				return err
+			}
 
 			operationParameters, err := parameterReferences(operation["parameters"])
 			if err != nil {
@@ -984,6 +994,49 @@ func validatePathResponseIDBinding(operationID string, operation map[string]any)
 		return fmt.Errorf("operationId %q path-response identity binding drifted", operationID)
 	}
 	return nil
+}
+
+func validateOperationGenerationContracts(operationID string, operation map[string]any) error {
+	constant, hasConstant := operation["x-veer-response-generation-constant"]
+	if operationID == "createWorkspace" {
+		contract, ok := constant.(map[string]any)
+		if !hasConstant || !ok || !mapKeySetEquals(contract, []string{"responseBodyPointer", "value"}) ||
+			contract["responseBodyPointer"] != "/generation" || !numberEquals(contract["value"], "1") {
+			return errors.New("operationId \"createWorkspace\" response generation constant drifted")
+		}
+	} else if hasConstant {
+		return fmt.Errorf("operationId %q declares an unexpected response generation constant", operationID)
+	}
+
+	binding, hasBinding := operation["x-veer-request-response-body-binding"]
+	upperBound, hasUpperBound := operation["x-veer-observed-generation-upper-bound"]
+	if operationID == "replaceWorkspaceStatus" {
+		contract, ok := binding.(map[string]any)
+		if !hasBinding || !ok || !mapKeySetEquals(contract, []string{"requestBodyPointer", "responseBodyPointer"}) ||
+			contract["requestBodyPointer"] != "/status/observedGeneration" ||
+			contract["responseBodyPointer"] != "/observedGeneration" {
+			return errors.New("operationId \"replaceWorkspaceStatus\" request-response generation binding drifted")
+		}
+		if !hasUpperBound || !validObservedGenerationUpperBound(upperBound) {
+			return errors.New("operationId \"replaceWorkspaceStatus\" observed-generation upper bound drifted")
+		}
+	} else {
+		if hasBinding {
+			return fmt.Errorf("operationId %q declares an unexpected request-response body binding", operationID)
+		}
+		if hasUpperBound {
+			return fmt.Errorf("operationId %q declares an unexpected observed-generation upper bound", operationID)
+		}
+	}
+	return nil
+}
+
+func validObservedGenerationUpperBound(raw any) bool {
+	contract, ok := raw.(map[string]any)
+	return ok && mapKeySetEquals(contract, []string{
+		"observedGenerationPointer", "resourceGenerationPointer",
+	}) && contract["observedGenerationPointer"] == "/status/observedGeneration" &&
+		contract["resourceGenerationPointer"] == "/metadata/generation"
 }
 
 func validateResponseReferences(route, method string, responses map[string]any) error {
@@ -1689,7 +1742,9 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 		{name: "Problem", extras: []string{"x-veer-instance-request-id-template", "x-veer-maximum-json-bytes"}},
 		{name: "ResourceMetadata", extras: []string{"example"}},
 		{name: "StatusReceipt", extras: []string{"x-veer-maximum-json-bytes"}},
-		{name: "Workspace", extras: []string{"x-veer-maximum-json-bytes"}},
+		{name: "Workspace", extras: []string{
+			"x-veer-maximum-json-bytes", "x-veer-observed-generation-upper-bound",
+		}},
 		{name: "WorkspaceCreate"},
 		{name: "WorkspaceList", extras: []string{"x-veer-maximum-json-bytes", "x-veer-page-byte-policy"}},
 		{name: "WorkspaceReplace"},
@@ -2636,6 +2691,9 @@ func validateWorkspaceReadSchema(schemas map[string]any) error {
 	if !stringSetEquals(schema["required"], []string{"apiVersion", "kind", "metadata", "spec", "status"}) ||
 		len(properties) != 5 || !numberEquals(schema["x-veer-maximum-json-bytes"], "262144") {
 		return errors.New("workspace read shape or encoded-size contract drifted")
+	}
+	if !validObservedGenerationUpperBound(schema["x-veer-observed-generation-upper-bound"]) {
+		return errors.New("workspace observed-generation upper bound drifted")
 	}
 	if err := validateWorkspaceIdentity(properties, "Workspace"); err != nil {
 		return err

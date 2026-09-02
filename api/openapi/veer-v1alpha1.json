@@ -159,6 +159,10 @@
         "description": "Atomically accepts desired state, generation 1, the idempotency result, required audit data, integrity metadata, and outbox work. The response does not claim provider convergence.",
         "operationId": "createWorkspace",
         "x-veer-write-class": "spec",
+        "x-veer-response-generation-constant": {
+          "responseBodyPointer": "/generation",
+          "value": 1
+        },
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -432,6 +436,14 @@
         "x-veer-path-response-id-binding": {
           "pathParameter": "workspaceId",
           "bodyPointer": "/resourceId"
+        },
+        "x-veer-request-response-body-binding": {
+          "requestBodyPointer": "/status/observedGeneration",
+          "responseBodyPointer": "/observedGeneration"
+        },
+        "x-veer-observed-generation-upper-bound": {
+          "observedGenerationPointer": "/status/observedGeneration",
+          "resourceGenerationPointer": "/metadata/generation"
         },
         "parameters": [
           {
@@ -1541,6 +1553,10 @@
         "description": "Representative versioned resource used to make the HTTP conventions executable.",
         "additionalProperties": false,
         "x-veer-maximum-json-bytes": 262144,
+        "x-veer-observed-generation-upper-bound": {
+          "observedGenerationPointer": "/status/observedGeneration",
+          "resourceGenerationPointer": "/metadata/generation"
+        },
         "required": [
           "apiVersion",
           "kind",

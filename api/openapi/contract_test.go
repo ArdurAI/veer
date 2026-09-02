@@ -121,6 +121,8 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			name: "unversioned route",
 			mutate: func(root map[string]any) {
 				paths := nestedMap(t, root, "paths")
+				post := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "post")
+				delete(post, "x-veer-response-generation-constant")
 				paths["/workspaces"] = paths["/api/v1alpha1/workspaces"]
 				delete(paths, "/api/v1alpha1/workspaces")
 			},
@@ -167,6 +169,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "200 reference has unreviewed keywords",
 		},
 		{
+			name: "creation response generation constant removed",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "post")
+				delete(operation, "x-veer-response-generation-constant")
+			},
+			message: `operationId "createWorkspace" response generation constant drifted`,
+		},
+		{
+			name: "creation response generation constant changes",
+			mutate: func(root map[string]any) {
+				contract := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "post", "x-veer-response-generation-constant")
+				contract["value"] = json.Number("2")
+			},
+			message: `operationId "createWorkspace" response generation constant drifted`,
+		},
+		{
 			name: "workspace point read identity binding removed",
 			mutate: func(root map[string]any) {
 				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get")
@@ -205,6 +223,38 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				binding["pathParameter"] = "operationId"
 			},
 			message: `operationId "replaceWorkspace" path-response identity binding drifted`,
+		},
+		{
+			name: "status request-response generation binding removed",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put")
+				delete(operation, "x-veer-request-response-body-binding")
+			},
+			message: `operationId "replaceWorkspaceStatus" request-response generation binding drifted`,
+		},
+		{
+			name: "status response generation pointer drifts",
+			mutate: func(root map[string]any) {
+				binding := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "x-veer-request-response-body-binding")
+				binding["responseBodyPointer"] = "/generation"
+			},
+			message: `operationId "replaceWorkspaceStatus" request-response generation binding drifted`,
+		},
+		{
+			name: "status observed-generation upper bound removed",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put")
+				delete(operation, "x-veer-observed-generation-upper-bound")
+			},
+			message: `operationId "replaceWorkspaceStatus" observed-generation upper bound drifted`,
+		},
+		{
+			name: "status current resource generation pointer drifts",
+			mutate: func(root map[string]any) {
+				upperBound := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "x-veer-observed-generation-upper-bound")
+				upperBound["resourceGenerationPointer"] = "/status/observedGeneration"
+			},
+			message: `operationId "replaceWorkspaceStatus" observed-generation upper bound drifted`,
 		},
 		{
 			name: "status response exceeds non-read contract",
@@ -890,6 +940,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(workspace, "x-veer-maximum-json-bytes")
 			},
 			message: "workspace read shape or encoded-size contract drifted",
+		},
+		{
+			name: "workspace observed-generation upper bound removed",
+			mutate: func(root map[string]any) {
+				workspace := nestedMap(t, root, "components", "schemas", "Workspace")
+				delete(workspace, "x-veer-observed-generation-upper-bound")
+			},
+			message: "workspace observed-generation upper bound drifted",
+		},
+		{
+			name: "workspace observed-generation pointer drifts",
+			mutate: func(root map[string]any) {
+				upperBound := nestedMap(t, root, "components", "schemas", "Workspace", "x-veer-observed-generation-upper-bound")
+				upperBound["observedGenerationPointer"] = "/metadata/generation"
+			},
+			message: "workspace observed-generation upper bound drifted",
 		},
 		{
 			name: "workspace spec gains top level narrowing assertion",
