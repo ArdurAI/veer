@@ -31,10 +31,16 @@ type operationContract struct {
 	responses  []string
 }
 
-type problemContract struct {
+type problemVariant struct {
 	schema string
-	status string
 	code   string
+}
+
+type problemContract struct {
+	schema   string
+	status   string
+	code     string
+	variants []problemVariant
 }
 
 var operationContracts = map[string]operationContract{
@@ -84,14 +90,23 @@ var problemContracts = map[string]problemContract{
 	"AuthenticationRequired": {schema: "AuthenticationProblem", status: "401", code: "authentication-required"},
 	"AuthorizationDenied":    {schema: "AuthorizationProblem", status: "403", code: "authorization-denied"},
 	"NotFound":               {schema: "NotFoundProblem", status: "404", code: "not-found"},
-	"Conflict":               {schema: "ConflictProblem", status: "409", code: "idempotency-key-reused"},
-	"PreconditionFailed":     {schema: "PreconditionFailedProblem", status: "412", code: "precondition-failed"},
-	"RequestTooLarge":        {schema: "RequestTooLargeProblem", status: "413", code: "request-too-large"},
-	"UnsupportedMediaType":   {schema: "UnsupportedMediaTypeProblem", status: "415", code: "unsupported-media-type"},
-	"PreconditionRequired":   {schema: "PreconditionRequiredProblem", status: "428", code: "precondition-required"},
-	"Throttled":              {schema: "ThrottledProblem", status: "429", code: "rate-limited"},
-	"InternalFailure":        {schema: "InternalFailureProblem", status: "500", code: "internal-failure"},
-	"Unavailable":            {schema: "UnavailableProblem", status: "503", code: "unavailable"},
+	"Conflict": {
+		schema: "ConflictProblem",
+		status: "409",
+		variants: []problemVariant{
+			{schema: "IdempotencyConflictProblem", code: "idempotency-key-reused"},
+			{schema: "UniquenessConflictProblem", code: "uniqueness-conflict"},
+			{schema: "LifecycleConflictProblem", code: "lifecycle-conflict"},
+			{schema: "PolicyConflictProblem", code: "policy-conflict"},
+		},
+	},
+	"PreconditionFailed":   {schema: "PreconditionFailedProblem", status: "412", code: "precondition-failed"},
+	"RequestTooLarge":      {schema: "RequestTooLargeProblem", status: "413", code: "request-too-large"},
+	"UnsupportedMediaType": {schema: "UnsupportedMediaTypeProblem", status: "415", code: "unsupported-media-type"},
+	"PreconditionRequired": {schema: "PreconditionRequiredProblem", status: "428", code: "precondition-required"},
+	"Throttled":            {schema: "ThrottledProblem", status: "429", code: "rate-limited"},
+	"InternalFailure":      {schema: "InternalFailureProblem", status: "500", code: "internal-failure"},
+	"Unavailable":          {schema: "UnavailableProblem", status: "503", code: "unavailable"},
 }
 
 var httpMethods = map[string]bool{
@@ -358,11 +373,20 @@ func isReviewedProblemRefinement(path string, schema map[string]any) bool {
 		return false
 	}
 	for _, contract := range problemContracts {
-		if path == "$/components/schemas/"+contract.schema+"/allOf/1" {
-			return true
+		for _, variant := range problemVariantsFor(contract) {
+			if path == "$/components/schemas/"+variant.schema+"/allOf/1" {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func problemVariantsFor(contract problemContract) []problemVariant {
+	if len(contract.variants) > 0 {
+		return contract.variants
+	}
+	return []problemVariant{{schema: contract.schema, code: contract.code}}
 }
 
 func validateRoot(root map[string]any) error {
@@ -1135,6 +1159,11 @@ func validateResponses(responses map[string]any) error {
 		"InternalFailure":        {"Veer-Request-Id"},
 		"Unavailable":            {"Veer-Request-Id", "Retry-After"},
 	}
+	etagResourceVersionPointers := map[string]string{
+		"Operation":     "/resourceVersion",
+		"StatusUpdated": "/resourceVersion",
+		"Workspace":     "/metadata/resourceVersion",
+	}
 
 	for name, raw := range responses {
 		if !successNames[name] && !errorNames[name] {
@@ -1193,6 +1222,23 @@ func validateResponses(responses map[string]any) error {
 			if schema["$ref"] != "#/components/schemas/"+wantSchema {
 				return fmt.Errorf("success response %s uses the wrong schema", name)
 			}
+			if pointer, mustBind := etagResourceVersionPointers[name]; mustBind {
+				if response["x-veer-etag-resource-version-pointer"] != pointer {
+					return fmt.Errorf("success response %s ETag binding drifted", name)
+				}
+			} else if _, exists := response["x-veer-etag-resource-version-pointer"]; exists {
+				return fmt.Errorf("success response %s declares an unexpected ETag binding", name)
+			}
+			if name == "MutationAccepted" {
+				if response["x-veer-location-operation-id-pointer"] != "/operationId" {
+					return errors.New("success response MutationAccepted Location binding drifted")
+				}
+			} else if _, exists := response["x-veer-location-operation-id-pointer"]; exists {
+				return fmt.Errorf("success response %s declares an unexpected Location binding", name)
+			}
+			if _, exists := response["x-veer-request-id-body-pointer"]; exists {
+				return fmt.Errorf("success response %s declares an unexpected request-ID body binding", name)
+			}
 		}
 		if errorNames[name] {
 			if _, exists := response["x-veer-required-header-sets"]; exists {
@@ -1209,6 +1255,17 @@ func validateResponses(responses map[string]any) error {
 			wantSchema := problemContracts[name].schema
 			if schema["$ref"] != "#/components/schemas/"+wantSchema {
 				return fmt.Errorf("error response %s must reference %s", name, wantSchema)
+			}
+			if response["x-veer-request-id-body-pointer"] != "/requestId" {
+				return fmt.Errorf("error response %s request-ID body binding drifted", name)
+			}
+			for _, forbidden := range []string{
+				"x-veer-etag-resource-version-pointer",
+				"x-veer-location-operation-id-pointer",
+			} {
+				if _, exists := response[forbidden]; exists {
+					return fmt.Errorf("error response %s declares success-body binding %s", name, forbidden)
+				}
 			}
 		}
 		for header, component := range map[string]map[string]string{
@@ -1281,6 +1338,11 @@ func validateSchemas(schemas map[string]any) error {
 		if _, exists := schemas[contract.schema]; !exists {
 			return fmt.Errorf("schema %s is missing", contract.schema)
 		}
+		for _, variant := range problemVariantsFor(contract) {
+			if _, exists := schemas[variant.schema]; !exists {
+				return fmt.Errorf("schema %s is missing", variant.schema)
+			}
+		}
 	}
 	for name, want := range map[string]struct {
 		minimum string
@@ -1337,6 +1399,11 @@ func validateSchemas(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
+	if !stringSetEquals(metadata["required"], []string{
+		"id", "displayName", "generation", "resourceVersion", "createdAt", "updatedAt",
+	}) || len(metadataProperties) != 7 {
+		return errors.New("ResourceMetadata shape drifted")
+	}
 	for _, name := range []string{"id", "generation", "resourceVersion", "createdAt", "updatedAt"} {
 		property, err := mapField(metadataProperties, name)
 		if err != nil {
@@ -1345,6 +1412,31 @@ func validateSchemas(schemas map[string]any) error {
 		if property["readOnly"] != true {
 			return fmt.Errorf("ResourceMetadata.%s must be readOnly", name)
 		}
+	}
+	for property, target := range map[string]string{
+		"id":        "OpaqueId",
+		"labels":    "Labels",
+		"createdAt": "Timestamp",
+		"updatedAt": "Timestamp",
+	} {
+		if err := requireReference(metadataProperties, property, "#/components/schemas/"+target); err != nil {
+			return fmt.Errorf("ResourceMetadata: %w", err)
+		}
+	}
+	metadataDisplayName, err := mapField(metadataProperties, "displayName")
+	if err != nil {
+		return err
+	}
+	if metadataDisplayName["type"] != "string" || !numberEquals(metadataDisplayName["minLength"], "1") ||
+		!numberEquals(metadataDisplayName["maxLength"], "128") {
+		return errors.New("ResourceMetadata displayName contract drifted")
+	}
+	metadataResourceVersion, err := mapField(metadataProperties, "resourceVersion")
+	if err != nil {
+		return err
+	}
+	if err := validateResourceVersionProperty(metadataResourceVersion, "ResourceMetadata"); err != nil {
+		return err
 	}
 	for _, contract := range []struct {
 		schema   string
@@ -1368,6 +1460,15 @@ func validateSchemas(schemas map[string]any) error {
 		}
 	}
 	if err := validateWorkspaceReadSchema(schemas); err != nil {
+		return err
+	}
+	if err := validateWorkspaceStatusSchema(schemas); err != nil {
+		return err
+	}
+	if err := validateConditionSchema(schemas); err != nil {
+		return err
+	}
+	if err := validateOperationSchema(schemas); err != nil {
 		return err
 	}
 
@@ -1507,9 +1608,8 @@ func validateSchemas(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if statusResourceVersion["type"] != "string" || !numberEquals(statusResourceVersion["minLength"], "1") ||
-		!numberEquals(statusResourceVersion["maxLength"], "128") || statusResourceVersion["pattern"] != "^[A-Za-z0-9_-]+$" {
-		return errors.New("StatusReceipt resourceVersion contract drifted")
+	if err := validateResourceVersionProperty(statusResourceVersion, "StatusReceipt"); err != nil {
+		return err
 	}
 	mutationReceipt, err := mapField(schemas, "MutationReceipt")
 	if err != nil {
@@ -1517,6 +1617,31 @@ func validateSchemas(schemas map[string]any) error {
 	}
 	if !numberEquals(mutationReceipt["x-veer-maximum-json-bytes"], "1024") {
 		return errors.New("mutation receipt encoded-size contract drifted")
+	}
+	mutationReceiptProperties, err := mapField(mutationReceipt, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(mutationReceipt["required"], []string{
+		"resourceId", "operationId", "generation", "resourceVersion", "acceptedAt",
+	}) || len(mutationReceiptProperties) != 5 {
+		return errors.New("MutationReceipt shape drifted")
+	}
+	for property, target := range map[string]string{
+		"resourceId":  "OpaqueId",
+		"operationId": "OpaqueId",
+		"acceptedAt":  "Timestamp",
+	} {
+		if err := requireReference(mutationReceiptProperties, property, "#/components/schemas/"+target); err != nil {
+			return fmt.Errorf("MutationReceipt: %w", err)
+		}
+	}
+	mutationResourceVersion, err := mapField(mutationReceiptProperties, "resourceVersion")
+	if err != nil {
+		return err
+	}
+	if err := validateResourceVersionProperty(mutationResourceVersion, "MutationReceipt"); err != nil {
+		return err
 	}
 
 	list, err := mapField(schemas, "WorkspaceList")
@@ -1560,8 +1685,11 @@ func validateSchemas(schemas map[string]any) error {
 	if problem["additionalProperties"] != false {
 		return errors.New("problem must reject undeclared extensions")
 	}
-	if !stringSetEquals(problem["required"], []string{"type", "title", "status", "code", "requestId"}) {
+	if !stringSetEquals(problem["required"], []string{"type", "title", "status", "instance", "code", "requestId"}) {
 		return errors.New("problem required fields drifted")
+	}
+	if problem["x-veer-instance-request-id-template"] != "urn:veer:request:{requestId}" {
+		return errors.New("problem instance/request-ID binding drifted")
 	}
 	if !numberEquals(problem["x-veer-maximum-json-bytes"], "1024") {
 		return errors.New("problem encoded-size contract drifted")
@@ -1675,6 +1803,143 @@ func validateInt64Property(schemas map[string]any, schemaName, propertyName, min
 	return nil
 }
 
+func validateResourceVersionProperty(property map[string]any, context string) error {
+	if property["type"] != "string" || !numberEquals(property["minLength"], "1") ||
+		!numberEquals(property["maxLength"], "128") || property["pattern"] != "^[A-Za-z0-9_-]+$" {
+		return fmt.Errorf("%s resourceVersion contract drifted", context)
+	}
+	return nil
+}
+
+func validateWorkspaceStatusSchema(schemas map[string]any) error {
+	status, err := mapField(schemas, "WorkspaceStatus")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(status, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(status["required"], []string{"observedGeneration", "conditions"}) ||
+		len(properties) != 2 {
+		return errors.New("WorkspaceStatus shape drifted")
+	}
+	conditions, err := mapField(properties, "conditions")
+	if err != nil {
+		return err
+	}
+	if conditions["type"] != "array" || !numberEquals(conditions["maxItems"], "32") {
+		return errors.New("WorkspaceStatus conditions contract drifted")
+	}
+	if err := requireReference(conditions, "items", "#/components/schemas/Condition"); err != nil {
+		return fmt.Errorf("WorkspaceStatus.conditions: %w", err)
+	}
+	return nil
+}
+
+func validateConditionSchema(schemas map[string]any) error {
+	condition, err := mapField(schemas, "Condition")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(condition, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(condition["required"], []string{
+		"type", "status", "reason", "message", "observedGeneration", "lastTransitionAt",
+	}) || len(properties) != 6 {
+		return errors.New("condition shape drifted")
+	}
+	for _, name := range []string{"type", "reason"} {
+		property, err := mapField(properties, name)
+		if err != nil {
+			return err
+		}
+		if property["type"] != "string" || !numberEquals(property["minLength"], "1") ||
+			!numberEquals(property["maxLength"], "64") || property["pattern"] != "^[A-Z][A-Za-z0-9]*$" {
+			return fmt.Errorf("condition.%s contract drifted", name)
+		}
+	}
+	status, err := mapField(properties, "status")
+	if err != nil {
+		return err
+	}
+	if status["type"] != "string" || !stringSetEquals(status["enum"], []string{"True", "False", "Unknown"}) {
+		return errors.New("condition.status contract drifted")
+	}
+	message, err := mapField(properties, "message")
+	if err != nil {
+		return err
+	}
+	if message["type"] != "string" || !numberEquals(message["maxLength"], "512") {
+		return errors.New("condition.message contract drifted")
+	}
+	if err := requireReference(properties, "lastTransitionAt", "#/components/schemas/Timestamp"); err != nil {
+		return fmt.Errorf("condition: %w", err)
+	}
+	return nil
+}
+
+func validateOperationSchema(schemas map[string]any) error {
+	operation, err := mapField(schemas, "Operation")
+	if err != nil {
+		return err
+	}
+	properties, err := mapField(operation, "properties")
+	if err != nil {
+		return err
+	}
+	if !stringSetEquals(operation["required"], []string{
+		"id", "resourceId", "generation", "resourceVersion", "phase", "createdAt", "updatedAt",
+	}) || len(properties) != 9 {
+		return errors.New("operation shape drifted")
+	}
+	for property, target := range map[string]string{
+		"id":         "OpaqueId",
+		"resourceId": "OpaqueId",
+		"createdAt":  "Timestamp",
+		"updatedAt":  "Timestamp",
+	} {
+		if err := requireReference(properties, property, "#/components/schemas/"+target); err != nil {
+			return fmt.Errorf("operation: %w", err)
+		}
+	}
+	resourceVersion, err := mapField(properties, "resourceVersion")
+	if err != nil {
+		return err
+	}
+	if err := validateResourceVersionProperty(resourceVersion, "Operation"); err != nil {
+		return err
+	}
+	phase, err := mapField(properties, "phase")
+	if err != nil {
+		return err
+	}
+	if phase["type"] != "string" || !stringSetEquals(
+		phase["enum"],
+		[]string{"Pending", "Running", "Succeeded", "Failed", "Canceled"},
+	) {
+		return errors.New("operation.phase contract drifted")
+	}
+	reason, err := mapField(properties, "reason")
+	if err != nil {
+		return err
+	}
+	if reason["type"] != "string" || !numberEquals(reason["maxLength"], "64") ||
+		reason["pattern"] != "^[A-Z][A-Za-z0-9]*$" {
+		return errors.New("operation.reason contract drifted")
+	}
+	message, err := mapField(properties, "message")
+	if err != nil {
+		return err
+	}
+	if message["type"] != "string" || !numberEquals(message["maxLength"], "512") {
+		return errors.New("operation.message contract drifted")
+	}
+	return nil
+}
+
 func validateWorkspaceWriteSchema(schemas map[string]any, name string) error {
 	schema, err := mapField(schemas, name)
 	if err != nil {
@@ -1748,43 +2013,71 @@ func validateWorkspaceIdentity(properties map[string]any, context string) error 
 
 func validateSpecificProblemSchemas(schemas map[string]any) error {
 	for responseName, contract := range problemContracts {
-		schema, err := mapField(schemas, contract.schema)
-		if err != nil {
-			return err
+		variants := problemVariantsFor(contract)
+		if len(variants) > 1 {
+			aggregate, err := mapField(schemas, contract.schema)
+			if err != nil {
+				return err
+			}
+			want := make([]string, 0, len(variants))
+			for _, variant := range variants {
+				want = append(want, "#/components/schemas/"+variant.schema)
+			}
+			if !referenceSetEquals(aggregate["oneOf"], want) {
+				return fmt.Errorf("%s conflict variants drifted", contract.schema)
+			}
 		}
-		allOf, ok := schema["allOf"].([]any)
-		if !ok || len(allOf) != 2 {
-			return fmt.Errorf("%s must contain the reviewed allOf contract", contract.schema)
+		for _, variant := range variants {
+			if err := validateProblemVariant(schemas, responseName, contract.status, variant); err != nil {
+				return err
+			}
 		}
-		base, baseOK := allOf[0].(map[string]any)
-		constraints, constraintsOK := allOf[1].(map[string]any)
-		if !baseOK || base["$ref"] != "#/components/schemas/Problem" || !constraintsOK ||
-			len(constraints) != 2 || constraints["x-veer-refinement"] != true {
-			return fmt.Errorf("%s does not refine Problem", contract.schema)
-		}
-		properties, err := mapField(constraints, "properties")
-		if err != nil {
-			return fmt.Errorf("%s: %w", contract.schema, err)
-		}
-		if len(properties) != 3 {
-			return fmt.Errorf("%s must constrain exactly type, status, and code", contract.schema)
-		}
-		problemType, err := mapField(properties, "type")
-		if err != nil {
-			return err
-		}
-		status, err := mapField(properties, "status")
-		if err != nil {
-			return err
-		}
-		code, err := mapField(properties, "code")
-		if err != nil {
-			return err
-		}
-		if problemType["const"] != "urn:veer:problem:"+contract.code ||
-			!numberEquals(status["const"], contract.status) || code["const"] != contract.code {
-			return fmt.Errorf("%s constants drifted for response %s", contract.schema, responseName)
-		}
+	}
+	return nil
+}
+
+func validateProblemVariant(
+	schemas map[string]any,
+	responseName string,
+	statusCode string,
+	variant problemVariant,
+) error {
+	schema, err := mapField(schemas, variant.schema)
+	if err != nil {
+		return err
+	}
+	allOf, ok := schema["allOf"].([]any)
+	if !ok || len(allOf) != 2 {
+		return fmt.Errorf("%s must contain the reviewed allOf contract", variant.schema)
+	}
+	base, baseOK := allOf[0].(map[string]any)
+	constraints, constraintsOK := allOf[1].(map[string]any)
+	if !baseOK || base["$ref"] != "#/components/schemas/Problem" || !constraintsOK ||
+		len(constraints) != 2 || constraints["x-veer-refinement"] != true {
+		return fmt.Errorf("%s does not refine Problem", variant.schema)
+	}
+	properties, err := mapField(constraints, "properties")
+	if err != nil {
+		return fmt.Errorf("%s: %w", variant.schema, err)
+	}
+	if len(properties) != 3 {
+		return fmt.Errorf("%s must constrain exactly type, status, and code", variant.schema)
+	}
+	problemType, err := mapField(properties, "type")
+	if err != nil {
+		return err
+	}
+	status, err := mapField(properties, "status")
+	if err != nil {
+		return err
+	}
+	code, err := mapField(properties, "code")
+	if err != nil {
+		return err
+	}
+	if problemType["const"] != "urn:veer:problem:"+variant.code ||
+		!numberEquals(status["const"], statusCode) || code["const"] != variant.code {
+		return fmt.Errorf("%s constants drifted for response %s", variant.schema, responseName)
 	}
 	return nil
 }
@@ -1940,6 +2233,26 @@ func stringSetEquals(value any, want []string) bool {
 	sortedWant := append([]string(nil), want...)
 	sort.Strings(sortedWant)
 	return reflect.DeepEqual(got, sortedWant)
+}
+
+func referenceSetEquals(value any, want []string) bool {
+	items, ok := value.([]any)
+	if !ok || len(items) != len(want) {
+		return false
+	}
+	references := make([]any, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok || len(object) != 1 {
+			return false
+		}
+		reference, ok := object["$ref"].(string)
+		if !ok {
+			return false
+		}
+		references = append(references, reference)
+	}
+	return stringSetEquals(references, want)
 }
 
 func stringMatrixEquals(value any, want [][]string) bool {

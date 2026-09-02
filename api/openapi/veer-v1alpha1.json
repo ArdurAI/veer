@@ -722,6 +722,7 @@
       },
       "Workspace": {
         "description": "Current workspace representation.",
+        "x-veer-etag-resource-version-pointer": "/metadata/resourceVersion",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "ETag"
@@ -782,6 +783,7 @@
       },
       "StatusUpdated": {
         "description": "Bounded receipt for a persisted controller status update.",
+        "x-veer-etag-resource-version-pointer": "/resourceVersion",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "ETag"
@@ -826,6 +828,7 @@
       },
       "Operation": {
         "description": "Current asynchronous operation representation.",
+        "x-veer-etag-resource-version-pointer": "/resourceVersion",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "ETag"
@@ -875,6 +878,7 @@
       },
       "MutationAccepted": {
         "description": "Desired state was durably accepted; asynchronous convergence is not implied.",
+        "x-veer-location-operation-id-pointer": "/operationId",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "Location"
@@ -920,6 +924,7 @@
       },
       "ValidationFailure": {
         "description": "The request is syntactically or semantically invalid and caused no mutation.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -943,6 +948,7 @@
       },
       "AuthenticationRequired": {
         "description": "Authentication is missing or invalid.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "WWW-Authenticate"
@@ -970,6 +976,7 @@
       },
       "AuthorizationDenied": {
         "description": "The authenticated principal lacks the required action in the resolved scope.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -993,6 +1000,7 @@
       },
       "NotFound": {
         "description": "The resource does not exist in the caller-visible scope.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -1020,6 +1028,7 @@
       },
       "Conflict": {
         "description": "The request conflicts with a current invariant or reuses an idempotency key with a different request.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -1043,6 +1052,7 @@
       },
       "PreconditionFailed": {
         "description": "If-Match does not equal the current strong ETag.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "ETag"
@@ -1074,6 +1084,7 @@
       },
       "PreconditionRequired": {
         "description": "A required If-Match header is absent.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -1101,6 +1112,7 @@
       },
       "RequestTooLarge": {
         "description": "The encoded request exceeds 262144 bytes.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -1128,6 +1140,7 @@
       },
       "UnsupportedMediaType": {
         "description": "A request body is not application/json.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -1155,6 +1168,7 @@
       },
       "Throttled": {
         "description": "The caller or scoped admission budget is temporarily exhausted.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "Retry-After"
@@ -1182,6 +1196,7 @@
       },
       "InternalFailure": {
         "description": "The request failed without exposing internal or provider details.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -1205,6 +1220,7 @@
       },
       "Unavailable": {
         "description": "A system-wide safety or availability boundary temporarily prevents service.",
+        "x-veer-request-id-body-pointer": "/requestId",
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "Retry-After"
@@ -1792,10 +1808,12 @@
         "description": "RFC 9457 problem details with stable Veer extensions. Raw tokens, SQL, provider bodies, and secret-bearing values are prohibited.",
         "additionalProperties": false,
         "x-veer-maximum-json-bytes": 1024,
+        "x-veer-instance-request-id-template": "urn:veer:request:{requestId}",
         "required": [
           "type",
           "title",
           "status",
+          "instance",
           "code",
           "requestId"
         ],
@@ -1950,7 +1968,24 @@
         ]
       },
       "ConflictProblem": {
-        "description": "A 409 response with Veer's idempotency-key-reused problem identity.",
+        "description": "A 409 response carrying one of Veer's reviewed conflict identities.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/IdempotencyConflictProblem"
+          },
+          {
+            "$ref": "#/components/schemas/UniquenessConflictProblem"
+          },
+          {
+            "$ref": "#/components/schemas/LifecycleConflictProblem"
+          },
+          {
+            "$ref": "#/components/schemas/PolicyConflictProblem"
+          }
+        ]
+      },
+      "IdempotencyConflictProblem": {
+        "description": "A 409 response for an idempotency key reused with different normalized intent.",
         "allOf": [
           {
             "$ref": "#/components/schemas/Problem"
@@ -1966,6 +2001,72 @@
               },
               "code": {
                 "const": "idempotency-key-reused"
+              }
+            }
+          }
+        ]
+      },
+      "UniquenessConflictProblem": {
+        "description": "A 409 response for a uniqueness invariant conflict.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:uniqueness-conflict"
+              },
+              "status": {
+                "const": 409
+              },
+              "code": {
+                "const": "uniqueness-conflict"
+              }
+            }
+          }
+        ]
+      },
+      "LifecycleConflictProblem": {
+        "description": "A 409 response for a resource lifecycle transition conflict.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:lifecycle-conflict"
+              },
+              "status": {
+                "const": 409
+              },
+              "code": {
+                "const": "lifecycle-conflict"
+              }
+            }
+          }
+        ]
+      },
+      "PolicyConflictProblem": {
+        "description": "A 409 response for an invariant conflict imposed by current policy state.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "x-veer-refinement": true,
+            "properties": {
+              "type": {
+                "const": "urn:veer:problem:policy-conflict"
+              },
+              "status": {
+                "const": 409
+              },
+              "code": {
+                "const": "policy-conflict"
               }
             }
           }

@@ -115,6 +115,11 @@ bounded receipt and ETag. The receipt contains only resource identity, observed
 generation, resource version, and update time; the caller reads the point
 resource when it needs the full representation.
 
+The accepted-mutation response binds `Location` to the receipt's `operationId`:
+the header value is `/api/v1alpha1/operations/<operationId>`. This relationship
+is declared by `x-veer-location-operation-id-pointer` so adapters and
+conformance tests do not validate the header and body independently.
+
 Only `application/json` is accepted for a request body. Missing or mismatched
 `Content-Type` returns `415`. The maximum encoded request body, individual read
 representation, or response page is 262,144 bytes. A collection page stops
@@ -193,6 +198,12 @@ requests require that exact value in `If-Match`:
   current ETag when disclosure is authorized; and
 - a current validator proceeds to authorization, admission, and the atomic
   store predicate.
+
+Responses with both ETag and a resource version declare
+`x-veer-etag-resource-version-pointer`. The adapter reads that JSON Pointer and
+emits the body value wrapped as a strong quoted ETag. For a Workspace the
+pointer is `/metadata/resourceVersion`; for operation and status receipts it is
+`/resourceVersion`.
 
 This follows the lost-update purpose of
 [RFC 6585 section 3](https://www.rfc-editor.org/rfc/rfc6585.html#section-3)
@@ -301,6 +312,13 @@ Each reusable error response references a response-specific schema that fixes
 generic Problem body from carrying a status or code that contradicts its HTTP
 response component.
 
+The shared `409 Conflict` response is a closed `oneOf` over four stable
+identities: `idempotency-key-reused`, `uniqueness-conflict`,
+`lifecycle-conflict`, and `policy-conflict`. The first covers a scoped key used
+with different normalized intent; the other three cover current uniqueness,
+lifecycle-transition, or policy-state invariants. Authentication and
+authorization failures remain `401` and `403`, not policy conflicts.
+
 The baseline includes validated examples for every issue-required class:
 
 | Class | Status | Stable example code | Retry behavior |
@@ -324,13 +342,21 @@ it never grants identity, authorization, idempotency, or resource ownership.
 Workspace, resource, actor, provider object, and request IDs are forbidden as
 metric labels under the existing cardinality contract.
 
+Every Problem requires both `requestId` and `instance`. The Problem-level
+`x-veer-instance-request-id-template` fixes `instance` to
+`urn:veer:request:{requestId}`, and every error response's
+`x-veer-request-id-body-pointer` binds its `Veer-Request-Id` header to the body
+`/requestId`. These relations make all three correlation surfaces identical.
+
 Because OpenAPI response Header Objects do not have a native `required` flag,
 Veer response components carry `x-veer-required-headers` as an executable
 generator convention. `Veer-Request-Id` is always required; ETag, Location,
 authentication challenge, and retry headers are required on their declared
 responses. Successful responses additionally carry
 `x-veer-required-header-sets`: when an operation is deprecated, `Deprecation`,
-`Sunset`, and `Link` are emitted together as one conditional set.
+`Sunset`, and `Link` are emitted together as one conditional set. The pointer
+and template extensions above define value equality after presence is known;
+generated adapters fail closed if a declared pointer cannot be resolved.
 
 ## Deprecation and removal
 
@@ -382,10 +408,11 @@ The semantic verifier rejects:
   IDs, unselected methods, server overrides, callbacks, or webhooks;
 - mutation routes without idempotency, required ETag preconditions, an exact
   request schema, or their reviewed success response;
-- request media type, response-specific problem status/code, mandatory header
-  metadata, shared response-header or example references, complete-write
-  shape, status-write, generation, resource-version, byte-bounded pagination,
-  or deprecation drift;
+- request media type, response-specific problem status/code and conflict
+  variants, problem correlation, mandatory header metadata, header/body
+  bindings, shared response-header or example references, complete resource,
+  status, receipt, and operation shapes, generation, resource-version,
+  byte-bounded pagination, or deprecation drift;
 - an object schema that silently accepts unknown properties; and
 - missing or inconsistent validation, authentication, authorization,
   conflict, throttling, or internal-failure examples.

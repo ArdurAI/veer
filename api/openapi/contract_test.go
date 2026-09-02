@@ -614,6 +614,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "workspace read shape or encoded-size contract drifted",
 		},
 		{
+			name: "resource metadata identity becomes optional",
+			mutate: func(root map[string]any) {
+				metadata := nestedMap(t, root, "components", "schemas", "ResourceMetadata")
+				metadata["required"] = []any{"displayName", "generation", "resourceVersion", "createdAt", "updatedAt"}
+			},
+			message: "ResourceMetadata shape drifted",
+		},
+		{
+			name: "workspace status generation fence becomes optional",
+			mutate: func(root map[string]any) {
+				status := nestedMap(t, root, "components", "schemas", "WorkspaceStatus")
+				status["required"] = []any{"conditions"}
+			},
+			message: "WorkspaceStatus shape drifted",
+		},
+		{
+			name: "condition truth-state enum narrows",
+			mutate: func(root map[string]any) {
+				status := nestedMap(t, root, "components", "schemas", "Condition", "properties", "status")
+				status["enum"] = []any{"True", "False"}
+			},
+			message: "condition.status contract drifted",
+		},
+		{
 			name: "workspace page byte ceiling removed",
 			mutate: func(root map[string]any) {
 				list := nestedMap(t, root, "components", "schemas", "WorkspaceList")
@@ -718,6 +742,38 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "mutation receipt encoded-size contract drifted",
 		},
 		{
+			name: "mutation receipt operation identity becomes optional",
+			mutate: func(root map[string]any) {
+				receipt := nestedMap(t, root, "components", "schemas", "MutationReceipt")
+				receipt["required"] = []any{"resourceId", "generation", "resourceVersion", "acceptedAt"}
+			},
+			message: "MutationReceipt shape drifted",
+		},
+		{
+			name: "mutation receipt operation identity changes type",
+			mutate: func(root map[string]any) {
+				operationID := nestedMap(t, root, "components", "schemas", "MutationReceipt", "properties", "operationId")
+				operationID["$ref"] = "#/components/schemas/Timestamp"
+			},
+			message: "MutationReceipt: operationId must reference #/components/schemas/OpaqueId",
+		},
+		{
+			name: "operation phase becomes optional",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "components", "schemas", "Operation")
+				operation["required"] = []any{"id", "resourceId", "generation", "resourceVersion", "createdAt", "updatedAt"}
+			},
+			message: "operation shape drifted",
+		},
+		{
+			name: "operation terminal phase narrows",
+			mutate: func(root map[string]any) {
+				phase := nestedMap(t, root, "components", "schemas", "Operation", "properties", "phase")
+				phase["enum"] = []any{"Pending", "Running", "Failed", "Canceled"}
+			},
+			message: "operation.phase contract drifted",
+		},
+		{
 			name: "problem field violations become unbounded aggregate",
 			mutate: func(root map[string]any) {
 				errors := nestedMap(t, root, "components", "schemas", "Problem", "properties", "errors")
@@ -740,6 +796,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(problem, "x-veer-maximum-json-bytes")
 			},
 			message: "problem encoded-size contract drifted",
+		},
+		{
+			name: "problem instance becomes optional",
+			mutate: func(root map[string]any) {
+				problem := nestedMap(t, root, "components", "schemas", "Problem")
+				problem["required"] = []any{"type", "title", "status", "code", "requestId"}
+			},
+			message: "problem required fields drifted",
+		},
+		{
+			name: "problem instance correlation binding removed",
+			mutate: func(root map[string]any) {
+				problem := nestedMap(t, root, "components", "schemas", "Problem")
+				delete(problem, "x-veer-instance-request-id-template")
+			},
+			message: "problem instance/request-ID binding drifted",
 		},
 		{
 			name: "problem diagnostic text admits escaping Unicode",
@@ -841,13 +913,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 		{
 			name: "conflict response status schema mismatched",
 			mutate: func(root map[string]any) {
-				schema := nestedMap(t, root, "components", "schemas", "ConflictProblem")
+				schema := nestedMap(t, root, "components", "schemas", "IdempotencyConflictProblem")
 				allOf := schema["allOf"].([]any)
 				refinement := allOf[1].(map[string]any)
 				property := nestedMap(t, refinement, "properties", "status")
 				property["const"] = json.Number("412")
 			},
-			message: "ConflictProblem constants drifted for response Conflict",
+			message: "IdempotencyConflictProblem constants drifted for response Conflict",
+		},
+		{
+			name: "conflict response drops lifecycle variant",
+			mutate: func(root map[string]any) {
+				conflict := nestedMap(t, root, "components", "schemas", "ConflictProblem")
+				oneOf := conflict["oneOf"].([]any)
+				conflict["oneOf"] = oneOf[:len(oneOf)-1]
+			},
+			message: "ConflictProblem conflict variants drifted",
 		},
 		{
 			name: "mandatory response header contract removed",
@@ -864,6 +945,46 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				response["x-veer-required-header-sets"] = []any{[]any{"Deprecation", "Sunset"}}
 			},
 			message: "success response Workspace deprecation-header contract drifted",
+		},
+		{
+			name: "workspace ETag body binding removed",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "Workspace")
+				delete(response, "x-veer-etag-resource-version-pointer")
+			},
+			message: "success response Workspace ETag binding drifted",
+		},
+		{
+			name: "status receipt ETag body binding points at generation",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "StatusUpdated")
+				response["x-veer-etag-resource-version-pointer"] = "/observedGeneration"
+			},
+			message: "success response StatusUpdated ETag binding drifted",
+		},
+		{
+			name: "operation ETag body binding removed",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "Operation")
+				delete(response, "x-veer-etag-resource-version-pointer")
+			},
+			message: "success response Operation ETag binding drifted",
+		},
+		{
+			name: "mutation Location body binding removed",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "MutationAccepted")
+				delete(response, "x-veer-location-operation-id-pointer")
+			},
+			message: "success response MutationAccepted Location binding drifted",
+		},
+		{
+			name: "error request ID body binding removed",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "Conflict")
+				delete(response, "x-veer-request-id-body-pointer")
+			},
+			message: "error response Conflict request-ID body binding drifted",
 		},
 	}
 
