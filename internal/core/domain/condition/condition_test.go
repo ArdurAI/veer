@@ -46,15 +46,25 @@ func TestYearZeroTimestamp(t *testing.T) {
 	if err := Validate(got, 1); err != nil {
 		t.Fatalf("Validate(year zero) error = %v", err)
 	}
-	goZero, err := New(Input{
+	_, err = New(Input{
 		Type: "Ready", Status: StatusUnknown, Reason: "PendingObservation",
 		ObservedGeneration: 0,
 	}, 1, time.Time{})
-	if err != nil {
-		t.Fatalf("New(Go zero) error = %v", err)
+	if !errors.Is(err, ErrInvalidTimestamp) {
+		t.Fatalf("New(missing timestamp) error = %v, want ErrInvalidTimestamp", err)
 	}
-	if goZero.LastTransitionAt != "0001-01-01T00:00:00.000Z" {
-		t.Fatalf("Go-zero LastTransitionAt = %q", goZero.LastTransitionAt)
+	yearOne, err := New(Input{
+		Type: "Ready", Status: StatusUnknown, Reason: "PendingObservation",
+		ObservedGeneration: 0,
+	}, 1, time.Date(1, time.January, 1, 0, 0, 0, 1, time.UTC))
+	if err != nil {
+		t.Fatalf("New(year one) error = %v", err)
+	}
+	if yearOne.LastTransitionAt != "0001-01-01T00:00:00.000Z" {
+		t.Fatalf("year-one LastTransitionAt = %q", yearOne.LastTransitionAt)
+	}
+	if err := Validate(yearOne, 1); err != nil {
+		t.Fatalf("Validate(year one) error = %v", err)
 	}
 
 	for _, value := range []time.Time{
@@ -178,7 +188,7 @@ func TestInvalidTransitionMatrix(t *testing.T) {
 			generation: 2, at: conditionFixtureTime.Add(-500 * time.Microsecond), want: ErrInvalidTimestamp,
 		},
 		{
-			name:       "transition time regresses to Go zero instant",
+			name:       "transition time is missing",
 			update:     Update{Status: StatusTrue, Reason: "Ready", ObservedGeneration: 1},
 			generation: 2, at: time.Time{}, want: ErrInvalidTimestamp,
 		},

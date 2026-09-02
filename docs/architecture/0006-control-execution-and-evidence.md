@@ -125,6 +125,13 @@ Allowed phase changes are:
 | `Running` | `Waiting`, `Succeeded`, `Failed`, `Canceled` |
 | `Succeeded`, `Failed`, `Canceled` | exact idempotent replay only |
 
+`Pending` means queued without an active execution lease; it is not limited to
+an operation's first phase. A `Waiting` operation may return to `Pending` when
+a dependency or retry becomes schedulable. A `Running` operation must first
+move to `Waiting` before it can be requeued, preserving the observable fact
+that active execution stopped. The graph is intentionally not transitive, so a
+direct `Running` to `Pending` transition remains invalid.
+
 An exact replay returns the existing value. Every material transition requires
 an injected, non-regressing millisecond timestamp and a new injected resource
 version. Identity, ownership, generation, and creation time remain immutable.

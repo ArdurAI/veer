@@ -74,15 +74,30 @@ func TestYearZeroTimestampCanonicalRoundTrip(t *testing.T) {
 	if !equal(decoded, value) {
 		t.Fatalf("year-zero round trip differs: %#v / %#v", decoded, value)
 	}
-	goZero, err := New(Input{
+	_, err = New(Input{
 		ID: operationID, WorkspaceID: workspaceID, ResourceID: resourceID,
 		Generation: 1, ResourceVersion: "rv_go_zero", CreatedAt: time.Time{},
 	})
-	if err != nil {
-		t.Fatalf("New(Go zero) error = %v", err)
+	if !errors.Is(err, ErrInvalidTimestamp) {
+		t.Fatalf("New(missing timestamp) error = %v, want ErrInvalidTimestamp", err)
 	}
-	if goZero.CreatedAt != "0001-01-01T00:00:00.000Z" || goZero.UpdatedAt != goZero.CreatedAt {
-		t.Fatalf("Go-zero timestamps = %q / %q", goZero.CreatedAt, goZero.UpdatedAt)
+	yearOne, err := New(Input{
+		ID: operationID, WorkspaceID: workspaceID, ResourceID: resourceID,
+		Generation: 1, ResourceVersion: "rv_year_one",
+		CreatedAt: time.Date(1, time.January, 1, 0, 0, 0, 1, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("New(year one) error = %v", err)
+	}
+	if yearOne.CreatedAt != "0001-01-01T00:00:00.000Z" || yearOne.UpdatedAt != yearOne.CreatedAt {
+		t.Fatalf("year-one timestamps = %q / %q", yearOne.CreatedAt, yearOne.UpdatedAt)
+	}
+	yearOneEncoded, err := MarshalCanonical(yearOne)
+	if err != nil {
+		t.Fatalf("MarshalCanonical(year one) error = %v", err)
+	}
+	if _, err := UnmarshalCanonical(yearOneEncoded); err != nil {
+		t.Fatalf("UnmarshalCanonical(year one) error = %v", err)
 	}
 
 	for _, createdAt := range []time.Time{
@@ -390,6 +405,14 @@ func TestTransitionRequiresNewResourceVersionForMaterialChange(t *testing.T) {
 	t.Parallel()
 
 	before := newProviderOperation(t)
+	after, err := Transition(before, TransitionInput{
+		Phase: PhaseRunning, Reason: "Reconciling", Message: before.Message,
+		ResourceVersion: "rv_missing_time", UpdatedAt: time.Time{},
+	})
+	if !errors.Is(err, ErrInvalidTimestamp) || !equal(after, before) {
+		t.Fatalf("Transition(missing timestamp) = %#v, %v", after, err)
+	}
+
 	for _, version := range []string{"", before.ResourceVersion} {
 		after, err := Transition(before, TransitionInput{
 			Phase: PhaseRunning, Reason: "Reconciling", Message: before.Message,

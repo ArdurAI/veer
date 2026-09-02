@@ -210,6 +210,9 @@ func validStatus(status Status) bool {
 }
 
 func normalizeTimestamp(value time.Time) (string, error) {
+	if value.IsZero() {
+		return "", ErrInvalidTimestamp
+	}
 	value = value.UTC().Truncate(time.Millisecond)
 	if value.Year() < 0 || value.Year() > 9999 {
 		return "", ErrInvalidTimestamp

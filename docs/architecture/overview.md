@@ -36,8 +36,7 @@ Workspace
         └── Component
 ```
 
-- A **Workspace** owns membership, policy defaults, quotas, and provider
-  connections.
+- A **Workspace** owns membership, policy defaults, and quotas.
 - An **Environment** is an isolation boundary with network, identity, region,
   and lifecycle policy.
 - An **Application** groups components that ship and operate together.

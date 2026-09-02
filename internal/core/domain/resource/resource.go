@@ -463,6 +463,9 @@ func validateResourceVersion(value string) (ResourceVersion, error) {
 }
 
 func normalizeTimestamp(value time.Time, field string) (time.Time, error) {
+	if value.IsZero() {
+		return time.Time{}, fmt.Errorf("%s is required", field)
+	}
 	value = value.UTC().Truncate(time.Millisecond)
 	if value.Year() < 0 || value.Year() > 9999 {
 		return time.Time{}, fmt.Errorf("%s year must be in 0000..9999", field)
@@ -522,5 +525,8 @@ func parseTimestamp(value, field string) (time.Time, error) {
 	if err != nil || parsed.Format(timestampLayout) != value {
 		return time.Time{}, fmt.Errorf("%s must use UTC RFC 3339 with exact milliseconds", field)
 	}
-	return normalizeTimestamp(parsed, field)
+	if parsed.Year() < 0 || parsed.Year() > 9999 {
+		return time.Time{}, fmt.Errorf("%s year must be in 0000..9999", field)
+	}
+	return parsed, nil
 }

@@ -516,6 +516,12 @@ func TestTransitionsRejectInvalidRevisionInputs(t *testing.T) {
 			message: "cannot move backwards",
 		},
 		{
+			name:    "time missing",
+			version: "rv_next",
+			at:      time.Time{},
+			message: "metadata.updatedAt is required",
+		},
+		{
 			name:    "invalid resource version",
 			version: "invalid version",
 			at:      initial.Metadata().UpdatedAt().Add(time.Millisecond),
@@ -526,8 +532,12 @@ func TestTransitionsRejectInvalidRevisionInputs(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := initial.ReplaceSpec(changedSpec, test.version, test.at); err == nil || !strings.Contains(err.Error(), test.message) {
+			after, err := initial.ReplaceSpec(changedSpec, test.version, test.at)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
 				t.Fatalf("ReplaceSpec() error = %v, want %q", err, test.message)
+			}
+			if !reflect.DeepEqual(after, initial) {
+				t.Fatal("failed ReplaceSpec() changed the resource")
 			}
 		})
 	}
@@ -697,7 +707,10 @@ func TestResourceValidationBounds(t *testing.T) {
 		{name: "workspace ID", mutate: func(input *CreateInput[testSpec, testStatus]) { input.WorkspaceID = "short" }, message: "metadata.workspaceId"},
 		{name: "display name", mutate: func(input *CreateInput[testSpec, testStatus]) { input.DisplayName = "" }, message: "displayName"},
 		{name: "resource version", mutate: func(input *CreateInput[testSpec, testStatus]) { input.ResourceVersion = "has spaces" }, message: "resourceVersion"},
-		{name: "timestamp", mutate: func(input *CreateInput[testSpec, testStatus]) {
+		{name: "timestamp missing", mutate: func(input *CreateInput[testSpec, testStatus]) {
+			input.CreatedAt = time.Time{}
+		}, message: "createdAt"},
+		{name: "timestamp year", mutate: func(input *CreateInput[testSpec, testStatus]) {
 			input.CreatedAt = time.Date(-1, time.January, 1, 0, 0, 0, 0, time.UTC)
 		}, message: "createdAt"},
 		{name: "label key", mutate: func(input *CreateInput[testSpec, testStatus]) { input.Labels = map[string]string{"Invalid": "value"} }, message: "labels key"},
@@ -763,7 +776,7 @@ func TestYearZeroTimestampCanonicalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestGoZeroTimestampCanonicalRoundTrip(t *testing.T) {
+func TestYearOneEpochCanonicalRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	value, err := New(CreateInput[testSpec, testStatus]{
@@ -771,24 +784,24 @@ func TestGoZeroTimestampCanonicalRoundTrip(t *testing.T) {
 		Kind:            "Workspace",
 		ID:              "wsp_01J00000000000000000000000",
 		WorkspaceID:     "wsp_01J00000000000000000000000",
-		DisplayName:     "go-zero",
-		ResourceVersion: "rv_go_zero",
-		CreatedAt:       time.Time{},
+		DisplayName:     "year-one",
+		ResourceVersion: "rv_year_one",
+		CreatedAt:       time.Date(1, time.January, 1, 0, 0, 0, 1, time.UTC),
 		Spec:            testSpec{Region: "us-east-1"},
 		Status:          testStatus{Conditions: []testCondition{}},
 	})
 	if err != nil {
-		t.Fatalf("New(Go zero) error = %v", err)
+		t.Fatalf("New(year one) error = %v", err)
 	}
 	encoded, err := MarshalCanonical(value)
 	if err != nil {
-		t.Fatalf("MarshalCanonical(Go zero) error = %v", err)
+		t.Fatalf("MarshalCanonical(year one) error = %v", err)
 	}
 	if !bytes.Contains(encoded, []byte(`"createdAt":"0001-01-01T00:00:00.000Z"`)) {
-		t.Fatalf("canonical Go-zero timestamp missing: %s", encoded)
+		t.Fatalf("canonical year-one timestamp missing: %s", encoded)
 	}
 	if _, err := UnmarshalCanonical[testSpec, testStatus](encoded); err != nil {
-		t.Fatalf("UnmarshalCanonical(Go zero) error = %v", err)
+		t.Fatalf("UnmarshalCanonical(year one) error = %v", err)
 	}
 }
 
