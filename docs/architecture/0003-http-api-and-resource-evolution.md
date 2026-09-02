@@ -130,6 +130,12 @@ the header value is `/api/v1alpha1/operations/<operationId>`. This relationship
 is declared by `x-veer-location-operation-id-pointer` so adapters and
 conformance tests do not validate the header and body independently.
 
+Point reads similarly bind the requested path parameter to the returned body
+identity through `x-veer-path-response-id-binding`. `getWorkspace` binds
+`workspaceId` to `/metadata/id`; `getOperation` binds `operationId` to `/id`.
+Generated adapters and conformance tests must reject a response whose identity
+does not equal the requested resource.
+
 Only `application/json` is accepted for a request body. Missing or mismatched
 `Content-Type` returns `415`. The maximum encoded request body, individual read
 representation, or response page is 262,144 bytes. A collection page stops

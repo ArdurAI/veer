@@ -167,6 +167,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "200 reference has unreviewed keywords",
 		},
 		{
+			name: "workspace point read identity binding removed",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get")
+				delete(operation, "x-veer-path-response-id-binding")
+			},
+			message: `operationId "getWorkspace" path-response identity binding drifted`,
+		},
+		{
+			name: "operation point read identity pointer drifts",
+			mutate: func(root map[string]any) {
+				binding := nestedMap(t, root, "paths", "/api/v1alpha1/operations/{operationId}", "get", "x-veer-path-response-id-binding")
+				binding["bodyPointer"] = "/resourceId"
+			},
+			message: `operationId "getOperation" path-response identity binding drifted`,
+		},
+		{
 			name: "status response exceeds non-read contract",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "responses")
@@ -636,6 +652,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "RetryAfter header contract drifted",
 		},
 		{
+			name: "retry after header gains narrowing enum",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "RetryAfter", "schema")
+				schema["enum"] = []any{"1"}
+			},
+			message: "RetryAfter header schema has unreviewed keywords",
+		},
+		{
 			name: "deprecation header pattern",
 			mutate: func(root map[string]any) {
 				schema := nestedMap(t, root, "components", "headers", "Deprecation", "schema")
@@ -666,6 +690,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				schema["pattern"] = "^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
 			},
 			message: "Location header contract drifted",
+		},
+		{
+			name: "operation Location header gains narrowing const",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "Location", "schema")
+				schema["const"] = "/api/v1alpha1/operations/op_01J000000000000000000000000"
+			},
+			message: "Location header schema has unreviewed keywords",
 		},
 		{
 			name: "unbounded authentication challenge",
@@ -1280,6 +1312,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "labels value contract drifted",
 		},
 		{
+			name: "labels key schema gains narrowing const",
+			mutate: func(root map[string]any) {
+				propertyNames := nestedMap(t, root, "components", "schemas", "Labels", "propertyNames")
+				propertyNames["const"] = "team"
+			},
+			message: "labels propertyNames schema has unreviewed keywords",
+		},
+		{
+			name: "labels value schema gains narrowing const",
+			mutate: func(root map[string]any) {
+				values := nestedMap(t, root, "components", "schemas", "Labels", "additionalProperties")
+				values["const"] = "platform"
+			},
+			message: "labels value schema has unreviewed keywords",
+		},
+		{
 			name: "error media type",
 			mutate: func(root map[string]any) {
 				content := nestedMap(t, root, "components", "responses", "Conflict", "content")
@@ -1384,6 +1432,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(response, "x-veer-location-operation-id-pointer")
 			},
 			message: "success response MutationAccepted Location binding drifted",
+		},
+		{
+			name: "accepted mutation creation example generation drifts",
+			mutate: func(root map[string]any) {
+				example := nestedMap(t, root, "components", "responses", "MutationAccepted", "content", "application/json", "example")
+				example["generation"] = json.Number("3")
+			},
+			message: "success response MutationAccepted generation example drifted",
 		},
 		{
 			name: "error request ID body binding removed",

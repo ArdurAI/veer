@@ -466,6 +466,9 @@ func isReviewedExtension(path, name string) bool {
 		return path == "$/components/headers/DeprecationLink/schema"
 	case "x-veer-request-id-binding":
 		return path == "$/components/headers/VeerRequestId"
+	case "x-veer-path-response-id-binding":
+		return path == "$/paths//api/v1alpha1/workspaces/{workspaceId}/get" ||
+			path == "$/paths//api/v1alpha1/operations/{operationId}/get"
 	case "x-veer-deprecation-sunset-minimum-notice-days",
 		"x-veer-etag-resource-version-pointer",
 		"x-veer-location-operation-id-pointer",
@@ -781,6 +784,9 @@ func validateOperations(root map[string]any) error {
 			if err := validateSuccessResponse(operationID, responses); err != nil {
 				return err
 			}
+			if err := validatePathResponseIDBinding(operationID, operation); err != nil {
+				return err
+			}
 
 			operationParameters, err := parameterReferences(operation["parameters"])
 			if err != nil {
@@ -942,6 +948,29 @@ func validateSuccessResponse(operationID string, responses map[string]any) error
 		if len(status) == 3 && status[0] == '2' && status != expected.status {
 			return fmt.Errorf("operationId %q declares unexpected success response %s", operationID, status)
 		}
+	}
+	return nil
+}
+
+func validatePathResponseIDBinding(operationID string, operation map[string]any) error {
+	want, required := map[string]struct {
+		pathParameter string
+		bodyPointer   string
+	}{
+		"getOperation": {pathParameter: "operationId", bodyPointer: "/id"},
+		"getWorkspace": {pathParameter: "workspaceId", bodyPointer: "/metadata/id"},
+	}[operationID]
+	raw, exists := operation["x-veer-path-response-id-binding"]
+	if !required {
+		if exists {
+			return fmt.Errorf("operationId %q declares an unexpected path-response identity binding", operationID)
+		}
+		return nil
+	}
+	binding, ok := raw.(map[string]any)
+	if !exists || !ok || !mapKeySetEquals(binding, []string{"pathParameter", "bodyPointer"}) ||
+		binding["pathParameter"] != want.pathParameter || binding["bodyPointer"] != want.bodyPointer {
+		return fmt.Errorf("operationId %q path-response identity binding drifted", operationID)
 	}
 	return nil
 }
@@ -1329,6 +1358,26 @@ func validateHeaders(headers map[string]any) error {
 		!exampleOK || !validDeprecationLink(linkExample) {
 		return errors.New("DeprecationLink header URI-reference contract drifted")
 	}
+	for name, keywords := range map[string][]string{
+		"Deprecation":     {"type", "pattern", "example", "x-veer-calendar-validation"},
+		"DeprecationLink": {"type", "minLength", "maxLength", "pattern", "example", "x-veer-link-target-validation"},
+		"Location":        {"type", "pattern"},
+		"RetryAfter":      {"type", "pattern"},
+		"Sunset":          {"type", "pattern", "example", "x-veer-calendar-validation"},
+		"WWWAuthenticate": {"type", "maxLength", "pattern"},
+	} {
+		header, err := mapField(headers, name)
+		if err != nil {
+			return err
+		}
+		schema, err := mapField(header, "schema")
+		if err != nil {
+			return err
+		}
+		if !mapKeySetEquals(schema, keywords) {
+			return fmt.Errorf("%s header schema has unreviewed keywords", name)
+		}
+	}
 	return nil
 }
 
@@ -1442,6 +1491,12 @@ func validateResponses(responses map[string]any) error {
 			}[name]
 			if err := requireReference(media, "schema", "#/components/schemas/"+wantSchema); err != nil {
 				return fmt.Errorf("success response %s uses the wrong schema: %w", name, err)
+			}
+			if name == "MutationAccepted" {
+				example, err := mapField(media, "example")
+				if err != nil || !numberEquals(example["generation"], "1") {
+					return errors.New("success response MutationAccepted generation example drifted")
+				}
 			}
 			if pointer, mustBind := etagResourceVersionPointers[name]; mustBind {
 				if response["x-veer-etag-resource-version-pointer"] != pointer {
@@ -1962,6 +2017,12 @@ func validateSchemas(schemas map[string]any) error {
 	}
 	if labelValues["type"] != "string" || !numberEquals(labelValues["maxLength"], "256") {
 		return errors.New("labels value contract drifted")
+	}
+	if !mapKeySetEquals(propertyNames, []string{"type", "minLength", "maxLength", "pattern"}) {
+		return errors.New("labels propertyNames schema has unreviewed keywords")
+	}
+	if !mapKeySetEquals(labelValues, []string{"type", "maxLength"}) {
+		return errors.New("labels value schema has unreviewed keywords")
 	}
 
 	statusReceipt, err := mapField(schemas, "StatusReceipt")

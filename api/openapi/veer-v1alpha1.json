@@ -238,6 +238,10 @@
         "summary": "Get a workspace",
         "description": "Returns one workspace with a strong ETag derived from its opaque resource version.",
         "operationId": "getWorkspace",
+        "x-veer-path-response-id-binding": {
+          "pathParameter": "workspaceId",
+          "bodyPointer": "/metadata/id"
+        },
         "responses": {
           "200": {
             "$ref": "#/components/responses/Workspace"
@@ -512,6 +516,10 @@
         "summary": "Get an operation",
         "description": "Returns the durable state of an accepted asynchronous operation without exposing provider response bodies.",
         "operationId": "getOperation",
+        "x-veer-path-response-id-binding": {
+          "pathParameter": "operationId",
+          "bodyPointer": "/id"
+        },
         "responses": {
           "200": {
             "$ref": "#/components/responses/Operation"
@@ -935,7 +943,7 @@
             "example": {
               "resourceId": "wsp_01J00000000000000000000000",
               "operationId": "op_01J000000000000000000000000",
-              "generation": 3,
+              "generation": 1,
               "resourceVersion": "rv_01J00000000000000000000001",
               "acceptedAt": "2026-09-01T21:00:00.000Z"
             }
