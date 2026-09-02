@@ -20,6 +20,7 @@ const (
 	maxJSONDepth           = 64
 	maxJSONNodes           = 50000
 	fieldPointerPattern    = `^(/([^~/]|~0|~1)*)+$`
+	retryAfterPattern      = `^([1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$`
 	safeProblemTextPattern = `^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$`
 	sunsetPattern          = `^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (0[1-9]|[12][0-9]|3[01]) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] GMT$`
 	timestampPattern       = `^((\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|02-(0[1-9]|1\d|2[0-8])))|((\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$`
@@ -1116,7 +1117,7 @@ func validateHeaders(headers map[string]any) error {
 			pattern: `^/api/v1alpha1/operations/[A-Za-z0-9][A-Za-z0-9_-]{15,127}$`,
 		},
 		"RetryAfter": {
-			pattern: `^[1-9][0-9]{0,4}$`,
+			pattern: retryAfterPattern,
 		},
 		"WWWAuthenticate": {
 			maximum: "64",

@@ -1142,6 +1142,38 @@ func TestFieldPointerValues(t *testing.T) {
 	}
 }
 
+func TestRetryAfterValues(t *testing.T) {
+	t.Parallel()
+	retryAfter := regexp.MustCompile(retryAfterPattern)
+	tests := []struct {
+		value string
+		valid bool
+	}{
+		{value: "1", valid: true},
+		{value: "9", valid: true},
+		{value: "10", valid: true},
+		{value: "9999", valid: true},
+		{value: "10000", valid: true},
+		{value: "79999", valid: true},
+		{value: "80000", valid: true},
+		{value: "85999", valid: true},
+		{value: "86000", valid: true},
+		{value: "86399", valid: true},
+		{value: "86400", valid: true},
+		{value: "", valid: false},
+		{value: "0", valid: false},
+		{value: "01", valid: false},
+		{value: "86401", valid: false},
+		{value: "99999", valid: false},
+		{value: "100000", valid: false},
+	}
+	for _, test := range tests {
+		if got := retryAfter.MatchString(test.value); got != test.valid {
+			t.Errorf("Retry-After %q validity = %t, want %t", test.value, got, test.valid)
+		}
+	}
+}
+
 func TestTimestampValues(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
