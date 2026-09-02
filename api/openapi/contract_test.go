@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -17,6 +18,34 @@ func TestBaselineContract(t *testing.T) {
 	}
 	if err := Validate(data); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestWorkspaceGoldenMatchesContractExample(t *testing.T) {
+	t.Parallel()
+
+	contractData, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, contractData)
+	example := nestedMap(t, root, "components", "schemas", "Workspace", "example")
+
+	fixtureData, err := os.ReadFile("../../internal/core/domain/resource/testdata/root.golden.json")
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(fixtureData)))
+	decoder.UseNumber()
+	var fixture map[string]any
+	if err := decoder.Decode(&fixture); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		t.Fatalf("fixture trailing data: %v", err)
+	}
+	if !reflect.DeepEqual(fixture, example) {
+		t.Fatalf("Workspace fixture does not match the schema example:\n fixture %#v\n example %#v", fixture, example)
 	}
 }
 
@@ -950,6 +979,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "workspace read shape or encoded-size contract drifted",
 		},
 		{
+			name: "workspace schema fixture gains undeclared spec field",
+			mutate: func(root map[string]any) {
+				spec := nestedMap(t, root, "components", "schemas", "Workspace", "example", "spec")
+				spec["region"] = "us-east-1"
+			},
+			message: "workspace canonical example drifted",
+		},
+		{
 			name: "workspace observed-generation upper bound removed",
 			mutate: func(root map[string]any) {
 				workspace := nestedMap(t, root, "components", "schemas", "Workspace")
@@ -988,6 +1025,54 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				metadata["required"] = []any{"displayName", "generation", "resourceVersion", "createdAt", "updatedAt"}
 			},
 			message: "ResourceMetadata shape drifted",
+		},
+		{
+			name: "resource metadata parent is removed",
+			mutate: func(root map[string]any) {
+				properties := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties")
+				delete(properties, "parent")
+			},
+			message: "ResourceMetadata shape drifted",
+		},
+		{
+			name: "resource metadata parent becomes required",
+			mutate: func(root map[string]any) {
+				metadata := nestedMap(t, root, "components", "schemas", "ResourceMetadata")
+				metadata["required"] = append(metadata["required"].([]any), "parent")
+			},
+			message: "ResourceMetadata shape drifted",
+		},
+		{
+			name: "resource metadata parent becomes writable",
+			mutate: func(root map[string]any) {
+				parent := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "parent")
+				delete(parent, "readOnly")
+			},
+			message: "ResourceMetadata.parent must be readOnly",
+		},
+		{
+			name: "resource metadata parent reference drifts",
+			mutate: func(root map[string]any) {
+				parent := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "parent")
+				parent["$ref"] = "#/components/schemas/RequestId"
+			},
+			message: "parent must reference #/components/schemas/OpaqueId",
+		},
+		{
+			name: "resource metadata parent gains narrowing assertion",
+			mutate: func(root map[string]any) {
+				parent := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "parent")
+				parent["const"] = "wsp_01J00000000000000000000000"
+			},
+			message: "parent reference has unreviewed keywords",
+		},
+		{
+			name: "writable metadata exposes parent",
+			mutate: func(root map[string]any) {
+				properties := nestedMap(t, root, "components", "schemas", "WritableMetadata", "properties")
+				properties["parent"] = map[string]any{"$ref": "#/components/schemas/OpaqueId"}
+			},
+			message: "WritableMetadata exposes server-owned field parent",
 		},
 		{
 			name: "workspace status generation fence becomes optional",

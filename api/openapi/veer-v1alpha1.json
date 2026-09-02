@@ -1388,6 +1388,13 @@
             "minLength": 1,
             "maxLength": 128
           },
+          "parent": {
+            "$ref": "#/components/schemas/OpaqueId",
+            "type": "string",
+            "readOnly": true,
+            "description": "Stable ID of the immediate parent. Absent only for a root resource.",
+            "example": "wsp_01J00000000000000000000000"
+          },
           "labels": {
             "$ref": "#/components/schemas/Labels"
           },
@@ -1552,6 +1559,29 @@
       "Workspace": {
         "type": "object",
         "description": "Representative versioned resource used to make the HTTP conventions executable.",
+        "example": {
+          "apiVersion": "v1alpha1",
+          "kind": "Workspace",
+          "metadata": {
+            "id": "wsp_01J00000000000000000000000",
+            "displayName": "payments",
+            "labels": {
+              "environment": "production",
+              "team": "platform"
+            },
+            "generation": 1,
+            "resourceVersion": "rv_01J00000000000000000000000",
+            "createdAt": "2026-09-02T17:30:00.000Z",
+            "updatedAt": "2026-09-02T17:30:00.000Z"
+          },
+          "spec": {
+            "suspendReconciliation": false
+          },
+          "status": {
+            "conditions": [],
+            "observedGeneration": 0
+          }
+        },
         "additionalProperties": false,
         "x-veer-maximum-json-bytes": 262144,
         "x-veer-observed-generation-upper-bound": {

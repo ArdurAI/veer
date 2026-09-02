@@ -44,6 +44,11 @@ Workspace
 Resources use stable identifiers and explicit API versions. Display names are
 mutable metadata and must never serve as authorization keys.
 
+The implemented identity, parent, generation, resource-version, lifecycle,
+transition, and deterministic serialization rules are fixed by
+[ADR 0004](0004-common-resource-envelope.md). Concrete hierarchy validation
+remains owned by the resource schemas and admission pipeline.
+
 ## Reconciliation contract
 
 Every reconciler follows the same state machine:
