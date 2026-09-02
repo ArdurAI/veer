@@ -7,23 +7,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	maxContractBytes       = 1 << 20
-	maxJSONDepth           = 64
-	maxJSONNodes           = 50000
-	fieldPointerPattern    = `^(/([^~/]|~0|~1)*)+$`
-	retryAfterPattern      = `^([1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$`
-	safeProblemTextPattern = `^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$`
-	sunsetPattern          = `^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (0[1-9]|[12][0-9]|3[01]) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] GMT$`
-	timestampPattern       = `^((\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|02-(0[1-9]|1\d|2[0-8])))|((\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$`
+	maxContractBytes             = 1 << 20
+	maxJSONDepth                 = 64
+	maxJSONNodes                 = 50000
+	minimumDeprecationNoticeDays = 90
+	deprecationPattern           = `^@[0-9]{10,12}$`
+	deprecationLinkTargetPattern = `[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{1,900}`
+	deprecationLinkPattern       = `^<` + deprecationLinkTargetPattern + `>; rel="deprecation"(, <` + deprecationLinkTargetPattern + `>; rel="sunset")?$`
+	fieldPointerPattern          = `^(/([^~/]|~0|~1)*)+$`
+	retryAfterPattern            = `^([1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$`
+	safeProblemTextPattern       = `^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$`
+	sunsetPattern                = `^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (0[1-9]|[12][0-9]|3[01]) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] GMT$`
+	timestampPattern             = `^((\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|02-(0[1-9]|1\d|2[0-8])))|((\d{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29))T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$`
 )
 
 type operationContract struct {
@@ -162,8 +168,10 @@ var pathItemMetadata = map[string]bool{
 }
 
 var (
-	lowerCamelCaseProperty = regexp.MustCompile(`^[a-z][a-z0-9]*([A-Z][a-z0-9]+)*$`)
-	timestampValuePattern  = regexp.MustCompile(timestampPattern)
+	deprecationLinkValuePattern = regexp.MustCompile(deprecationLinkPattern)
+	deprecationValuePattern     = regexp.MustCompile(deprecationPattern)
+	lowerCamelCaseProperty      = regexp.MustCompile(`^[a-z][a-z0-9]*([A-Z][a-z0-9]+)*$`)
+	timestampValuePattern       = regexp.MustCompile(timestampPattern)
 )
 
 // Load reads one bounded, regular, non-symlink contract file.
@@ -1124,7 +1132,7 @@ func validateHeaders(headers map[string]any) error {
 			pattern: `^Bearer realm="veer"(?:, error="(?:invalid_request|invalid_token)")?$`,
 		},
 		"Deprecation": {
-			pattern: `^@[0-9]{10,12}$`,
+			pattern: deprecationPattern,
 		},
 		"Sunset": {
 			pattern: sunsetPattern,
@@ -1132,7 +1140,7 @@ func validateHeaders(headers map[string]any) error {
 		"DeprecationLink": {
 			minimum: "1",
 			maximum: "1024",
-			pattern: `^<[^<>\r\n]{1,900}>; rel="deprecation"(?:, <[^<>\r\n]{1,900}>; rel="sunset")?$`,
+			pattern: deprecationLinkPattern,
 		},
 	} {
 		header, err := mapField(headers, name)
@@ -1149,6 +1157,19 @@ func validateHeaders(headers map[string]any) error {
 			return fmt.Errorf("%s header contract drifted", name)
 		}
 	}
+	deprecation, err := mapField(headers, "Deprecation")
+	if err != nil {
+		return err
+	}
+	deprecationSchema, err := mapField(deprecation, "schema")
+	if err != nil {
+		return err
+	}
+	deprecationExample, exampleOK := deprecationSchema["example"].(string)
+	if deprecationSchema["x-veer-calendar-validation"] != "sf-date" ||
+		!exampleOK || !validDeprecationDate(deprecationExample) {
+		return errors.New("deprecation header calendar contract drifted")
+	}
 	sunset, err := mapField(headers, "Sunset")
 	if err != nil {
 		return err
@@ -1160,6 +1181,22 @@ func validateHeaders(headers map[string]any) error {
 	sunsetExample, exampleOK := sunsetSchema["example"].(string)
 	if sunsetSchema["x-veer-calendar-validation"] != "http-date" || !exampleOK || !validSunset(sunsetExample) {
 		return errors.New("sunset header calendar contract drifted")
+	}
+	if !validDeprecationWindow(deprecationExample, sunsetExample, minimumDeprecationNoticeDays) {
+		return errors.New("deprecation/sunset example notice window drifted")
+	}
+	link, err := mapField(headers, "DeprecationLink")
+	if err != nil {
+		return err
+	}
+	linkSchema, err := mapField(link, "schema")
+	if err != nil {
+		return err
+	}
+	linkExample, exampleOK := linkSchema["example"].(string)
+	if linkSchema["x-veer-link-target-validation"] != "rfc3986-https-or-origin-relative" ||
+		!exampleOK || !validDeprecationLink(linkExample) {
+		return errors.New("DeprecationLink header URI-reference contract drifted")
 	}
 	return nil
 }
@@ -1245,6 +1282,12 @@ func validateResponses(responses map[string]any) error {
 			) {
 				return fmt.Errorf("success response %s deprecation-header contract drifted", name)
 			}
+			if !numberEquals(
+				response["x-veer-deprecation-sunset-minimum-notice-days"],
+				strconv.Itoa(minimumDeprecationNoticeDays),
+			) {
+				return fmt.Errorf("success response %s deprecation notice binding drifted", name)
+			}
 			if len(content) != 1 || content["application/json"] == nil {
 				return fmt.Errorf("success response %s must use application/json", name)
 			}
@@ -1294,6 +1337,9 @@ func validateResponses(responses map[string]any) error {
 		if errorNames[name] {
 			if _, exists := response["x-veer-required-header-sets"]; exists {
 				return fmt.Errorf("error response %s declares a conditional header set", name)
+			}
+			if _, exists := response["x-veer-deprecation-sunset-minimum-notice-days"]; exists {
+				return fmt.Errorf("error response %s declares a deprecation notice binding", name)
 			}
 			if len(content) != 1 || content["application/problem+json"] == nil {
 				return fmt.Errorf("error response %s must use application/problem+json", name)
@@ -1435,6 +1481,13 @@ func validateSchemas(schemas map[string]any) error {
 		if schema["type"] != "string" || !numberEquals(schema["minLength"], want.minimum) ||
 			!numberEquals(schema["maxLength"], want.maximum) || schema["pattern"] != want.pattern {
 			return fmt.Errorf("%s schema contract drifted", name)
+		}
+		keywords := []string{"type", "description", "minLength", "maxLength", "pattern"}
+		if name == "RequestId" || name == "OpaqueId" {
+			keywords = append(keywords, "example")
+		}
+		if !mapKeySetEquals(schema, keywords) {
+			return fmt.Errorf("%s schema has unreviewed keywords", name)
 		}
 	}
 
@@ -1755,6 +1808,11 @@ func validateSchemas(schemas map[string]any) error {
 	problemProperties, err := mapField(problem, "properties")
 	if err != nil {
 		return err
+	}
+	if !mapKeySetEquals(problemProperties, []string{
+		"type", "title", "status", "detail", "instance", "code", "requestId", "errors", "retryAfterSeconds",
+	}) {
+		return errors.New("problem property set drifted")
 	}
 	for name, wantMaximum := range map[string]string{
 		"type":     "81",
@@ -2266,6 +2324,63 @@ func validTimestamp(value string) bool {
 	return err == nil
 }
 
+func validDeprecationDate(value string) bool {
+	_, ok := parseDeprecationDate(value)
+	return ok
+}
+
+func parseDeprecationDate(value string) (int64, bool) {
+	if !deprecationValuePattern.MatchString(value) {
+		return 0, false
+	}
+	seconds, err := strconv.ParseInt(strings.TrimPrefix(value, "@"), 10, 64)
+	return seconds, err == nil
+}
+
+func validDeprecationWindow(deprecation, sunset string, minimumDays int) bool {
+	deprecationSeconds, ok := parseDeprecationDate(deprecation)
+	if !ok || minimumDays <= 0 || !validSunset(sunset) {
+		return false
+	}
+	sunsetTime, err := time.Parse("Mon, 02 Jan 2006 15:04:05 GMT", sunset)
+	if err != nil {
+		return false
+	}
+	minimumSeconds := int64(minimumDays) * 24 * 60 * 60
+	return sunsetTime.Unix()-deprecationSeconds >= minimumSeconds
+}
+
+func validDeprecationLink(value string) bool {
+	if len(value) == 0 || len(value) > 1024 || !deprecationLinkValuePattern.MatchString(value) {
+		return false
+	}
+	parts := strings.Split(value, ", ")
+	if len(parts) > 2 || !validLinkValue(parts[0], "deprecation") {
+		return false
+	}
+	return len(parts) == 1 || validLinkValue(parts[1], "sunset")
+}
+
+func validLinkValue(value, relation string) bool {
+	const prefix = "<"
+	suffix := `>; rel="` + relation + `"`
+	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, suffix) {
+		return false
+	}
+	target := strings.TrimSuffix(strings.TrimPrefix(value, prefix), suffix)
+	if len(target) == 0 || len(target) > 900 {
+		return false
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.User != nil {
+		return false
+	}
+	if parsed.IsAbs() {
+		return parsed.Scheme == "https" && parsed.Host != "" && parsed.Opaque == ""
+	}
+	return parsed.Host == "" && strings.HasPrefix(target, "/") && !strings.HasPrefix(target, "//")
+}
+
 func validSunset(value string) bool {
 	parsed, err := time.Parse("Mon, 02 Jan 2006 15:04:05 GMT", value)
 	if err != nil {
@@ -2280,6 +2395,18 @@ func boolKeySetEquals(got map[string]bool, want []string) bool {
 	}
 	for _, key := range want {
 		if !got[key] {
+			return false
+		}
+	}
+	return true
+}
+
+func mapKeySetEquals(got map[string]any, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for _, key := range want {
+		if _, exists := got[key]; !exists {
 			return false
 		}
 	}

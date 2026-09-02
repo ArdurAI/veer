@@ -438,6 +438,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "rules drifted",
 		},
 		{
+			name: "response deprecation notice binding shortened",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "components", "responses", "Workspace")
+				response["x-veer-deprecation-sunset-minimum-notice-days"] = json.Number("30")
+			},
+			message: "success response Workspace deprecation notice binding drifted",
+		},
+		{
+			name: "sunset example violates deprecation notice window",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "Deprecation", "schema")
+				schema["example"] = "@1780520401"
+			},
+			message: "deprecation/sunset example notice window drifted",
+		},
+		{
 			name: "missing deprecation response header",
 			mutate: func(root map[string]any) {
 				headers := nestedMap(t, root, "components", "responses", "Workspace", "headers")
@@ -534,6 +550,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "DeprecationLink header contract drifted",
 		},
 		{
+			name: "deprecation link with invalid URI-reference",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "headers", "DeprecationLink", "schema")
+				schema["example"] = `<not a URI>; rel="deprecation"`
+			},
+			message: "DeprecationLink header URI-reference contract drifted",
+		},
+		{
 			name: "missing validation example",
 			mutate: func(root map[string]any) {
 				examples := nestedMap(t, root, "components", "examples")
@@ -604,6 +628,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				schema["minLength"] = json.Number("1")
 			},
 			message: "OpaqueId schema contract drifted",
+		},
+		{
+			name: "opaque ID gains additive narrowing assertion",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "OpaqueId")
+				schema["const"] = "wsp_01J00000000000000000000000"
+			},
+			message: "OpaqueId schema has unreviewed keywords",
+		},
+		{
+			name: "opaque ID gains enum narrowing assertion",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "OpaqueId")
+				schema["enum"] = []any{"wsp_01J00000000000000000000000"}
+			},
+			message: "OpaqueId schema has unreviewed keywords",
+		},
+		{
+			name: "opaque ID gains negated assertion",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "OpaqueId")
+				schema["not"] = map[string]any{"pattern": "^reserved"}
+			},
+			message: "OpaqueId schema has unreviewed keywords",
 		},
 		{
 			name: "workspace response byte ceiling removed",
@@ -868,6 +916,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				problem["additionalProperties"] = true
 			},
 			message: "permits unconstrained additional properties",
+		},
+		{
+			name: "problem gains optional declared member",
+			mutate: func(root map[string]any) {
+				properties := nestedMap(t, root, "components", "schemas", "Problem", "properties")
+				properties["debugInfo"] = map[string]any{"type": "string"}
+			},
+			message: "problem property set drifted",
 		},
 		{
 			name: "non-camel-case schema property",
@@ -1170,6 +1226,76 @@ func TestRetryAfterValues(t *testing.T) {
 	for _, test := range tests {
 		if got := retryAfter.MatchString(test.value); got != test.valid {
 			t.Errorf("Retry-After %q validity = %t, want %t", test.value, got, test.valid)
+		}
+	}
+}
+
+func TestDeprecationWindowValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		deprecation string
+		sunset      string
+		valid       bool
+	}{
+		{
+			name: "exact ninety day window", deprecation: "@1780520400",
+			sunset: "Tue, 01 Sep 2026 21:00:00 GMT", valid: true,
+		},
+		{
+			name: "one second short", deprecation: "@1780520401",
+			sunset: "Tue, 01 Sep 2026 21:00:00 GMT", valid: false,
+		},
+		{
+			name: "sunset precedes deprecation", deprecation: "@1788296401",
+			sunset: "Tue, 01 Sep 2026 21:00:00 GMT", valid: false,
+		},
+		{
+			name: "invalid structured date", deprecation: "1780520400",
+			sunset: "Tue, 01 Sep 2026 21:00:00 GMT", valid: false,
+		},
+		{
+			name: "invalid HTTP date", deprecation: "@1780520400",
+			sunset: "Mon, 01 Sep 2026 21:00:00 GMT", valid: false,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := validDeprecationWindow(test.deprecation, test.sunset, 90); got != test.valid {
+				t.Fatalf("validDeprecationWindow(%q, %q, 90) = %t, want %t", test.deprecation, test.sunset, got, test.valid)
+			}
+		})
+	}
+}
+
+func TestDeprecationLinkValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		value string
+		valid bool
+	}{
+		{value: `</docs/migrations/v1alpha1>; rel="deprecation"`, valid: true},
+		{value: `</docs/migrations/v1alpha1%2Fguide>; rel="deprecation"`, valid: true},
+		{value: `<https://docs.example.invalid/migrations?v=v1#steps>; rel="deprecation"`, valid: true},
+		{
+			value: `</docs/migrations/v1alpha1>; rel="deprecation", </docs/sunset/v1alpha1>; rel="sunset"`,
+			valid: true,
+		},
+		{value: `<not a URI>; rel="deprecation"`, valid: false},
+		{value: `</docs/"quoted">; rel="deprecation"`, valid: false},
+		{value: `</docs/☃>; rel="deprecation"`, valid: false},
+		{value: `</docs/%zz>; rel="deprecation"`, valid: false},
+		{value: `<http://docs.example.invalid/migrations>; rel="deprecation"`, valid: false},
+		{value: `<//docs.example.invalid/migrations>; rel="deprecation"`, valid: false},
+		{value: `<https://user@example.invalid/migrations>; rel="deprecation"`, valid: false},
+		{value: `</docs/migrations>; rel="sunset"`, valid: false},
+		{value: `<` + strings.Repeat("a", 901) + `>; rel="deprecation"`, valid: false},
+	}
+	for _, test := range tests {
+		if got := validDeprecationLink(test.value); got != test.valid {
+			t.Errorf("deprecation Link %q validity = %t, want %t", test.value, got, test.valid)
 		}
 	}
 }

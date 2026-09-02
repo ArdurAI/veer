@@ -395,7 +395,18 @@ client action, and last supported date. The headers are response metadata,
 not an authorization or cache invalidation mechanism. The conditional trio is
 encoded in each successful response component through
 `x-veer-required-header-sets` so generated adapters cannot emit only part of
-the lifecycle signal.
+the lifecycle signal. The same response also declares
+`x-veer-deprecation-sunset-minimum-notice-days: 90`. Generated adapters parse
+the `Deprecation` SF-date and `Sunset` IMF-fixdate, reject either invalid value,
+and fail closed unless the latter is at least 90 24-hour periods after the
+former. The checked-in examples exercise the same comparison.
+
+Each migration Link target is an RFC 3986 URI-reference serialized according
+to RFC 8288. Veer narrows accepted targets to an absolute `https` URI without
+userinfo or an origin-relative path beginning with one slash; plain HTTP,
+scheme-relative authorities, malformed percent escapes, raw whitespace,
+quotes, controls, and non-ASCII bytes are rejected. Validation only parses the
+bounded header value and never resolves, fetches, or probes a target.
 
 Security remediation may disable an unsafe operation sooner only when the
 maintainers record the threat, blast radius, compensating behavior, customer
@@ -425,7 +436,10 @@ The semantic verifier rejects:
   variants, problem correlation, mandatory header metadata, header/body
   bindings, shared response-header or example references, complete resource,
   status, receipt, and operation shapes, generation, resource-version,
-  byte-bounded pagination, or deprecation drift;
+  byte-bounded pagination, deprecation date-window bindings, or migration-Link
+  URI-reference drift;
+- unreviewed primitive-schema assertion keywords or additions to the closed
+  Problem property set;
 - an object schema that silently accepts unknown properties; and
 - missing or inconsistent validation, authentication, authorization,
   conflict, throttling, or internal-failure examples.

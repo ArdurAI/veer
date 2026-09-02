@@ -659,7 +659,9 @@
         "description": "RFC 9745 structured-field date identifying when this operation became deprecated.",
         "schema": {
           "type": "string",
-          "pattern": "^@[0-9]{10,12}$"
+          "example": "@1780520400",
+          "pattern": "^@[0-9]{10,12}$",
+          "x-veer-calendar-validation": "sf-date"
         }
       },
       "Sunset": {
@@ -672,18 +674,21 @@
         }
       },
       "DeprecationLink": {
-        "description": "Link to migration documentation with rel=deprecation; a sunset link is also included when applicable.",
+        "description": "HTTPS or origin-relative RFC 3986 links to migration and optional sunset documentation.",
         "schema": {
           "type": "string",
           "minLength": 1,
           "maxLength": 1024,
-          "pattern": "^<[^<>\\r\\n]{1,900}>; rel=\"deprecation\"(?:, <[^<>\\r\\n]{1,900}>; rel=\"sunset\")?$"
+          "example": "</docs/migrations/v1alpha1>; rel=\"deprecation\"",
+          "pattern": "^<[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]{1,900}>; rel=\"deprecation\"(, <[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]{1,900}>; rel=\"sunset\")?$",
+          "x-veer-link-target-validation": "rfc3986-https-or-origin-relative"
         }
       }
     },
     "responses": {
       "WorkspaceList": {
         "description": "A bounded deterministic workspace page.",
+        "x-veer-deprecation-sunset-minimum-notice-days": 90,
         "x-veer-required-headers": [
           "Veer-Request-Id"
         ],
@@ -723,6 +728,7 @@
       "Workspace": {
         "description": "Current workspace representation.",
         "x-veer-etag-resource-version-pointer": "/metadata/resourceVersion",
+        "x-veer-deprecation-sunset-minimum-notice-days": 90,
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "ETag"
@@ -784,6 +790,7 @@
       "StatusUpdated": {
         "description": "Bounded receipt for a persisted controller status update.",
         "x-veer-etag-resource-version-pointer": "/resourceVersion",
+        "x-veer-deprecation-sunset-minimum-notice-days": 90,
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "ETag"
@@ -829,6 +836,7 @@
       "Operation": {
         "description": "Current asynchronous operation representation.",
         "x-veer-etag-resource-version-pointer": "/resourceVersion",
+        "x-veer-deprecation-sunset-minimum-notice-days": 90,
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "ETag"
@@ -879,6 +887,7 @@
       "MutationAccepted": {
         "description": "Desired state was durably accepted; asynchronous convergence is not implied.",
         "x-veer-location-operation-id-pointer": "/operationId",
+        "x-veer-deprecation-sunset-minimum-notice-days": 90,
         "x-veer-required-headers": [
           "Veer-Request-Id",
           "Location"
