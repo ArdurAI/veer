@@ -103,10 +103,10 @@ round trips, and storage fixtures:
   while typed `omitempty` fields can normalize empty or zero values to absence.
   Custom JSON unmarshalers cannot consume structured object or array values at
   typed boundaries, so they cannot override exact-name and unknown-field
-  enforcement; scalar custom types remain supported. The `case:ignore` and
-  `embed` JSON tag options are also rejected there. Raw-message capture is
-  isolated to the resource envelope; explicit unstructured interface values
-  remain the deliberate payload seam;
+  enforcement; scalar custom types remain supported. The `case:ignore`,
+  `embed`, and `inline` JSON tag options are also rejected there. Raw-message
+  capture is isolated to the resource envelope; explicit unstructured
+  interface values remain the deliberate payload seam;
   and
 - both decode input and encoded output are bounded to 262,144 bytes, 64 levels,
   and 50,000 JSON values. Duplicate keys and unknown typed fields fail.
@@ -118,6 +118,10 @@ cross-language canonicalization contract.
 
 ## Consequences
 
+- Resource storage contains zero-length type markers for its `Spec` and
+  `Status` parameters. This prevents explicit conversion between incompatible
+  generic instantiations from relabeling retained canonical bytes without
+  typed validation.
 - Domain tests can prove identity and revision behavior without storage,
   queues, cloud credentials, randomness, or wall-clock sleeps.
 - Canonical comparison avoids generation churn for equivalent admitted specs

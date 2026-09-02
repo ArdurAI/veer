@@ -125,8 +125,11 @@ type CreateInput[Spec any, Status GenerationObservations] struct {
 
 // Resource is Veer's immutable common envelope. Spec and status are retained
 // as canonical JSON so callers cannot mutate stored maps or slices through an
-// alias returned by an accessor.
+// alias returned by an accessor. The zero-length fields bind those bytes to
+// their compile-time types without retaining additional runtime values.
 type Resource[Spec any, Status GenerationObservations] struct {
+	_          [0]Spec
+	_          [0]Status
 	apiVersion string
 	kind       string
 	metadata   Metadata

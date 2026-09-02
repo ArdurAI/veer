@@ -112,6 +112,10 @@ type embeddedFallbackSpec struct {
 	Extra map[string]any `json:",embed"`
 }
 
+type inlineFallbackSpec struct {
+	Extra map[string]any `json:",inline"`
+}
+
 type rawMessageSpec struct {
 	Payload json.RawMessage `json:"payload"`
 }
@@ -965,6 +969,14 @@ func TestTypedDecodingRejectsOpenSchemaEscapeHatches(t *testing.T) {
 			message: `"embed"`,
 		},
 		{
+			name: "inline fallback",
+			decode: func() error {
+				_, _, err := decodeObject[inlineFallbackSpec]([]byte(`{"arbitrary":true}`), "spec")
+				return err
+			},
+			message: `"inline"`,
+		},
+		{
 			name: "nested raw message",
 			decode: func() error {
 				_, _, err := decodeObject[rawMessageSpec]([]byte(`{"payload":{"arbitrary":true}}`), "spec")
@@ -1020,6 +1032,21 @@ func TestTypedDecodingRejectsOpenSchemaEscapeHatches(t *testing.T) {
 	}
 	if len(wire.Spec) == 0 || len(wire.Status) == 0 {
 		t.Fatalf("decodeWireResource() did not retain spec/status: %#v", wire)
+	}
+}
+
+func TestResourceStorageBindsGenericArguments(t *testing.T) {
+	t.Parallel()
+
+	unstructuredSpec := reflect.TypeFor[Resource[map[string]any, testStatus]]()
+	typedSpec := reflect.TypeFor[Resource[testSpec, testStatus]]()
+	if unstructuredSpec.ConvertibleTo(typedSpec) {
+		t.Fatal("Resource values with different spec types must not be convertible")
+	}
+
+	alternateStatus := reflect.TypeFor[Resource[testSpec, marshalingStatus]]()
+	if typedSpec.ConvertibleTo(alternateStatus) {
+		t.Fatal("Resource values with different status types must not be convertible")
 	}
 }
 

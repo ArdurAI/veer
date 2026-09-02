@@ -59,7 +59,7 @@ func validateTypedJSONType(target reflect.Type, visited map[reflect.Type]bool) e
 			}
 			if tagged {
 				for _, option := range splitJSONTagOptions(tag) {
-					if option == "case:ignore" || option == "embed" {
+					if option == "case:ignore" || option == "embed" || option == "inline" {
 						return fmt.Errorf(
 							"go type %s field %s cannot use JSON tag option %q in a closed typed boundary",
 							target,
