@@ -158,6 +158,8 @@ schema, property count, key grammar, and size limit; `metadata.labels` is the
 only such object in the baseline. The semantic verifier recognizes
 `x-veer-free-form-map` only at the canonical `Labels` schema path; copying the
 marker and schema-valued `additionalProperties` to any other object is rejected.
+`patternProperties` is not an alternate extension point and is rejected
+throughout the baseline contract.
 
 Clients must ignore an unknown response field while preserving every field
 they forward without interpretation. A client that reads and writes a resource
@@ -357,6 +359,11 @@ it never grants identity, authorization, idempotency, or resource ownership.
 Workspace, resource, actor, provider object, and request IDs are forbidden as
 metric labels under the existing cardinality contract.
 
+The shared response header carries `x-veer-request-id-binding`, which binds the
+request header name to the two exhaustive behaviors: `echo` a supplied valid
+value and `generate` a value only when the request omits it. Generated adapters
+must implement this extension before writing any response headers or body.
+
 Every Problem requires both `requestId` and `instance`. The Problem-level
 `x-veer-instance-request-id-template` fixes `instance` to
 `urn:veer:request:{requestId}`, and every error response's
@@ -441,8 +448,12 @@ The semantic verifier rejects:
   byte-bounded pagination, deprecation date-window bindings, or migration-Link
   URI-reference drift;
 - unreviewed primitive-schema assertion keywords or additions to the closed
-  Problem property set;
-- an object schema that silently accepts unknown properties; and
+  Problem property set, pagination token/size schemas, generation counters, or
+  resource-version fields;
+- a request/response request-ID binding that no longer echoes supplied IDs or
+  generates IDs only when absent;
+- an object schema that silently accepts unknown or pattern-matched properties;
+  and
 - missing or inconsistent validation, authentication, authorization,
   conflict, throttling, or internal-failure examples.
 

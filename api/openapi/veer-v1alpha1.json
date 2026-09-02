@@ -625,6 +625,11 @@
     "headers": {
       "VeerRequestId": {
         "description": "Opaque bounded request correlation value.",
+        "x-veer-request-id-binding": {
+          "requestHeader": "Veer-Request-Id",
+          "whenPresent": "echo",
+          "whenAbsent": "generate"
+        },
         "schema": {
           "$ref": "#/components/schemas/RequestId"
         }

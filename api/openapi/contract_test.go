@@ -406,6 +406,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "rules drifted",
 		},
 		{
+			name: "page size format removed",
+			mutate: func(root map[string]any) {
+				pageSize := nestedMap(t, root, "components", "parameters", "PageSize", "schema")
+				delete(pageSize, "format")
+			},
+			message: "PageSize parameter contract drifted",
+		},
+		{
+			name: "page size gains narrowing const",
+			mutate: func(root map[string]any) {
+				pageSize := nestedMap(t, root, "components", "parameters", "PageSize", "schema")
+				pageSize["const"] = json.Number("50")
+			},
+			message: "PageSize schema has unreviewed keywords",
+		},
+		{
 			name: "pagination snapshot omitted",
 			mutate: func(root map[string]any) {
 				pagination := nestedMap(t, root, "x-veer-evolution", "pagination")
@@ -428,6 +444,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				schema["maxLength"] = json.Number("4096")
 			},
 			message: "PageToken parameter contract drifted",
+		},
+		{
+			name: "page token gains narrowing const",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "parameters", "PageToken", "schema")
+				schema["const"] = "opaque-token"
+			},
+			message: "PageToken schema has unreviewed keywords",
+		},
+		{
+			name: "request ID reference gains narrowing sibling",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "parameters", "VeerRequestId", "schema")
+				schema["const"] = "fixed-request-id"
+			},
+			message: "schema has unreviewed keywords",
 		},
 		{
 			name: "missing page token",
@@ -500,6 +532,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				schema["$ref"] = "#/components/schemas/StrongETag"
 			},
 			message: "VeerRequestId header contract drifted",
+		},
+		{
+			name: "response request ID request binding removed",
+			mutate: func(root map[string]any) {
+				header := nestedMap(t, root, "components", "headers", "VeerRequestId")
+				delete(header, "x-veer-request-id-binding")
+			},
+			message: "VeerRequestId header request binding drifted",
 		},
 		{
 			name: "retry after header pattern",
@@ -750,6 +790,46 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "Operation.generation int64 contract drifted",
 		},
 		{
+			name: "resource generation gains narrowing const",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "generation")
+				generation["const"] = json.Number("1")
+			},
+			message: "ResourceMetadata.generation has unreviewed keywords",
+		},
+		{
+			name: "mutation receipt generation gains narrowing enum",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "components", "schemas", "MutationReceipt", "properties", "generation")
+				generation["enum"] = []any{json.Number("1")}
+			},
+			message: "MutationReceipt.generation has unreviewed keywords",
+		},
+		{
+			name: "status observed generation gains narrowing not",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "components", "schemas", "WorkspaceStatus", "properties", "observedGeneration")
+				generation["not"] = map[string]any{"const": json.Number("0")}
+			},
+			message: "WorkspaceStatus.observedGeneration has unreviewed keywords",
+		},
+		{
+			name: "status receipt observed generation gains narrowing const",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "components", "schemas", "StatusReceipt", "properties", "observedGeneration")
+				generation["const"] = json.Number("0")
+			},
+			message: "StatusReceipt observedGeneration has unreviewed keywords",
+		},
+		{
+			name: "resource version gains narrowing enum",
+			mutate: func(root map[string]any) {
+				version := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "resourceVersion")
+				version["enum"] = []any{"rv_fixed"}
+			},
+			message: "ResourceMetadata resourceVersion has unreviewed keywords",
+		},
+		{
 			name: "resource ID loses read only marker",
 			mutate: func(root map[string]any) {
 				id := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "id")
@@ -780,6 +860,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(token, "pattern")
 			},
 			message: "WorkspaceList nextPageToken contract drifted",
+		},
+		{
+			name: "next page token gains narrowing enum",
+			mutate: func(root map[string]any) {
+				token := nestedMap(t, root, "components", "schemas", "WorkspaceList", "properties", "nextPageToken")
+				token["enum"] = []any{"opaque-token"}
+			},
+			message: "WorkspaceList nextPageToken has unreviewed keywords",
 		},
 		{
 			name: "status receipt byte ceiling removed",
@@ -989,6 +1077,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				create["additionalProperties"] = map[string]any{"type": "string", "maxLength": json.Number("64")}
 			},
 			message: "is not the reviewed free-form Labels map",
+		},
+		{
+			name: "closed request schema gains pattern properties",
+			mutate: func(root map[string]any) {
+				create := nestedMap(t, root, "components", "schemas", "WorkspaceCreate")
+				create["patternProperties"] = map[string]any{".*": map[string]any{}}
+			},
+			message: "uses unreviewed patternProperties",
 		},
 		{
 			name: "labels property count bound removed",
@@ -1310,6 +1406,7 @@ func TestDeprecationLinkValues(t *testing.T) {
 	}{
 		{value: `</docs/migrations/v1alpha1>; rel="deprecation"`, valid: true},
 		{value: `</docs/migrations/v1alpha1%2Fguide>; rel="deprecation"`, valid: true},
+		{value: `</docs/migrations?next=%2Fdocs%2Fv2>; rel="deprecation"`, valid: true},
 		{value: `<https://docs.example.invalid/migrations?v=v1#steps>; rel="deprecation"`, valid: true},
 		{
 			value: `</docs/migrations/v1alpha1>; rel="deprecation", </docs/sunset/v1alpha1>; rel="sunset"`,
@@ -1319,6 +1416,7 @@ func TestDeprecationLinkValues(t *testing.T) {
 		{value: `</docs/"quoted">; rel="deprecation"`, valid: false},
 		{value: `</docs/☃>; rel="deprecation"`, valid: false},
 		{value: `</docs/%zz>; rel="deprecation"`, valid: false},
+		{value: `</docs/migrations?next=%zz>; rel="deprecation"`, valid: false},
 		{value: `<http://docs.example.invalid/migrations>; rel="deprecation"`, valid: false},
 		{value: `<//docs.example.invalid/migrations>; rel="deprecation"`, valid: false},
 		{value: `<https://user@example.invalid/migrations>; rel="deprecation"`, valid: false},

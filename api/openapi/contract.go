@@ -348,6 +348,9 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 
 	switch typed := value.(type) {
 	case map[string]any:
+		if _, exists := typed["patternProperties"]; exists {
+			return fmt.Errorf("%s uses unreviewed patternProperties", path)
+		}
 		if _, markedFreeForm := typed["x-veer-free-form-map"]; markedFreeForm &&
 			!isReviewedFreeFormMap(path, typed) {
 			return fmt.Errorf("%s is not the reviewed free-form Labels map", path)
@@ -1054,9 +1057,13 @@ func validateParameters(parameters map[string]any) error {
 		return err
 	}
 	if pageSize["name"] != "pageSize" || pageSize["in"] != "query" || pageSize["required"] != false ||
-		pageSizeSchema["type"] != "integer" || !numberEquals(pageSizeSchema["minimum"], "1") ||
+		pageSizeSchema["type"] != "integer" || pageSizeSchema["format"] != "int32" ||
+		!numberEquals(pageSizeSchema["minimum"], "1") ||
 		!numberEquals(pageSizeSchema["default"], "50") || !numberEquals(pageSizeSchema["maximum"], "100") {
 		return errors.New("PageSize parameter contract drifted")
+	}
+	if !mapKeySetEquals(pageSizeSchema, []string{"type", "format", "minimum", "maximum", "default"}) {
+		return errors.New("PageSize schema has unreviewed keywords")
 	}
 	pageToken, err := mapField(parameters, "PageToken")
 	if err != nil {
@@ -1070,6 +1077,9 @@ func validateParameters(parameters map[string]any) error {
 		pageTokenSchema["type"] != "string" || !numberEquals(pageTokenSchema["minLength"], "16") ||
 		!numberEquals(pageTokenSchema["maxLength"], "1024") || pageTokenSchema["pattern"] != "^[A-Za-z0-9_-]+$" {
 		return errors.New("PageToken parameter contract drifted")
+	}
+	if !mapKeySetEquals(pageTokenSchema, []string{"type", "minLength", "maxLength", "pattern"}) {
+		return errors.New("PageToken schema has unreviewed keywords")
 	}
 	for name, wantSchema := range map[string]string{
 		"OperationId": "OpaqueId",
@@ -1097,6 +1107,9 @@ func requireSchemaReference(parent map[string]any, want string) error {
 	if schema["$ref"] != want {
 		return fmt.Errorf("schema must reference %s", want)
 	}
+	if !mapKeySetEquals(schema, []string{"$ref"}) {
+		return errors.New("schema has unreviewed keywords")
+	}
 	return nil
 }
 
@@ -1120,6 +1133,16 @@ func validateHeaders(headers map[string]any) error {
 		if err := requireSchemaReference(header, want); err != nil {
 			return fmt.Errorf("%s header contract drifted: %w", name, err)
 		}
+	}
+	requestIDHeader, err := mapField(headers, "VeerRequestId")
+	if err != nil {
+		return err
+	}
+	requestIDBinding, err := mapField(requestIDHeader, "x-veer-request-id-binding")
+	if err != nil || !mapKeySetEquals(requestIDBinding, []string{"requestHeader", "whenPresent", "whenAbsent"}) ||
+		requestIDBinding["requestHeader"] != "Veer-Request-Id" || requestIDBinding["whenPresent"] != "echo" ||
+		requestIDBinding["whenAbsent"] != "generate" {
+		return errors.New("VeerRequestId header request binding drifted")
 	}
 
 	for name, want := range map[string]struct {
@@ -1557,21 +1580,57 @@ func validateSchemas(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if err := validateResourceVersionProperty(metadataResourceVersion, "ResourceMetadata"); err != nil {
+	if err := validateResourceVersionProperty(
+		metadataResourceVersion,
+		"ResourceMetadata",
+		[]string{"type", "example", "minLength", "maxLength", "pattern", "readOnly", "description"},
+	); err != nil {
 		return err
 	}
 	for _, contract := range []struct {
 		schema   string
 		property string
 		minimum  string
+		keywords []string
 	}{
-		{schema: "ResourceMetadata", property: "generation", minimum: "1"},
-		{schema: "MutationReceipt", property: "generation", minimum: "1"},
-		{schema: "Operation", property: "generation", minimum: "1"},
-		{schema: "Condition", property: "observedGeneration", minimum: "0"},
-		{schema: "WorkspaceStatus", property: "observedGeneration", minimum: "0"},
+		{
+			schema:   "ResourceMetadata",
+			property: "generation",
+			minimum:  "1",
+			keywords: []string{"type", "format", "minimum", "maximum", "readOnly", "description"},
+		},
+		{
+			schema:   "MutationReceipt",
+			property: "generation",
+			minimum:  "1",
+			keywords: []string{"type", "format", "example", "minimum", "maximum"},
+		},
+		{
+			schema:   "Operation",
+			property: "generation",
+			minimum:  "1",
+			keywords: []string{"type", "format", "example", "minimum", "maximum"},
+		},
+		{
+			schema:   "Condition",
+			property: "observedGeneration",
+			minimum:  "0",
+			keywords: []string{"type", "format", "example", "minimum", "maximum"},
+		},
+		{
+			schema:   "WorkspaceStatus",
+			property: "observedGeneration",
+			minimum:  "0",
+			keywords: []string{"type", "format", "minimum", "maximum"},
+		},
 	} {
-		if err := validateInt64Property(schemas, contract.schema, contract.property, contract.minimum); err != nil {
+		if err := validateInt64Property(
+			schemas,
+			contract.schema,
+			contract.property,
+			contract.minimum,
+			contract.keywords,
+		); err != nil {
 			return err
 		}
 	}
@@ -1726,11 +1785,18 @@ func validateSchemas(schemas map[string]any) error {
 		!numberEquals(observedGeneration["maximum"], "9223372036854775807") {
 		return errors.New("StatusReceipt observedGeneration contract drifted")
 	}
+	if !mapKeySetEquals(observedGeneration, []string{"type", "format", "example", "minimum", "maximum"}) {
+		return errors.New("StatusReceipt observedGeneration has unreviewed keywords")
+	}
 	statusResourceVersion, err := mapField(statusReceiptProperties, "resourceVersion")
 	if err != nil {
 		return err
 	}
-	if err := validateResourceVersionProperty(statusResourceVersion, "StatusReceipt"); err != nil {
+	if err := validateResourceVersionProperty(
+		statusResourceVersion,
+		"StatusReceipt",
+		[]string{"type", "example", "minLength", "maxLength", "pattern"},
+	); err != nil {
 		return err
 	}
 	mutationReceipt, err := mapField(schemas, "MutationReceipt")
@@ -1762,7 +1828,11 @@ func validateSchemas(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if err := validateResourceVersionProperty(mutationResourceVersion, "MutationReceipt"); err != nil {
+	if err := validateResourceVersionProperty(
+		mutationResourceVersion,
+		"MutationReceipt",
+		[]string{"type", "example", "minLength", "maxLength", "pattern"},
+	); err != nil {
 		return err
 	}
 
@@ -1798,6 +1868,9 @@ func validateSchemas(schemas map[string]any) error {
 	if nextPageToken["type"] != "string" || !numberEquals(nextPageToken["minLength"], "16") ||
 		!numberEquals(nextPageToken["maxLength"], "1024") || nextPageToken["pattern"] != "^[A-Za-z0-9_-]+$" {
 		return errors.New("WorkspaceList nextPageToken contract drifted")
+	}
+	if !mapKeySetEquals(nextPageToken, []string{"type", "example", "minLength", "maxLength", "pattern"}) {
+		return errors.New("WorkspaceList nextPageToken has unreviewed keywords")
 	}
 
 	problem, err := mapField(schemas, "Problem")
@@ -1919,7 +1992,11 @@ func validateSchemas(schemas map[string]any) error {
 	return nil
 }
 
-func validateInt64Property(schemas map[string]any, schemaName, propertyName, minimum string) error {
+func validateInt64Property(
+	schemas map[string]any,
+	schemaName, propertyName, minimum string,
+	keywords []string,
+) error {
 	schema, err := mapField(schemas, schemaName)
 	if err != nil {
 		return err
@@ -1937,13 +2014,19 @@ func validateInt64Property(schemas map[string]any, schemaName, propertyName, min
 		!numberEquals(property["maximum"], "9223372036854775807") {
 		return fmt.Errorf("%s.%s int64 contract drifted", schemaName, propertyName)
 	}
+	if !mapKeySetEquals(property, keywords) {
+		return fmt.Errorf("%s.%s has unreviewed keywords", schemaName, propertyName)
+	}
 	return nil
 }
 
-func validateResourceVersionProperty(property map[string]any, context string) error {
+func validateResourceVersionProperty(property map[string]any, context string, keywords []string) error {
 	if property["type"] != "string" || !numberEquals(property["minLength"], "1") ||
 		!numberEquals(property["maxLength"], "128") || property["pattern"] != "^[A-Za-z0-9_-]+$" {
 		return fmt.Errorf("%s resourceVersion contract drifted", context)
+	}
+	if !mapKeySetEquals(property, keywords) {
+		return fmt.Errorf("%s resourceVersion has unreviewed keywords", context)
 	}
 	return nil
 }
@@ -2046,7 +2129,11 @@ func validateOperationSchema(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if err := validateResourceVersionProperty(resourceVersion, "Operation"); err != nil {
+	if err := validateResourceVersionProperty(
+		resourceVersion,
+		"Operation",
+		[]string{"type", "example", "minLength", "maxLength", "pattern"},
+	); err != nil {
 		return err
 	}
 	phase, err := mapField(properties, "phase")
@@ -2380,6 +2467,9 @@ func validLinkValue(value, relation string) bool {
 	}
 	target := strings.TrimSuffix(strings.TrimPrefix(value, prefix), suffix)
 	if len(target) == 0 || len(target) > 900 {
+		return false
+	}
+	if _, err := url.PathUnescape(target); err != nil {
 		return false
 	}
 	parsed, err := url.Parse(target)
