@@ -1747,7 +1747,7 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 		{name: "ResourceMetadata", extras: []string{"example"}},
 		{name: "StatusReceipt", extras: []string{"x-veer-maximum-json-bytes"}},
 		{name: "Workspace", extras: []string{
-			"x-veer-maximum-json-bytes", "x-veer-observed-generation-upper-bound",
+			"example", "x-veer-maximum-json-bytes", "x-veer-observed-generation-upper-bound",
 		}},
 		{name: "WorkspaceCreate"},
 		{name: "WorkspaceList", extras: []string{"x-veer-maximum-json-bytes", "x-veer-page-byte-policy"}},
@@ -1897,10 +1897,10 @@ func validateSchemas(schemas map[string]any) error {
 	}
 	if !stringSetEquals(metadata["required"], []string{
 		"id", "displayName", "generation", "resourceVersion", "createdAt", "updatedAt",
-	}) || len(metadataProperties) != 7 {
+	}) || len(metadataProperties) != 8 {
 		return errors.New("ResourceMetadata shape drifted")
 	}
-	for _, name := range []string{"id", "generation", "resourceVersion", "createdAt", "updatedAt"} {
+	for _, name := range []string{"id", "parent", "generation", "resourceVersion", "createdAt", "updatedAt"} {
 		property, err := mapField(metadataProperties, name)
 		if err != nil {
 			return err
@@ -1918,6 +1918,16 @@ func validateSchemas(schemas map[string]any) error {
 			property: "id",
 			target:   "OpaqueId",
 			siblings: map[string]any{"type": "string", "readOnly": true},
+		},
+		{
+			property: "parent",
+			target:   "OpaqueId",
+			siblings: map[string]any{
+				"type":        "string",
+				"readOnly":    true,
+				"description": "Stable ID of the immediate parent. Absent only for a root resource.",
+				"example":     "wsp_01J00000000000000000000000",
+			},
 		},
 		{property: "labels", target: "Labels"},
 		{
@@ -2033,7 +2043,7 @@ func validateSchemas(schemas map[string]any) error {
 	if err != nil {
 		return err
 	}
-	for _, forbidden := range []string{"id", "generation", "resourceVersion", "createdAt", "updatedAt"} {
+	for _, forbidden := range []string{"id", "parent", "generation", "resourceVersion", "createdAt", "updatedAt"} {
 		if _, exists := writableProperties[forbidden]; exists {
 			return fmt.Errorf("WritableMetadata exposes server-owned field %s", forbidden)
 		}
@@ -2381,6 +2391,7 @@ func validateNestedSchemaKeywords(schemas map[string]any) error {
 	}{
 		{schema: "ResourceMetadata", property: "id", keywords: []string{"$ref", "readOnly", "type"}},
 		{schema: "ResourceMetadata", property: "displayName", keywords: []string{"maxLength", "minLength", "type"}},
+		{schema: "ResourceMetadata", property: "parent", keywords: []string{"$ref", "description", "example", "readOnly", "type"}},
 		{schema: "ResourceMetadata", property: "labels", keywords: []string{"$ref"}},
 		{schema: "ResourceMetadata", property: "generation", keywords: []string{"description", "format", "maximum", "minimum", "readOnly", "type"}},
 		{schema: "ResourceMetadata", property: "resourceVersion", keywords: []string{"description", "example", "maxLength", "minLength", "pattern", "readOnly", "type"}},
@@ -2699,6 +2710,9 @@ func validateWorkspaceReadSchema(schemas map[string]any) error {
 	if !validObservedGenerationUpperBound(schema["x-veer-observed-generation-upper-bound"]) {
 		return errors.New("workspace observed-generation upper bound drifted")
 	}
+	if !reflect.DeepEqual(schema["example"], workspaceExampleContract()) {
+		return errors.New("workspace canonical example drifted")
+	}
 	if err := validateWorkspaceIdentity(properties, "Workspace"); err != nil {
 		return err
 	}
@@ -2712,6 +2726,32 @@ func validateWorkspaceReadSchema(schemas map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func workspaceExampleContract() map[string]any {
+	return map[string]any{
+		"apiVersion": "v1alpha1",
+		"kind":       "Workspace",
+		"metadata": map[string]any{
+			"id":          "wsp_01J00000000000000000000000",
+			"displayName": "payments",
+			"labels": map[string]any{
+				"environment": "production",
+				"team":        "platform",
+			},
+			"generation":      json.Number("1"),
+			"resourceVersion": "rv_01J00000000000000000000000",
+			"createdAt":       "2026-09-02T17:30:00.000Z",
+			"updatedAt":       "2026-09-02T17:30:00.000Z",
+		},
+		"spec": map[string]any{
+			"suspendReconciliation": false,
+		},
+		"status": map[string]any{
+			"conditions":         []any{},
+			"observedGeneration": json.Number("0"),
+		},
+	}
 }
 
 func validateWorkspaceIdentity(properties map[string]any, context string) error {

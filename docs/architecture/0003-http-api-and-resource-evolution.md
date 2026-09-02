@@ -191,8 +191,8 @@ exact contract revision so conformance tests detect an undocumented response
 addition.
 
 Server-owned fields are absent from write schemas or marked read-only in read
-schemas. A client cannot set `id`, `generation`, `resourceVersion`, creation or
-update timestamps, or status through a desired-state write.
+schemas. A client cannot set `id`, `parent`, `generation`, `resourceVersion`,
+creation or update timestamps, or status through a desired-state write.
 
 Every schema value declared as `int64` also carries the explicit signed
 64-bit maximum `9223372036854775807`; the format annotation alone does not
