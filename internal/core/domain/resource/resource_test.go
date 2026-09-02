@@ -805,6 +805,21 @@ func TestUnmarshalCanonicalRejectsAmbiguousInput(t *testing.T) {
 			message: "exact JSON name",
 		},
 		{
+			name:    "null parent",
+			data:    bytes.Replace(baseline, []byte(`"displayName":"payments",`), []byte(`"displayName":"payments","parent":null,`), 1),
+			message: "must be omitted instead of null",
+		},
+		{
+			name: "null labels",
+			data: bytes.Replace(
+				baseline,
+				[]byte(`"labels":{"environment":"production","team":"platform"}`),
+				[]byte(`"labels":null`),
+				1,
+			),
+			message: "must be omitted instead of null",
+		},
+		{
 			name:    "case-folded typed spec field",
 			data:    bytes.Replace(baseline, []byte(`"region":`), []byte(`"REGION":`), 1),
 			message: "exact JSON name",
@@ -828,6 +843,24 @@ func TestUnmarshalCanonicalRejectsAmbiguousInput(t *testing.T) {
 				t.Fatalf("UnmarshalCanonical() error = %v, want %q", err, test.message)
 			}
 		})
+	}
+
+	emptyLabels := bytes.Replace(
+		baseline,
+		[]byte(`"labels":{"environment":"production","team":"platform"}`),
+		[]byte(`"labels":{}`),
+		1,
+	)
+	decoded, err := UnmarshalCanonical[testSpec, testStatus](emptyLabels)
+	if err != nil {
+		t.Fatalf("UnmarshalCanonical(empty labels) error = %v", err)
+	}
+	canonical, err := MarshalCanonical(decoded)
+	if err != nil {
+		t.Fatalf("MarshalCanonical(empty labels) error = %v", err)
+	}
+	if bytes.Contains(canonical, []byte(`"labels"`)) {
+		t.Fatalf("empty labels were not normalized to omission: %s", canonical)
 	}
 }
 

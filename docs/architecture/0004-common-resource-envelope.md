@@ -95,7 +95,7 @@ round trips, and storage fixtures:
 - JSON numbers are signed 64-bit integers in canonical decimal form;
 - timestamps are UTC RFC 3339 with exactly three fractional digits;
 - an empty labels map normalizes to an omitted `labels` field and a root omits
-  `parent`;
+  `parent`; explicit `null` is rejected for both optional fields;
 - retained `spec` and `status` bytes advance through at most one typed
   encode/decode normalization step and must then reach a fixed point. Absent,
   `null`, empty object, and empty array values remain distinct only when the

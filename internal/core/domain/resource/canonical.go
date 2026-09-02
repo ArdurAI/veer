@@ -62,6 +62,43 @@ type wireMetadata struct {
 	UpdatedAt       string            `json:"updatedAt"`
 }
 
+type wireResourceInput struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Metadata   wireMetadataInput `json:"metadata"`
+	Spec       json.RawMessage   `json:"spec"`
+	Status     json.RawMessage   `json:"status"`
+}
+
+type wireMetadataInput struct {
+	ID              string                             `json:"id"`
+	DisplayName     string                             `json:"displayName"`
+	Parent          nonNullOptional[string]            `json:"parent"`
+	Labels          nonNullOptional[map[string]string] `json:"labels"`
+	Generation      int64                              `json:"generation"`
+	ResourceVersion string                             `json:"resourceVersion"`
+	CreatedAt       string                             `json:"createdAt"`
+	UpdatedAt       string                             `json:"updatedAt"`
+}
+
+type nonNullOptional[Value any] struct {
+	value   Value
+	present bool
+}
+
+func (optional *nonNullOptional[Value]) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errors.New("optional metadata value must be omitted instead of null")
+	}
+	var value Value
+	if err := jsonv2.Unmarshal(data, &value, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return err
+	}
+	optional.value = value
+	optional.present = true
+	return nil
+}
+
 // MarshalCanonical serializes a resource with stable envelope/metadata field
 // order, sorted nested object keys, compact whitespace, and exact timestamps.
 func MarshalCanonical[Spec any, Status GenerationObservations](resource Resource[Spec, Status]) ([]byte, error) {
@@ -385,13 +422,33 @@ func decodeExactJSON[Value any](data []byte, field string) (Value, error) {
 }
 
 func decodeWireResource(data []byte) (wireResource, error) {
-	var wire wireResource
+	var input wireResourceInput
 	if err := jsonv2.Unmarshal(
 		data,
-		&wire,
+		&input,
 		jsonv2.RejectUnknownMembers(true),
 	); err != nil {
-		return wire, fmt.Errorf("decode resource envelope with exact JSON names or unknown fields: %w", err)
+		return wireResource{}, fmt.Errorf("decode resource envelope with exact JSON names or unknown fields: %w", err)
+	}
+	wire := wireResource{
+		APIVersion: input.APIVersion,
+		Kind:       input.Kind,
+		Metadata: wireMetadata{
+			ID:              input.Metadata.ID,
+			DisplayName:     input.Metadata.DisplayName,
+			Generation:      input.Metadata.Generation,
+			ResourceVersion: input.Metadata.ResourceVersion,
+			CreatedAt:       input.Metadata.CreatedAt,
+			UpdatedAt:       input.Metadata.UpdatedAt,
+		},
+		Spec:   input.Spec,
+		Status: input.Status,
+	}
+	if input.Metadata.Parent.present {
+		wire.Metadata.Parent = &input.Metadata.Parent.value
+	}
+	if input.Metadata.Labels.present {
+		wire.Metadata.Labels = input.Metadata.Labels.value
 	}
 	return wire, nil
 }
