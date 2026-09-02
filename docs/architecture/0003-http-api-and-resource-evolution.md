@@ -183,12 +183,14 @@ constrain JSON Schema validators.
 | `generation` | Desired-spec revision for reconciliation | Starts at 1 and advances exactly once when the defaulted canonical spec changes semantically | Compare with `status.observedGeneration`; never use as an HTTP precondition |
 | `resourceVersion` | Opaque revision of the complete observable resource | Changes on every persisted spec, metadata, status, lifecycle, or deletion write | Treat as opaque; use only through the returned strong ETag and `If-Match` |
 
-A metadata-only write, status-only write, or exact idempotent replay does not
-advance generation. A status write advances resourceVersion, carries its
-observed generation, and cannot modify spec or metadata. A desired-spec change
-racing a status write changes the ETag; the stale status writer receives `412`
-and must reload, confirm its observed generation is still current, and retry
-through the same bounded status schema.
+A metadata-only write, status-only write, lifecycle-only write, deletion write,
+or exact idempotent replay does not advance generation. The baseline
+`x-veer-write-class: delete` maps to the `deletion-write` case. A status,
+lifecycle, or deletion write still advances resourceVersion. A status write
+carries its observed generation and cannot modify spec or metadata. A
+desired-spec change racing a status write changes the ETag; the stale status
+writer receives `412` and must reload, confirm its observed generation is still
+current, and retry through the same bounded status schema.
 
 Every point-resource `GET` and successful status response returns a strong
 `ETag` containing the opaque resource version. Replacement, status, and delete

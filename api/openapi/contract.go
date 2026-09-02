@@ -569,9 +569,15 @@ func validateEvolution(root map[string]any) error {
 		MaximumNonReadResponseBytes: 1024,
 		CorrelationHeader:           "Veer-Request-Id",
 		Generation: generationContract{
-			Initial:   1,
-			Advance:   "once-per-semantic-spec-change",
-			Unchanged: []string{"metadata-only-write", "status-only-write", "idempotent-replay"},
+			Initial: 1,
+			Advance: "once-per-semantic-spec-change",
+			Unchanged: []string{
+				"metadata-only-write",
+				"status-only-write",
+				"lifecycle-only-write",
+				"deletion-write",
+				"idempotent-replay",
+			},
 		},
 		ResourceVersion: resourceVersionContract{
 			Representation:            "opaque",
@@ -1500,6 +1506,11 @@ func validateSchemas(schemas map[string]any) error {
 		timestamp["pattern"] != timestampPattern || timestamp["x-veer-calendar-validation"] != "rfc3339-calendar" ||
 		!exampleOK || !validTimestamp(timestampExample) {
 		return errors.New("timestamp format or precision drifted")
+	}
+	if !mapKeySetEquals(timestamp, []string{
+		"type", "format", "description", "example", "pattern", "x-veer-calendar-validation",
+	}) {
+		return errors.New("timestamp schema has unreviewed keywords")
 	}
 
 	metadata, err := mapField(schemas, "ResourceMetadata")

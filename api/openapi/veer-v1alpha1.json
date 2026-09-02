@@ -52,6 +52,8 @@
       "unchanged": [
         "metadata-only-write",
         "status-only-write",
+        "lifecycle-only-write",
+        "deletion-write",
         "idempotent-replay"
       ]
     },

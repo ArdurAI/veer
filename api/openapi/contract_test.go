@@ -382,6 +382,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "rules drifted",
 		},
 		{
+			name: "generation omits lifecycle and deletion writes",
+			mutate: func(root map[string]any) {
+				generation := nestedMap(t, root, "x-veer-evolution", "generation")
+				generation["unchanged"] = []any{"metadata-only-write", "status-only-write", "idempotent-replay"}
+			},
+			message: "rules drifted",
+		},
+		{
 			name: "resource version stale status",
 			mutate: func(root map[string]any) {
 				version := nestedMap(t, root, "x-veer-evolution", "resourceVersion")
@@ -908,6 +916,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				timestamp["example"] = "2026-02-31T12:00:00.000Z"
 			},
 			message: "timestamp format or precision drifted",
+		},
+		{
+			name: "timestamp gains narrowing const",
+			mutate: func(root map[string]any) {
+				timestamp := nestedMap(t, root, "components", "schemas", "Timestamp")
+				timestamp["const"] = "2026-09-01T21:00:00.000Z"
+			},
+			message: "timestamp schema has unreviewed keywords",
+		},
+		{
+			name: "timestamp gains narrowing enum",
+			mutate: func(root map[string]any) {
+				timestamp := nestedMap(t, root, "components", "schemas", "Timestamp")
+				timestamp["enum"] = []any{"2026-09-01T21:00:00.000Z"}
+			},
+			message: "timestamp schema has unreviewed keywords",
+		},
+		{
+			name: "timestamp gains narrowing not",
+			mutate: func(root map[string]any) {
+				timestamp := nestedMap(t, root, "components", "schemas", "Timestamp")
+				timestamp["not"] = map[string]any{"const": "2026-09-01T21:00:00.000Z"}
+			},
+			message: "timestamp schema has unreviewed keywords",
 		},
 		{
 			name: "unknown problem members allowed",
