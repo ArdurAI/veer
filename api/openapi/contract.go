@@ -348,6 +348,11 @@ func walkTree(value any, path string, depth int, nodes, refs *int) error {
 
 	switch typed := value.(type) {
 	case map[string]any:
+		for key := range typed {
+			if len(key) >= 2 && strings.EqualFold(key[:2], "x-") && !isReviewedExtension(path, key) {
+				return fmt.Errorf("%s uses unreviewed extension %q", path, key)
+			}
+		}
 		if _, exists := typed["patternProperties"]; exists {
 			return fmt.Errorf("%s uses unreviewed patternProperties", path)
 		}
@@ -436,6 +441,76 @@ func isReviewedProblemRefinement(path string, schema map[string]any) bool {
 
 func isReviewedFreeFormMap(path string, schema map[string]any) bool {
 	return path == "$/components/schemas/Labels" && schema["x-veer-free-form-map"] == true
+}
+
+func isReviewedExtension(path, name string) bool {
+	switch name {
+	case "x-veer-evolution":
+		return path == "$"
+	case "x-veer-write-class":
+		return strings.HasPrefix(path, "$/paths/") &&
+			(strings.HasSuffix(path, "/post") ||
+				strings.HasSuffix(path, "/put") ||
+				strings.HasSuffix(path, "/patch") ||
+				strings.HasSuffix(path, "/delete"))
+	case "x-veer-calendar-validation":
+		switch path {
+		case "$/components/headers/Deprecation/schema",
+			"$/components/headers/Sunset/schema",
+			"$/components/schemas/Timestamp":
+			return true
+		default:
+			return false
+		}
+	case "x-veer-link-target-validation":
+		return path == "$/components/headers/DeprecationLink/schema"
+	case "x-veer-request-id-binding":
+		return path == "$/components/headers/VeerRequestId"
+	case "x-veer-deprecation-sunset-minimum-notice-days",
+		"x-veer-etag-resource-version-pointer",
+		"x-veer-location-operation-id-pointer",
+		"x-veer-request-id-body-pointer",
+		"x-veer-required-header-sets",
+		"x-veer-required-headers",
+		"x-veer-retry-after-body-pointer":
+		return isResponseComponentPath(path)
+	case "x-veer-free-form-map":
+		return true
+	case "x-veer-instance-request-id-template":
+		return path == "$/components/schemas/Problem"
+	case "x-veer-maximum-encoded-json-bytes":
+		return path == "$/components/schemas/FieldViolation/properties/field"
+	case "x-veer-maximum-json-bytes":
+		switch path {
+		case "$/components/schemas/MutationReceipt",
+			"$/components/schemas/Problem",
+			"$/components/schemas/StatusReceipt",
+			"$/components/schemas/Workspace",
+			"$/components/schemas/WorkspaceList":
+			return true
+		default:
+			return false
+		}
+	case "x-veer-page-byte-policy":
+		return path == "$/components/schemas/WorkspaceList"
+	case "x-veer-refinement":
+		for _, contract := range problemContracts {
+			for _, variant := range problemVariantsFor(contract) {
+				if path == "$/components/schemas/"+variant.schema+"/allOf/1" {
+					return true
+				}
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func isResponseComponentPath(path string) bool {
+	const prefix = "$/components/responses/"
+	name := strings.TrimPrefix(path, prefix)
+	return name != path && name != "" && !strings.Contains(name, "/")
 }
 
 func problemVariantsFor(contract problemContract) []problemVariant {
@@ -850,9 +925,18 @@ func validateSuccessResponse(operationID string, responses map[string]any) error
 	if !exists {
 		return fmt.Errorf("operationId %q has no reviewed success contract", operationID)
 	}
-	response, ok := responses[expected.status].(map[string]any)
-	if !ok || response["$ref"] != "#/components/responses/"+expected.component {
-		return fmt.Errorf("operationId %q must use %s response %s", operationID, expected.status, expected.component)
+	if err := requireReference(
+		responses,
+		expected.status,
+		"#/components/responses/"+expected.component,
+	); err != nil {
+		return fmt.Errorf(
+			"operationId %q must use %s response %s: %w",
+			operationID,
+			expected.status,
+			expected.component,
+			err,
+		)
 	}
 	for status := range responses {
 		if len(status) == 3 && status[0] == '2' && status != expected.status {
@@ -877,7 +961,7 @@ func validateResponseReferences(route, method string, responses map[string]any) 
 		"500": "InternalFailure",
 		"503": "Unavailable",
 	}
-	for status, raw := range responses {
+	for status := range responses {
 		if len(status) == 3 && status[0] == '2' {
 			continue
 		}
@@ -885,9 +969,15 @@ func validateResponseReferences(route, method string, responses map[string]any) 
 		if !exists {
 			return fmt.Errorf("%s %s declares unreviewed error response %s", strings.ToUpper(method), route, status)
 		}
-		response, ok := raw.(map[string]any)
-		if !ok || response["$ref"] != "#/components/responses/"+component {
-			return fmt.Errorf("%s %s response %s must reference %s", strings.ToUpper(method), route, status, component)
+		if err := requireReference(responses, status, "#/components/responses/"+component); err != nil {
+			return fmt.Errorf(
+				"%s %s response %s must reference %s: %w",
+				strings.ToUpper(method),
+				route,
+				status,
+				component,
+				err,
+			)
 		}
 	}
 	return nil
@@ -918,6 +1008,9 @@ func parameterReferences(raw any) (map[string]bool, error) {
 		parameter, ok := rawParameter.(map[string]any)
 		if !ok {
 			return nil, errors.New("parameter entry is not an object")
+		}
+		if !mapKeySetEquals(parameter, []string{"$ref"}) {
+			return nil, errors.New("parameter reference has unreviewed keywords")
 		}
 		ref, ok := parameter["$ref"].(string)
 		if !ok || !strings.HasPrefix(ref, "#/components/parameters/") {
@@ -951,17 +1044,16 @@ func validateJSONRequestBody(operationID string, operation map[string]any) error
 	if err != nil {
 		return err
 	}
-	schema, err := mapField(media, "schema")
-	if err != nil {
-		return err
-	}
 	want := map[string]string{
 		"createWorkspace":        "WorkspaceCreate",
 		"replaceWorkspace":       "WorkspaceReplace",
 		"replaceWorkspaceStatus": "WorkspaceStatusWrite",
 	}[operationID]
-	if want == "" || schema["$ref"] != "#/components/schemas/"+want {
+	if want == "" {
 		return fmt.Errorf("operationId %q must use request schema %s", operationID, want)
+	}
+	if err := requireReference(media, "schema", "#/components/schemas/"+want); err != nil {
+		return fmt.Errorf("operationId %q must use request schema %s: %w", operationID, want, err)
 	}
 	return nil
 }
@@ -1081,19 +1173,23 @@ func validateParameters(parameters map[string]any) error {
 	if !mapKeySetEquals(pageTokenSchema, []string{"type", "minLength", "maxLength", "pattern"}) {
 		return errors.New("PageToken schema has unreviewed keywords")
 	}
-	for name, wantSchema := range map[string]string{
-		"OperationId": "OpaqueId",
-		"WorkspaceId": "OpaqueId",
+	for _, contract := range []struct {
+		component string
+		wireName  string
+		schema    string
+	}{
+		{component: "OperationId", wireName: "operationId", schema: "OpaqueId"},
+		{component: "WorkspaceId", wireName: "workspaceId", schema: "OpaqueId"},
 	} {
-		parameter, err := mapField(parameters, name)
+		parameter, err := mapField(parameters, contract.component)
 		if err != nil {
 			return err
 		}
-		if parameter["in"] != "path" || parameter["required"] != true {
-			return fmt.Errorf("%s path parameter contract drifted", name)
+		if parameter["name"] != contract.wireName || parameter["in"] != "path" || parameter["required"] != true {
+			return fmt.Errorf("%s path parameter contract drifted", contract.component)
 		}
-		if err := requireSchemaReference(parameter, "#/components/schemas/"+wantSchema); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+		if err := requireSchemaReference(parameter, "#/components/schemas/"+contract.schema); err != nil {
+			return fmt.Errorf("%s: %w", contract.component, err)
 		}
 	}
 	return nil
@@ -1331,10 +1427,6 @@ func validateResponses(responses map[string]any) error {
 				}
 			}
 			media, _ := mapField(content, "application/json")
-			schema, err := mapField(media, "schema")
-			if err != nil {
-				return fmt.Errorf("success response %s: %w", name, err)
-			}
 			wantSchema := map[string]string{
 				"MutationAccepted": "MutationReceipt",
 				"Operation":        "Operation",
@@ -1342,8 +1434,8 @@ func validateResponses(responses map[string]any) error {
 				"Workspace":        "Workspace",
 				"WorkspaceList":    "WorkspaceList",
 			}[name]
-			if schema["$ref"] != "#/components/schemas/"+wantSchema {
-				return fmt.Errorf("success response %s uses the wrong schema", name)
+			if err := requireReference(media, "schema", "#/components/schemas/"+wantSchema); err != nil {
+				return fmt.Errorf("success response %s uses the wrong schema: %w", name, err)
 			}
 			if pointer, mustBind := etagResourceVersionPointers[name]; mustBind {
 				if response["x-veer-etag-resource-version-pointer"] != pointer {
@@ -1374,13 +1466,9 @@ func validateResponses(responses map[string]any) error {
 				return fmt.Errorf("error response %s must use application/problem+json", name)
 			}
 			media, _ := mapField(content, "application/problem+json")
-			schema, err := mapField(media, "schema")
-			if err != nil {
-				return fmt.Errorf("error response %s: %w", name, err)
-			}
 			wantSchema := problemContracts[name].schema
-			if schema["$ref"] != "#/components/schemas/"+wantSchema {
-				return fmt.Errorf("error response %s must reference %s", name, wantSchema)
+			if err := requireReference(media, "schema", "#/components/schemas/"+wantSchema); err != nil {
+				return fmt.Errorf("error response %s must reference %s: %w", name, wantSchema, err)
 			}
 			if response["x-veer-request-id-body-pointer"] != "/requestId" {
 				return fmt.Errorf("error response %s request-ID body binding drifted", name)
@@ -1445,12 +1533,102 @@ func validateResponses(responses map[string]any) error {
 }
 
 func requireReference(parent map[string]any, name, want string) error {
+	return requireAnnotatedReference(parent, name, want, nil)
+}
+
+func requireAnnotatedReference(
+	parent map[string]any,
+	name, want string,
+	reviewedSiblings map[string]any,
+) error {
 	value, err := mapField(parent, name)
 	if err != nil {
 		return fmt.Errorf("%s is missing", name)
 	}
 	if value["$ref"] != want {
 		return fmt.Errorf("%s must reference %s", name, want)
+	}
+	keywords := make([]string, 0, len(reviewedSiblings)+1)
+	keywords = append(keywords, "$ref")
+	for key := range reviewedSiblings {
+		keywords = append(keywords, key)
+	}
+	sort.Strings(keywords[1:])
+	if !mapKeySetEquals(value, keywords) {
+		return fmt.Errorf("%s reference has unreviewed keywords", name)
+	}
+	for _, key := range keywords[1:] {
+		if !reflect.DeepEqual(value[key], reviewedSiblings[key]) {
+			return fmt.Errorf("%s reference %s drifted", name, key)
+		}
+	}
+	return nil
+}
+
+func validateTopLevelSchemaKeywords(schemas map[string]any) error {
+	objectKeywords := []string{"type", "description", "required", "properties", "additionalProperties"}
+	for _, contract := range []struct {
+		name   string
+		extras []string
+	}{
+		{name: "Condition"},
+		{name: "FieldViolation"},
+		{name: "MutationReceipt", extras: []string{"x-veer-maximum-json-bytes"}},
+		{name: "Operation"},
+		{name: "Problem", extras: []string{"x-veer-instance-request-id-template", "x-veer-maximum-json-bytes"}},
+		{name: "ResourceMetadata", extras: []string{"example"}},
+		{name: "StatusReceipt", extras: []string{"x-veer-maximum-json-bytes"}},
+		{name: "Workspace", extras: []string{"x-veer-maximum-json-bytes"}},
+		{name: "WorkspaceCreate"},
+		{name: "WorkspaceList", extras: []string{"x-veer-maximum-json-bytes", "x-veer-page-byte-policy"}},
+		{name: "WorkspaceReplace"},
+		{name: "WorkspaceSpec"},
+		{name: "WorkspaceStatus", extras: []string{"example"}},
+		{name: "WorkspaceStatusWrite"},
+		{name: "WritableMetadata", extras: []string{"example"}},
+	} {
+		schema, err := mapField(schemas, contract.name)
+		if err != nil {
+			return err
+		}
+		keywords := append([]string(nil), objectKeywords...)
+		keywords = append(keywords, contract.extras...)
+		if !mapKeysAllowed(schema, keywords) {
+			return fmt.Errorf("%s schema has unreviewed keywords", contract.name)
+		}
+	}
+
+	labels, err := mapField(schemas, "Labels")
+	if err != nil {
+		return err
+	}
+	if !mapKeysAllowed(labels, []string{
+		"type", "description", "example", "maxProperties", "propertyNames",
+		"additionalProperties", "x-veer-free-form-map",
+	}) {
+		return errors.New("labels schema has unreviewed keywords")
+	}
+
+	for _, contract := range problemContracts {
+		variants := problemVariantsFor(contract)
+		if len(variants) > 1 {
+			aggregate, err := mapField(schemas, contract.schema)
+			if err != nil {
+				return err
+			}
+			if !mapKeysAllowed(aggregate, []string{"description", "oneOf"}) {
+				return fmt.Errorf("%s schema has unreviewed keywords", contract.schema)
+			}
+		}
+		for _, variant := range variants {
+			schema, err := mapField(schemas, variant.schema)
+			if err != nil {
+				return err
+			}
+			if !mapKeysAllowed(schema, []string{"description", "allOf"}) {
+				return fmt.Errorf("%s schema has unreviewed keywords", variant.schema)
+			}
+		}
 	}
 	return nil
 }
@@ -1476,6 +1654,9 @@ func validateSchemas(schemas map[string]any) error {
 				return fmt.Errorf("schema %s is missing", variant.schema)
 			}
 		}
+	}
+	if err := validateTopLevelSchemaKeywords(schemas); err != nil {
+		return err
 	}
 	for name, want := range map[string]struct {
 		minimum string
@@ -1558,13 +1739,34 @@ func validateSchemas(schemas map[string]any) error {
 			return fmt.Errorf("ResourceMetadata.%s must be readOnly", name)
 		}
 	}
-	for property, target := range map[string]string{
-		"id":        "OpaqueId",
-		"labels":    "Labels",
-		"createdAt": "Timestamp",
-		"updatedAt": "Timestamp",
+	for _, contract := range []struct {
+		property string
+		target   string
+		siblings map[string]any
+	}{
+		{
+			property: "id",
+			target:   "OpaqueId",
+			siblings: map[string]any{"type": "string", "readOnly": true},
+		},
+		{property: "labels", target: "Labels"},
+		{
+			property: "createdAt",
+			target:   "Timestamp",
+			siblings: map[string]any{"type": "string", "readOnly": true},
+		},
+		{
+			property: "updatedAt",
+			target:   "Timestamp",
+			siblings: map[string]any{"type": "string", "readOnly": true},
+		},
 	} {
-		if err := requireReference(metadataProperties, property, "#/components/schemas/"+target); err != nil {
+		if err := requireAnnotatedReference(
+			metadataProperties,
+			contract.property,
+			"#/components/schemas/"+contract.target,
+			contract.siblings,
+		); err != nil {
 			return fmt.Errorf("ResourceMetadata: %w", err)
 		}
 	}
@@ -2115,13 +2317,30 @@ func validateOperationSchema(schemas map[string]any) error {
 	}) || len(properties) != 9 {
 		return errors.New("operation shape drifted")
 	}
-	for property, target := range map[string]string{
-		"id":         "OpaqueId",
-		"resourceId": "OpaqueId",
-		"createdAt":  "Timestamp",
-		"updatedAt":  "Timestamp",
+	for _, contract := range []struct {
+		property string
+		target   string
+		siblings map[string]any
+	}{
+		{
+			property: "id",
+			target:   "OpaqueId",
+			siblings: map[string]any{"type": "string", "example": "op_01J000000000000000000000000"},
+		},
+		{
+			property: "resourceId",
+			target:   "OpaqueId",
+			siblings: map[string]any{"type": "string", "example": "wsp_01J00000000000000000000000"},
+		},
+		{property: "createdAt", target: "Timestamp"},
+		{property: "updatedAt", target: "Timestamp"},
 	} {
-		if err := requireReference(properties, property, "#/components/schemas/"+target); err != nil {
+		if err := requireAnnotatedReference(
+			properties,
+			contract.property,
+			"#/components/schemas/"+contract.target,
+			contract.siblings,
+		); err != nil {
 			return fmt.Errorf("operation: %w", err)
 		}
 	}
@@ -2280,7 +2499,8 @@ func validateProblemVariant(
 	if len(variant.required) > 0 {
 		wantConstraintFields = 3
 	}
-	if !baseOK || base["$ref"] != "#/components/schemas/Problem" || !constraintsOK ||
+	if !baseOK || base["$ref"] != "#/components/schemas/Problem" ||
+		!mapKeySetEquals(base, []string{"$ref"}) || !constraintsOK ||
 		len(constraints) != wantConstraintFields || constraints["x-veer-refinement"] != true {
 		return fmt.Errorf("%s does not refine Problem", variant.schema)
 	}
@@ -2331,16 +2551,17 @@ func validateExamples(root map[string]any) error {
 		return err
 	}
 	type exampleContract struct {
-		status string
-		code   string
-		title  string
+		status            string
+		code              string
+		title             string
+		retryAfterSeconds string
 	}
 	want := map[string]exampleContract{
 		"ValidationFailure":      {status: "400", code: "validation-failed", title: "Request validation failed"},
 		"AuthenticationRequired": {status: "401", code: "authentication-required", title: "Authentication required"},
 		"AuthorizationDenied":    {status: "403", code: "authorization-denied", title: "Authorization denied"},
 		"Conflict":               {status: "409", code: "idempotency-key-reused", title: "Request conflicts with a prior mutation"},
-		"Throttled":              {status: "429", code: "rate-limited", title: "Request rate limited"},
+		"Throttled":              {status: "429", code: "rate-limited", title: "Request rate limited", retryAfterSeconds: "5"},
 		"InternalFailure":        {status: "500", code: "internal-failure", title: "Internal failure"},
 	}
 	if len(examples) != len(want) {
@@ -2358,6 +2579,9 @@ func validateExamples(root map[string]any) error {
 		if err := validateProblemExample(name, value, expected.status, expected.code, expected.title); err != nil {
 			return err
 		}
+		if expected.retryAfterSeconds != "" && !numberEquals(value["retryAfterSeconds"], expected.retryAfterSeconds) {
+			return fmt.Errorf("example %s retryAfterSeconds drifted", name)
+		}
 	}
 
 	responses, err := mapField(components, "responses")
@@ -2370,7 +2594,7 @@ func validateExamples(root map[string]any) error {
 		"PreconditionRequired": {status: "428", code: "precondition-required", title: "Mutation precondition required"},
 		"RequestTooLarge":      {status: "413", code: "request-too-large", title: "Request body is too large"},
 		"UnsupportedMediaType": {status: "415", code: "unsupported-media-type", title: "Unsupported request media type"},
-		"Unavailable":          {status: "503", code: "unavailable", title: "Service temporarily unavailable"},
+		"Unavailable":          {status: "503", code: "unavailable", title: "Service temporarily unavailable", retryAfterSeconds: "10"},
 	}
 	for name, expected := range inline {
 		response, err := mapField(responses, name)
@@ -2391,6 +2615,9 @@ func validateExamples(root map[string]any) error {
 		}
 		if err := validateProblemExample(name, value, expected.status, expected.code, expected.title); err != nil {
 			return err
+		}
+		if expected.retryAfterSeconds != "" && !numberEquals(value["retryAfterSeconds"], expected.retryAfterSeconds) {
+			return fmt.Errorf("example %s retryAfterSeconds drifted", name)
 		}
 	}
 	return nil
@@ -2508,6 +2735,19 @@ func mapKeySetEquals(got map[string]any, want []string) bool {
 	}
 	for _, key := range want {
 		if _, exists := got[key]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func mapKeysAllowed(got map[string]any, allowed []string) bool {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+	for key := range got {
+		if _, exists := allowedSet[key]; !exists {
 			return false
 		}
 	}

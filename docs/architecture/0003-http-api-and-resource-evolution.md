@@ -42,6 +42,15 @@ request-validation path support it. This issue does not introduce generated
 runtime types; the first issue that does must pin its generator and runtime
 dependencies and prove deterministic regeneration.
 
+The contract admits only enumerated `x-veer-*` extension names at their
+reviewed structural locations. It rejects generator-specific extensions,
+including `x-go-*` and `x-oapi-codegen-*`, before generation. As of 2026-09-02, upstream
+[GHSA-9c2f-gr95-7wqw](https://github.com/oapi-codegen/oapi-codegen/security/advisories/GHSA-9c2f-gr95-7wqw)
+reports no patched release for `x-go-type-import` generated-code injection.
+The first generation issue must recheck that advisory and may not activate an
+affected release without this gate plus a patched release or audited defensive
+fork.
+
 ## Decision boundary
 
 This decision specifies a transport contract. It does not claim that the
@@ -437,6 +446,8 @@ The semantic verifier rejects:
 - duplicate JSON keys, trailing documents, files above 1 MiB, nesting above
   64 levels, more than 50,000 JSON nodes, and more than 2,048 references;
 - external or malformed `$ref` values;
+- unreviewed extension names or assertion siblings on a pure `$ref`; the five
+  property references with annotations have exact per-site key and value sets;
 - unversioned paths, anonymous root or operation security, duplicate operation
   IDs, unselected methods, server overrides, callbacks, or webhooks;
 - mutation routes without idempotency, required ETag preconditions, an exact
@@ -462,7 +473,10 @@ repository-local generator. Generated output is deterministic, formatted, and
 either checked in with a regeneration diff gate or reproduced during the
 build from already verified inputs. Generation may create transport structs
 and `net/http` adapter interfaces; it may not generate or overwrite core
-domain, persistence, policy, migration, or provider types.
+domain, persistence, policy, migration, or provider types. Generator-specific
+configuration remains outside the OpenAPI document in a separately reviewed,
+least-privilege build step; generation runs without repository, cloud, or
+deployment credentials, and generated diffs are reviewed before compilation.
 
 ## Security, observability, and cost effects
 

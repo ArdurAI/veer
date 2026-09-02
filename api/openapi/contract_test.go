@@ -159,6 +159,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: `operationId "getWorkspace" must use 200 response Workspace`,
 		},
 		{
+			name: "route success response reference gains sibling",
+			mutate: func(root map[string]any) {
+				response := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "get", "responses", "200")
+				response["summary"] = "Unreviewed reference annotation"
+			},
+			message: "200 reference has unreviewed keywords",
+		},
+		{
 			name: "status response exceeds non-read contract",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "responses")
@@ -181,6 +189,15 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				post["parameters"] = []any{}
 			},
 			message: "omits IdempotencyKey",
+		},
+		{
+			name: "path parameter reference gains sibling",
+			mutate: func(root map[string]any) {
+				item := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces")
+				parameters := item["parameters"].([]any)
+				parameters[0].(map[string]any)["description"] = "Unreviewed reference annotation"
+			},
+			message: "parameter reference has unreviewed keywords",
 		},
 		{
 			name: "mutation header inherited by GET",
@@ -256,6 +273,24 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				responses["422"] = map[string]any{"description": "Unreviewed"}
 			},
 			message: "declares unreviewed error response 422",
+		},
+		{
+			name: "request body reference gains assertion sibling",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(
+					t,
+					root,
+					"paths",
+					"/api/v1alpha1/workspaces",
+					"post",
+					"requestBody",
+					"content",
+					"application/json",
+					"schema",
+				)
+				schema["not"] = map[string]any{}
+			},
+			message: "schema reference has unreviewed keywords",
 		},
 		{
 			name: "missing optimistic concurrency header",
@@ -462,6 +497,48 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "schema has unreviewed keywords",
 		},
 		{
+			name: "operation ID wire name drifts",
+			mutate: func(root map[string]any) {
+				parameter := nestedMap(t, root, "components", "parameters", "OperationId")
+				parameter["name"] = "workspaceId"
+			},
+			message: "OperationId path parameter contract drifted",
+		},
+		{
+			name: "success response reference gains const sibling",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(
+					t,
+					root,
+					"components",
+					"responses",
+					"Workspace",
+					"content",
+					"application/json",
+					"schema",
+				)
+				schema["const"] = map[string]any{}
+			},
+			message: "schema reference has unreviewed keywords",
+		},
+		{
+			name: "error response reference gains enum sibling",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(
+					t,
+					root,
+					"components",
+					"responses",
+					"ValidationFailure",
+					"content",
+					"application/problem+json",
+					"schema",
+				)
+				schema["enum"] = []any{}
+			},
+			message: "schema reference has unreviewed keywords",
+		},
+		{
 			name: "missing page token",
 			mutate: func(root map[string]any) {
 				list := nestedMap(t, root, "components", "schemas", "WorkspaceList", "properties")
@@ -630,6 +707,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "status or code drifted",
 		},
 		{
+			name: "throttling example omits retry delay",
+			mutate: func(root map[string]any) {
+				value := nestedMap(t, root, "components", "examples", "Throttled", "value")
+				delete(value, "retryAfterSeconds")
+			},
+			message: "example Throttled retryAfterSeconds drifted",
+		},
+		{
 			name: "mismatched inline not found example",
 			mutate: func(root map[string]any) {
 				example := nestedMap(t, root, "components", "responses", "NotFound", "content", "application/problem+json", "example")
@@ -708,6 +793,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(workspace, "x-veer-maximum-json-bytes")
 			},
 			message: "workspace read shape or encoded-size contract drifted",
+		},
+		{
+			name: "workspace spec gains top level narrowing assertion",
+			mutate: func(root map[string]any) {
+				spec := nestedMap(t, root, "components", "schemas", "WorkspaceSpec")
+				spec["not"] = map[string]any{}
+			},
+			message: "WorkspaceSpec schema has unreviewed keywords",
 		},
 		{
 			name: "resource metadata identity becomes optional",
@@ -836,6 +929,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(id, "readOnly")
 			},
 			message: "ResourceMetadata.id must be readOnly",
+		},
+		{
+			name: "annotated property reference gains assertion sibling",
+			mutate: func(root map[string]any) {
+				id := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "id")
+				id["not"] = map[string]any{}
+			},
+			message: "id reference has unreviewed keywords",
+		},
+		{
+			name: "annotated property reference type drifts",
+			mutate: func(root map[string]any) {
+				id := nestedMap(t, root, "components", "schemas", "ResourceMetadata", "properties", "id")
+				id["type"] = "integer"
+			},
+			message: "id reference type drifted",
+		},
+		{
+			name: "pure property reference gains dynamic sibling",
+			mutate: func(root map[string]any) {
+				spec := nestedMap(t, root, "components", "schemas", "WorkspaceCreate", "properties", "spec")
+				spec["$dynamicRef"] = "#/components/schemas/WorkspaceSpec"
+			},
+			message: "spec reference has unreviewed keywords",
 		},
 		{
 			name: "creation time loses read only marker",
@@ -1085,6 +1202,41 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				create["patternProperties"] = map[string]any{".*": map[string]any{}}
 			},
 			message: "uses unreviewed patternProperties",
+		},
+		{
+			name: "generator extensions are rejected",
+			mutate: func(root map[string]any) {
+				spec := nestedMap(t, root, "components", "schemas", "WorkspaceSpec")
+				spec["x-go-type"] = "marker.Type"
+				spec["x-go-type-import"] = map[string]any{
+					"name": "marker\nbenign",
+					"path": "example.invalid/marker",
+				}
+			},
+			message: "uses unreviewed extension",
+		},
+		{
+			name: "problem composition reference gains sibling",
+			mutate: func(root map[string]any) {
+				variant := nestedMap(t, root, "components", "schemas", "ValidationProblem")
+				allOf := variant["allOf"].([]any)
+				allOf[0].(map[string]any)["not"] = map[string]any{}
+			},
+			message: "ValidationProblem does not refine Problem",
+		},
+		{
+			name: "unknown Veer extension is rejected",
+			mutate: func(root map[string]any) {
+				root["x-veer-unknown"] = true
+			},
+			message: `uses unreviewed extension "x-veer-unknown"`,
+		},
+		{
+			name: "reviewed extension at unreviewed location is rejected",
+			mutate: func(root map[string]any) {
+				root["x-veer-write-class"] = "delete"
+			},
+			message: `uses unreviewed extension "x-veer-write-class"`,
 		},
 		{
 			name: "labels property count bound removed",
