@@ -3,6 +3,7 @@ package resource
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"math"
@@ -87,23 +88,68 @@ func (status *normalizingStatus) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type oscillatingObject struct {
+type nestedCustomSpec struct {
+	Status normalizingStatus `json:"status"`
+}
+
+type streamingStatus struct {
+	ObservedGeneration int64 `json:"observedGeneration"`
+}
+
+func (status streamingStatus) ObservedGenerations() []int64 {
+	return []int64{status.ObservedGeneration}
+}
+
+func (status *streamingStatus) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
+	return decoder.SkipValue()
+}
+
+type caseInsensitiveSpec struct {
+	Region string `json:"region,case:ignore"`
+}
+
+type embeddedFallbackSpec struct {
+	Extra map[string]any `json:",embed"`
+}
+
+type rawMessageSpec struct {
+	Payload json.RawMessage `json:"payload"`
+}
+
+type jsonTextValueSpec struct {
+	Payload jsontext.Value `json:"payload"`
+}
+
+type deepRawMessageSpec struct {
+	Items *[]map[string]*rawMessageSpec `json:"items"`
+}
+
+type arrayCustomValue []int64
+
+func (value *arrayCustomValue) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, (*[]int64)(value))
+}
+
+type arrayCustomSpec struct {
+	Values arrayCustomValue `json:"values"`
+}
+
+type exactNumberSpec struct {
+	Limit json.Number `json:"limit"`
+}
+
+type oscillatingMarshalingObject struct {
 	Value int64 `json:"value"`
 }
 
-func (object *oscillatingObject) UnmarshalJSON(data []byte) error {
-	var wire struct {
+func (object oscillatingMarshalingObject) MarshalJSON() ([]byte, error) {
+	value := int64(1)
+	if object.Value == 1 {
+		value = 2
+	}
+	return json.Marshal(struct {
 		Value int64 `json:"value"`
-	}
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	if wire.Value == 1 {
-		object.Value = 2
-	} else {
-		object.Value = 1
-	}
-	return nil
+	}{Value: value})
 }
 
 type workspaceSpec struct {
@@ -807,26 +853,155 @@ func TestTypedDecodingUsesExactNamesForPromotedFields(t *testing.T) {
 	}
 }
 
-func TestTypedDecodingRetainsStableNormalizedRepresentation(t *testing.T) {
+func TestCustomUnmarshalersCannotBypassExactTypedDecoding(t *testing.T) {
 	t.Parallel()
 
-	canonical, value, err := decodeObject[normalizingStatus](
-		[]byte(`{"observedGeneration":2}`),
-		"status",
+	tests := []struct {
+		name   string
+		decode func() error
+	}{
+		{
+			name: "root custom decoder with exact field",
+			decode: func() error {
+				_, _, err := decodeObject[normalizingStatus]([]byte(`{"observedGeneration":0}`), "status")
+				return err
+			},
+		},
+		{
+			name: "root custom decoder with case-folded and unknown fields",
+			decode: func() error {
+				_, _, err := decodeObject[normalizingStatus]([]byte(`{"ObservedGeneration":0,"extra":true}`), "status")
+				return err
+			},
+		},
+		{
+			name: "nested custom decoder",
+			decode: func() error {
+				_, _, err := decodeObject[nestedCustomSpec]([]byte(`{"status":{"observedGeneration":0}}`), "spec")
+				return err
+			},
+		},
+		{
+			name: "streaming custom decoder",
+			decode: func() error {
+				_, _, err := decodeObject[streamingStatus]([]byte(`{"observedGeneration":0}`), "status")
+				return err
+			},
+		},
+		{
+			name: "array custom decoder",
+			decode: func() error {
+				_, _, err := decodeObject[arrayCustomSpec]([]byte(`{"values":[1,2]}`), "spec")
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := test.decode(); err == nil || !strings.Contains(err.Error(), "custom JSON unmarshaler") {
+				t.Fatalf("decodeObject(custom unmarshaler) error = %v, want explicit rejection", err)
+			}
+		})
+	}
+}
+
+func TestTypedDecodingRejectsOpenSchemaEscapeHatches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		decode  func() error
+		message string
+	}{
+		{
+			name: "case-insensitive field",
+			decode: func() error {
+				_, _, err := decodeObject[caseInsensitiveSpec]([]byte(`{"REGION":"us-east-1"}`), "spec")
+				return err
+			},
+			message: `"case:ignore"`,
+		},
+		{
+			name: "embedded fallback",
+			decode: func() error {
+				_, _, err := decodeObject[embeddedFallbackSpec]([]byte(`{"arbitrary":true}`), "spec")
+				return err
+			},
+			message: `"embed"`,
+		},
+		{
+			name: "nested raw message",
+			decode: func() error {
+				_, _, err := decodeObject[rawMessageSpec]([]byte(`{"payload":{"arbitrary":true}}`), "spec")
+				return err
+			},
+			message: "resource-envelope transport capture",
+		},
+		{
+			name: "v2 raw message alias",
+			decode: func() error {
+				_, _, err := decodeObject[jsonTextValueSpec]([]byte(`{"payload":"raw"}`), "spec")
+				return err
+			},
+			message: "resource-envelope transport capture",
+		},
+		{
+			name: "deep composite raw message",
+			decode: func() error {
+				_, _, err := decodeObject[deepRawMessageSpec]([]byte(`{"items":[{"key":{"payload":{}}}]}`), "spec")
+				return err
+			},
+			message: "resource-envelope transport capture",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := test.decode(); err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("decodeObject(schema escape hatch) error = %v, want %s rejection", err, test.message)
+			}
+		})
+	}
+
+	numberCanonical, numberValue, err := decodeObject[exactNumberSpec](
+		[]byte(`{"limit":9223372036854775807}`),
+		"spec",
 	)
 	if err != nil {
-		t.Fatalf("decodeObject(normalizing status) error = %v", err)
+		t.Fatalf("decodeObject(concrete json.Number) error = %v", err)
 	}
-	if string(canonical) != `{"observedGeneration":0}` || value.ObservedGeneration != 0 {
-		t.Fatalf("decodeObject(normalizing status) = %s / %#v", canonical, value)
+	if string(numberCanonical) != `{"limit":9223372036854775807}` || numberValue.Limit.String() != "9223372036854775807" {
+		t.Fatalf("decodeObject(concrete json.Number) = %s / %#v", numberCanonical, numberValue)
 	}
-	replayed, replayedValue, err := decodeObject[normalizingStatus](canonical, "status")
+
+	resourceBytes, err := MarshalCanonical(newTestResource(t, false))
 	if err != nil {
-		t.Fatalf("decodeObject(normalized status) error = %v", err)
+		t.Fatalf("MarshalCanonical(envelope RawMessage fixture) error = %v", err)
 	}
-	if !bytes.Equal(canonical, replayed) || replayedValue.ObservedGeneration != 0 {
-		t.Fatalf("normalized status is not stable: %s / %#v", replayed, replayedValue)
+	wire, err := decodeWireResource(resourceBytes)
+	if err != nil {
+		t.Fatalf("decodeWireResource(envelope RawMessage fixture) error = %v", err)
 	}
+	if len(wire.Spec) == 0 || len(wire.Status) == 0 {
+		t.Fatalf("decodeWireResource() did not retain spec/status: %#v", wire)
+	}
+}
+
+func TestSplitJSONTagOptionsPreservesQuotedCommas(t *testing.T) {
+	t.Parallel()
+
+	got := splitJSONTagOptions("timestamp,format:'2006-01-02,embed',omitempty")
+	want := []string{"format:'2006-01-02,embed'", "omitempty"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("splitJSONTagOptions() = %#v, want %#v", got, want)
+	}
+}
+
+func TestTypedDecodingRetainsStableNormalizedRepresentation(t *testing.T) {
+	t.Parallel()
 
 	typedSpec, typedValue, err := decodeObject[testSpec](
 		[]byte(`{"config":{},"region":"us-east-1","suspendReconciliation":false}`),
@@ -843,8 +1018,8 @@ func TestTypedDecodingRetainsStableNormalizedRepresentation(t *testing.T) {
 func TestTypedDecodingRejectsNonConvergentNormalization(t *testing.T) {
 	t.Parallel()
 
-	if _, _, err := decodeObject[oscillatingObject]([]byte(`{"value":1}`), "spec"); err == nil || !strings.Contains(err.Error(), "did not converge") {
-		t.Fatalf("decodeObject(oscillating object) error = %v, want convergence rejection", err)
+	if _, _, err := decodeObject[oscillatingMarshalingObject]([]byte(`{"value":1}`), "spec"); err == nil || !strings.Contains(err.Error(), "did not converge") {
+		t.Fatalf("decodeObject(oscillating marshaler) error = %v, want convergence rejection", err)
 	}
 }
 

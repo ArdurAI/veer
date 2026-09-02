@@ -100,7 +100,13 @@ round trips, and storage fixtures:
   encode/decode normalization step and must then reach a fixed point. Absent,
   `null`, empty object, and empty array values remain distinct only when the
   concrete type represents that distinction; unstructured maps preserve it,
-  while typed `omitempty` fields can normalize empty or zero values to absence;
+  while typed `omitempty` fields can normalize empty or zero values to absence.
+  Custom JSON unmarshalers cannot consume structured object or array values at
+  typed boundaries, so they cannot override exact-name and unknown-field
+  enforcement; scalar custom types remain supported. The `case:ignore` and
+  `embed` JSON tag options are also rejected there. Raw-message capture is
+  isolated to the resource envelope; explicit unstructured interface values
+  remain the deliberate payload seam;
   and
 - both decode input and encoded output are bounded to 262,144 bytes, 64 levels,
   and 50,000 JSON values. Duplicate keys and unknown typed fields fail.

@@ -24,6 +24,25 @@ var preserveInterfaceNumbers = jsonv2.UnmarshalFromFunc(func(decoder *jsontext.D
 	return nil
 })
 
+var rejectCustomJSONUnmarshalers = jsonv2.JoinUnmarshalers(
+	jsonv2.UnmarshalFromFunc(func(decoder *jsontext.Decoder, value jsonv2.UnmarshalerFrom) error {
+		return rejectStructuredJSONUnmarshaler(decoder, value)
+	}),
+	jsonv2.UnmarshalFromFunc(func(decoder *jsontext.Decoder, value jsonv2.Unmarshaler) error {
+		return rejectStructuredJSONUnmarshaler(decoder, value)
+	}),
+	preserveInterfaceNumbers,
+)
+
+func rejectStructuredJSONUnmarshaler(decoder *jsontext.Decoder, value any) error {
+	switch decoder.PeekKind() {
+	case jsontext.KindBeginObject, jsontext.KindBeginArray:
+		return fmt.Errorf("custom JSON unmarshaler %T cannot consume structured values at canonical typed boundaries", value)
+	default:
+		return errors.ErrUnsupported
+	}
+}
+
 type wireResource struct {
 	APIVersion string          `json:"apiVersion"`
 	Kind       string          `json:"kind"`
@@ -132,7 +151,7 @@ func UnmarshalCanonical[Spec any, Status GenerationObservations](data []byte) (R
 	if err := validateJSON(data); err != nil {
 		return zero, err
 	}
-	wire, err := decodeExactJSON[wireResource](data, "resource envelope")
+	wire, err := decodeWireResource(data)
 	if err != nil {
 		return zero, err
 	}
@@ -222,6 +241,9 @@ func UnmarshalCanonical[Spec any, Status GenerationObservations](data []byte) (R
 
 func canonicalizeObject[Value any](value Value, field string) ([]byte, Value, error) {
 	var zero Value
+	if err := validateTypedJSONContractFor[Value](field); err != nil {
+		return nil, zero, err
+	}
 	encoded, err := encodeTypedJSON(value)
 	if err != nil {
 		return nil, zero, fmt.Errorf("encode %s with strict JSON: %w", field, err)
@@ -231,6 +253,9 @@ func canonicalizeObject[Value any](value Value, field string) ([]byte, Value, er
 
 func decodeObject[Value any](data []byte, field string) ([]byte, Value, error) {
 	var zero Value
+	if err := validateTypedJSONContractFor[Value](field); err != nil {
+		return nil, zero, err
+	}
 	canonical, err := canonicalizeRawObject(data, field)
 	if err != nil {
 		return nil, zero, err
@@ -352,11 +377,23 @@ func decodeExactJSON[Value any](data []byte, field string) (Value, error) {
 		data,
 		&value,
 		jsonv2.RejectUnknownMembers(true),
-		jsonv2.WithUnmarshalers(preserveInterfaceNumbers),
+		jsonv2.WithUnmarshalers(rejectCustomJSONUnmarshalers),
 	); err != nil {
 		return value, fmt.Errorf("decode %s with exact JSON names or unknown fields: %w", field, err)
 	}
 	return value, nil
+}
+
+func decodeWireResource(data []byte) (wireResource, error) {
+	var wire wireResource
+	if err := jsonv2.Unmarshal(
+		data,
+		&wire,
+		jsonv2.RejectUnknownMembers(true),
+	); err != nil {
+		return wire, fmt.Errorf("decode resource envelope with exact JSON names or unknown fields: %w", err)
+	}
+	return wire, nil
 }
 
 func scanJSONValue(decoder *json.Decoder, depth int, nodes *int) error {
