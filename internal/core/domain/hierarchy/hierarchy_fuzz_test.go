@@ -25,7 +25,14 @@ func FuzzSnapshot(f *testing.F) {
 		}
 		for index := 0; index < nodeCount; index++ {
 			offset := index * 4
-			kind := []Kind{KindEnvironment, KindApplication, KindComponent, Kind("Unsupported")}[int(data[offset])%4]
+			kind := []Kind{
+				KindEnvironment,
+				KindApplication,
+				KindComponent,
+				KindPolicy,
+				KindProviderConnection,
+				Kind("Unsupported"),
+			}[int(data[offset])%6]
 			workspaceID := workspaceAID
 			if data[offset+1]&1 != 0 {
 				workspaceID = workspaceBID

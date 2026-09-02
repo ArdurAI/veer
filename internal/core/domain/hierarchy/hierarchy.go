@@ -13,8 +13,9 @@ const (
 	// APIVersion is the only representation version admitted by this package.
 	APIVersion = "v1alpha1"
 	// MaxSnapshotRecords is one Workspace plus the Environment, Application,
-	// and Component maxima in ADR 0001's target-scale qualification profile.
-	MaxSnapshotRecords = 1 + 1_000 + 10_000 + 50_000
+	// Component, Policy, and ProviderConnection maxima in ADR 0001's
+	// target-scale qualification profile.
+	MaxSnapshotRecords = 1 + 1_000 + 10_000 + 50_000 + 2_500 + 500
 
 	// KindWorkspace is the root authorization and ownership boundary.
 	KindWorkspace Kind = "Workspace"
@@ -24,6 +25,10 @@ const (
 	KindApplication Kind = "Application"
 	// KindComponent is a direct child of an Application.
 	KindComponent Kind = "Component"
+	// KindPolicy is a direct child of a Workspace.
+	KindPolicy Kind = "Policy"
+	// KindProviderConnection is a direct child of an Environment.
+	KindProviderConnection Kind = "ProviderConnection"
 )
 
 var (
@@ -48,7 +53,7 @@ var (
 	ErrDeleteRestricted      = errors.New("resource deletion is restricted by retained children")
 )
 
-// Kind is one of the four v1alpha1 product hierarchy kinds.
+// Kind is one of the six v1alpha1 product ownership kinds.
 type Kind string
 
 // String returns the canonical wire spelling.
@@ -379,11 +384,12 @@ func (snapshot Snapshot) CheckDelete(id resource.ID) error {
 	return nil
 }
 
-// ParseKind validates and returns one of the four exact v1alpha1 kind names.
+// ParseKind validates and returns one of the six exact v1alpha1 kind names.
 func ParseKind(value string) (Kind, error) {
 	kind := Kind(value)
 	switch kind {
-	case KindWorkspace, KindEnvironment, KindApplication, KindComponent:
+	case KindWorkspace, KindEnvironment, KindApplication, KindComponent,
+		KindPolicy, KindProviderConnection:
 		return kind, nil
 	default:
 		return "", ErrUnsupportedKind
@@ -398,6 +404,10 @@ func expectedParentKind(kind Kind) Kind {
 		return KindEnvironment
 	case KindComponent:
 		return KindApplication
+	case KindPolicy:
+		return KindWorkspace
+	case KindProviderConnection:
+		return KindEnvironment
 	default:
 		return ""
 	}

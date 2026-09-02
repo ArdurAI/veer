@@ -1,0 +1,285 @@
+[
+  {
+    "name": "credential reference",
+    "schema": "CredentialReference",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "referenceId": "cred_01J0000000000000000000000",
+      "version": "current"
+    }
+  },
+  {
+    "name": "provider spec",
+    "schema": "ProviderConnectionSpec",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "provider": "aws",
+      "credentialRef": {
+        "referenceId": "cred_01J0000000000000000000000",
+        "version": "current"
+      }
+    }
+  },
+  {
+    "name": "embedded credential secret",
+    "schema": "ProviderConnectionSpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "provider": "aws",
+      "credentialRef": {
+        "referenceId": "cred_01J0000000000000000000000",
+        "version": "current",
+        "secret": "must-not-be-accepted"
+      }
+    }
+  },
+  {
+    "name": "raw provider credential",
+    "schema": "ProviderConnectionSpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "provider": "aws",
+      "credentialRef": {
+        "referenceId": "cred_01J0000000000000000000000",
+        "version": "current"
+      },
+      "accessKey": "must-not-be-accepted"
+    }
+  },
+  {
+    "name": "explicit unknown capability",
+    "schema": "ProviderCapability",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "name": "network.ingress",
+      "state": "Unknown",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "reason": "ObservationUnavailable"
+    }
+  },
+  {
+    "name": "year zero observation timestamp",
+    "schema": "ProviderCapability",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "name": "network.ingress",
+      "state": "Unknown",
+      "source": "provider-observation",
+      "observedAt": "0000-01-01T00:00:00.000Z",
+      "reason": "ObservationUnavailable"
+    }
+  },
+  {
+    "name": "capability state omitted",
+    "schema": "ProviderCapability",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "name": "network.ingress",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "reason": "ObservationUnavailable"
+    }
+  },
+  {
+    "name": "unsorted capability observations",
+    "schema": "ProviderConnectionStatus",
+    "schemaValid": true,
+    "semanticValid": false,
+    "instance": {
+      "observedGeneration": 1,
+      "conditions": [],
+      "capabilities": [
+        {
+          "name": "network.ingress",
+          "state": "Unknown",
+          "source": "provider-observation",
+          "observedAt": "2026-09-03T01:02:03.000Z",
+          "reason": "ObservationUnavailable"
+        },
+        {
+          "name": "compute.instances",
+          "state": "Supported",
+          "source": "provider-observation",
+          "observedAt": "2026-09-03T01:02:03.000Z",
+          "reason": "CapabilityDiscovered"
+        }
+      ],
+      "quotaChecks": []
+    }
+  },
+  {
+    "name": "explicit unknown quota",
+    "schema": "QuotaCheck",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "name": "network.load-balancers",
+      "state": "Unknown",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "reason": "ObservationUnavailable"
+    }
+  },
+  {
+    "name": "known quota",
+    "schema": "QuotaCheck",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "name": "compute.instances",
+      "state": "WithinLimit",
+      "requested": "3",
+      "available": "10",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "reason": "QuotaAvailable"
+    }
+  },
+  {
+    "name": "known zero quota",
+    "schema": "QuotaCheck",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "name": "compute.instances",
+      "state": "WithinLimit",
+      "requested": "0",
+      "available": "0",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "reason": "QuotaAvailable"
+    }
+  },
+  {
+    "name": "unknown quota carries operands",
+    "schema": "QuotaCheck",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "name": "compute.instances",
+      "state": "Unknown",
+      "requested": "0",
+      "available": "0",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "reason": "ObservationUnavailable"
+    }
+  },
+  {
+    "name": "quota comparator mismatch",
+    "schema": "QuotaCheck",
+    "schemaValid": true,
+    "semanticValid": false,
+    "instance": {
+      "name": "compute.instances",
+      "state": "WithinLimit",
+      "requested": "11",
+      "available": "10",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "reason": "QuotaAvailable"
+    }
+  },
+  {
+    "name": "explicit unknown cost",
+    "schema": "CostEstimate",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "state": "Unknown",
+      "currency": "USD",
+      "region": "us-east-1",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "confidence": "Unknown",
+      "reason": "EstimateUnavailable"
+    }
+  },
+  {
+    "name": "known cost",
+    "schema": "CostEstimate",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "state": "Known",
+      "amount": "12.34",
+      "currency": "USD",
+      "region": "us-east-1",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "confidence": "High",
+      "reason": "ProviderEstimate"
+    }
+  },
+  {
+    "name": "known zero cost",
+    "schema": "CostEstimate",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "state": "Known",
+      "amount": "0",
+      "currency": "USD",
+      "region": "us-east-1",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "confidence": "High",
+      "reason": "NoCharge"
+    }
+  },
+  {
+    "name": "unknown cost carries amount",
+    "schema": "CostEstimate",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "state": "Unknown",
+      "amount": "0",
+      "currency": "USD",
+      "region": "us-east-1",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "confidence": "Unknown",
+      "reason": "EstimateUnavailable"
+    }
+  },
+  {
+    "name": "unknown cost uses known confidence",
+    "schema": "CostEstimate",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "state": "Unknown",
+      "currency": "USD",
+      "region": "us-east-1",
+      "source": "provider-observation",
+      "observedAt": "2026-09-03T01:02:03.000Z",
+      "confidence": "High",
+      "reason": "EstimateUnavailable"
+    }
+  },
+  {
+    "name": "operation update precedes creation",
+    "schema": "Operation",
+    "schemaValid": true,
+    "semanticValid": false,
+    "instance": {
+      "id": "op_01J000000000000000000000000",
+      "workspaceId": "wsp_01J00000000000000000000000",
+      "resourceId": "cmp_01J00000000000000000000000",
+      "generation": 3,
+      "resourceVersion": "rv_01J00000000000000000000031",
+      "phase": "Pending",
+      "createdAt": "2026-09-03T01:04:00.000Z",
+      "updatedAt": "2026-09-03T01:03:00.000Z"
+    }
+  }
+]
