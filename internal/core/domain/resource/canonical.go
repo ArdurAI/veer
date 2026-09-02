@@ -3,11 +3,26 @@ package resource
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"strconv"
+	"unicode/utf8"
 )
+
+var preserveInterfaceNumbers = jsonv2.UnmarshalFromFunc(func(decoder *jsontext.Decoder, value *any) error {
+	if decoder.PeekKind() != jsontext.KindNumber {
+		return errors.ErrUnsupported
+	}
+	raw, err := decoder.ReadValue()
+	if err != nil {
+		return err
+	}
+	*value = json.Number(string(raw))
+	return nil
+})
 
 type wireResource struct {
 	APIVersion string          `json:"apiVersion"`
@@ -117,14 +132,8 @@ func UnmarshalCanonical[Spec any, Status GenerationObservations](data []byte) (R
 	if err := validateJSON(data); err != nil {
 		return zero, err
 	}
-
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var wire wireResource
-	if err := decoder.Decode(&wire); err != nil {
-		return zero, fmt.Errorf("decode resource envelope: %w", err)
-	}
-	if err := requireEOF(decoder); err != nil {
+	wire, err := decodeExactJSON[wireResource](data, "resource envelope")
+	if err != nil {
 		return zero, err
 	}
 	if len(wire.Spec) == 0 || len(wire.Status) == 0 {
@@ -211,13 +220,13 @@ func UnmarshalCanonical[Spec any, Status GenerationObservations](data []byte) (R
 	return resource, nil
 }
 
-func canonicalizeObject[Value any](value Value, field string) ([]byte, error) {
+func canonicalizeObject[Value any](value Value, field string) ([]byte, Value, error) {
+	var zero Value
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nil, fmt.Errorf("encode %s: %w", field, err)
+		return nil, zero, fmt.Errorf("encode %s: %w", field, err)
 	}
-	canonical, _, err := decodeObject[Value](encoded, field)
-	return canonical, err
+	return decodeObject[Value](encoded, field)
 }
 
 func decodeObject[Value any](data []byte, field string) ([]byte, Value, error) {
@@ -250,15 +259,9 @@ func decodeObject[Value any](data []byte, field string) ([]byte, Value, error) {
 		return nil, zero, fmt.Errorf("canonicalize %s: %w", field, err)
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(canonical))
-	decoder.DisallowUnknownFields()
-	decoder.UseNumber()
-	var value Value
-	if err := decoder.Decode(&value); err != nil {
-		return nil, zero, fmt.Errorf("decode %s value: %w", field, err)
-	}
-	if err := requireEOF(decoder); err != nil {
-		return nil, zero, fmt.Errorf("decode %s value: %w", field, err)
+	value, err := decodeExactJSON[Value](canonical, field)
+	if err != nil {
+		return nil, zero, err
 	}
 	return canonical, value, nil
 }
@@ -302,6 +305,9 @@ func normalizeCanonicalValue(value any) (any, error) {
 }
 
 func validateJSON(data []byte) error {
+	if !utf8.Valid(data) {
+		return errors.New("invalid JSON: input must be valid UTF-8")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	nodes := 0
@@ -309,6 +315,19 @@ func validateJSON(data []byte) error {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 	return requireTokenEOF(decoder)
+}
+
+func decodeExactJSON[Value any](data []byte, field string) (Value, error) {
+	var value Value
+	if err := jsonv2.Unmarshal(
+		data,
+		&value,
+		jsonv2.RejectUnknownMembers(true),
+		jsonv2.WithUnmarshalers(preserveInterfaceNumbers),
+	); err != nil {
+		return value, fmt.Errorf("decode %s with exact JSON names or unknown fields: %w", field, err)
+	}
+	return value, nil
 }
 
 func scanJSONValue(decoder *json.Decoder, depth int, nodes *int) error {

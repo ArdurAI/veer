@@ -36,6 +36,34 @@ type boundedObject struct {
 
 func (boundedObject) ObservedGenerations() []int64 { return nil }
 
+type EmbeddedRegionFields struct {
+	Value string `json:"region"`
+}
+
+type EmbeddedZoneFields struct {
+	Value string `json:"zone"`
+}
+
+type embeddedCollisionSpec struct {
+	EmbeddedRegionFields
+	EmbeddedZoneFields
+}
+
+type marshalingStatus struct {
+	ObservedGeneration          int64 `json:"observedGeneration"`
+	MarshaledObservedGeneration int64 `json:"-"`
+}
+
+func (status marshalingStatus) ObservedGenerations() []int64 {
+	return []int64{status.ObservedGeneration}
+}
+
+func (status marshalingStatus) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ObservedGeneration int64 `json:"observedGeneration"`
+	}{ObservedGeneration: status.MarshaledObservedGeneration})
+}
+
 type workspaceSpec struct {
 	SuspendReconciliation bool `json:"suspendReconciliation"`
 }
@@ -268,6 +296,52 @@ func TestSpecAndStatusGenerationTransitions(t *testing.T) {
 	}
 	if _, err := statusChanged.ReplaceStatus(future, "rv_next", time.Now()); err == nil || !strings.Contains(err.Error(), "index 2") {
 		t.Fatalf("future ReplaceStatus() error = %v, want indexed generation error", err)
+	}
+}
+
+func TestStatusObservationValidationUsesCanonicalPayload(t *testing.T) {
+	t.Parallel()
+
+	input := CreateInput[testSpec, marshalingStatus]{
+		APIVersion:      "v1alpha1",
+		Kind:            "Workspace",
+		ID:              "wsp_01J00000000000000000000000",
+		DisplayName:     "payments",
+		ResourceVersion: "rv_initial",
+		CreatedAt:       time.Date(2026, 9, 2, 17, 30, 0, 0, time.UTC),
+		Spec:            testSpec{Region: "us-east-1"},
+		Status: marshalingStatus{
+			ObservedGeneration:          1,
+			MarshaledObservedGeneration: 2,
+		},
+	}
+	if _, err := New(input); err == nil || !strings.Contains(err.Error(), "exceeds resource generation") {
+		t.Fatalf("New() error = %v, want canonical future-generation rejection", err)
+	}
+
+	input.Status = marshalingStatus{}
+	initial, err := New(input)
+	if err != nil {
+		t.Fatalf("New(valid) error = %v", err)
+	}
+	before, err := MarshalCanonical(initial)
+	if err != nil {
+		t.Fatalf("MarshalCanonical(initial) error = %v", err)
+	}
+	after, err := initial.ReplaceStatus(
+		marshalingStatus{ObservedGeneration: 1, MarshaledObservedGeneration: 2},
+		"rv_next",
+		time.Date(2026, 9, 2, 18, 0, 0, 0, time.UTC),
+	)
+	if err == nil || !strings.Contains(err.Error(), "exceeds resource generation") {
+		t.Fatalf("ReplaceStatus() error = %v, want canonical future-generation rejection", err)
+	}
+	afterBytes, marshalErr := MarshalCanonical(after)
+	if marshalErr != nil {
+		t.Fatalf("MarshalCanonical(after failed transition) error = %v", marshalErr)
+	}
+	if !bytes.Equal(before, afterBytes) {
+		t.Fatal("failed status transition changed the resource")
 	}
 }
 
@@ -554,6 +628,12 @@ func TestUnmarshalCanonicalRejectsAmbiguousInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
+	invalidUTF8 := bytes.Clone(baseline)
+	invalidIndex := bytes.Index(invalidUTF8, []byte("payments"))
+	if invalidIndex < 0 {
+		t.Fatal("canonical fixture does not contain display name")
+	}
+	invalidUTF8[invalidIndex] = 0xff
 	tests := []struct {
 		name    string
 		data    []byte
@@ -570,6 +650,26 @@ func TestUnmarshalCanonicalRejectsAmbiguousInput(t *testing.T) {
 			message: "unknown field",
 		},
 		{
+			name:    "case-folded envelope field",
+			data:    bytes.Replace(baseline, []byte(`"kind":`), []byte(`"Kind":`), 1),
+			message: "exact JSON name",
+		},
+		{
+			name:    "case-folded metadata field",
+			data:    bytes.Replace(baseline, []byte(`"displayName":`), []byte(`"DisplayName":`), 1),
+			message: "exact JSON name",
+		},
+		{
+			name:    "case-folded typed spec field",
+			data:    bytes.Replace(baseline, []byte(`"region":`), []byte(`"REGION":`), 1),
+			message: "exact JSON name",
+		},
+		{
+			name:    "invalid UTF-8",
+			data:    invalidUTF8,
+			message: "valid UTF-8",
+		},
+		{
 			name:    "non-object spec",
 			data:    nonObjectSpec,
 			message: "spec must be a JSON object",
@@ -583,6 +683,28 @@ func TestUnmarshalCanonicalRejectsAmbiguousInput(t *testing.T) {
 				t.Fatalf("UnmarshalCanonical() error = %v, want %q", err, test.message)
 			}
 		})
+	}
+}
+
+func TestTypedDecodingUsesExactNamesForPromotedFields(t *testing.T) {
+	t.Parallel()
+
+	_, decoded, err := decodeObject[embeddedCollisionSpec](
+		[]byte(`{"region":"us-east-1","zone":"a"}`),
+		"spec",
+	)
+	if err != nil {
+		t.Fatalf("decodeObject(exact names) error = %v", err)
+	}
+	if decoded.EmbeddedRegionFields.Value != "us-east-1" || decoded.EmbeddedZoneFields.Value != "a" {
+		t.Fatalf("decodeObject(exact names) = %#v", decoded)
+	}
+
+	if _, _, err := decodeObject[embeddedCollisionSpec](
+		[]byte(`{"REGION":"us-east-1","zone":"a"}`),
+		"spec",
+	); err == nil || !strings.Contains(err.Error(), "exact JSON names") {
+		t.Fatalf("decodeObject(case-folded name) error = %v, want exact-name rejection", err)
 	}
 }
 

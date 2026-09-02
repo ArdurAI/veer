@@ -168,15 +168,15 @@ func New[Spec any, Status GenerationObservations](input CreateInput[Spec, Status
 	if err != nil {
 		return zero, err
 	}
-	spec, err := canonicalizeObject(input.Spec, "spec")
+	spec, _, err := canonicalizeObject(input.Spec, "spec")
 	if err != nil {
 		return zero, err
 	}
-	status, err := canonicalizeObject(input.Status, "status")
+	status, canonicalStatus, err := canonicalizeObject(input.Status, "status")
 	if err != nil {
 		return zero, err
 	}
-	if err := validateObservations(input.Status, 1); err != nil {
+	if err := validateObservations(canonicalStatus, 1); err != nil {
 		return zero, err
 	}
 
@@ -282,7 +282,7 @@ func (resource Resource[Spec, Status]) ReplaceSpec(
 	nextResourceVersion string,
 	updatedAt time.Time,
 ) (Resource[Spec, Status], error) {
-	canonical, err := canonicalizeObject(spec, "spec")
+	canonical, _, err := canonicalizeObject(spec, "spec")
 	if err != nil {
 		return resource, err
 	}
@@ -311,11 +311,11 @@ func (resource Resource[Spec, Status]) ReplaceStatus(
 	nextResourceVersion string,
 	updatedAt time.Time,
 ) (Resource[Spec, Status], error) {
-	canonical, err := canonicalizeObject(status, "status")
+	canonical, canonicalStatus, err := canonicalizeObject(status, "status")
 	if err != nil {
 		return resource, err
 	}
-	if err := validateObservations(status, resource.metadata.generation); err != nil {
+	if err := validateObservations(canonicalStatus, resource.metadata.generation); err != nil {
 		return resource, err
 	}
 	if bytes.Equal(canonical, resource.status) {
