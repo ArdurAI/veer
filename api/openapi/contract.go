@@ -467,8 +467,16 @@ func isReviewedExtension(path, name string) bool {
 	case "x-veer-request-id-binding":
 		return path == "$/components/headers/VeerRequestId"
 	case "x-veer-path-response-id-binding":
-		return path == "$/paths//api/v1alpha1/workspaces/{workspaceId}/get" ||
-			path == "$/paths//api/v1alpha1/operations/{operationId}/get"
+		switch path {
+		case "$/paths//api/v1alpha1/workspaces/{workspaceId}/get",
+			"$/paths//api/v1alpha1/workspaces/{workspaceId}/put",
+			"$/paths//api/v1alpha1/workspaces/{workspaceId}/delete",
+			"$/paths//api/v1alpha1/workspaces/{workspaceId}/status/put",
+			"$/paths//api/v1alpha1/operations/{operationId}/get":
+			return true
+		default:
+			return false
+		}
 	case "x-veer-deprecation-sunset-minimum-notice-days",
 		"x-veer-etag-resource-version-pointer",
 		"x-veer-location-operation-id-pointer",
@@ -957,8 +965,11 @@ func validatePathResponseIDBinding(operationID string, operation map[string]any)
 		pathParameter string
 		bodyPointer   string
 	}{
-		"getOperation": {pathParameter: "operationId", bodyPointer: "/id"},
-		"getWorkspace": {pathParameter: "workspaceId", bodyPointer: "/metadata/id"},
+		"deleteWorkspace":        {pathParameter: "workspaceId", bodyPointer: "/resourceId"},
+		"getOperation":           {pathParameter: "operationId", bodyPointer: "/id"},
+		"getWorkspace":           {pathParameter: "workspaceId", bodyPointer: "/metadata/id"},
+		"replaceWorkspace":       {pathParameter: "workspaceId", bodyPointer: "/resourceId"},
+		"replaceWorkspaceStatus": {pathParameter: "workspaceId", bodyPointer: "/resourceId"},
 	}[operationID]
 	raw, exists := operation["x-veer-path-response-id-binding"]
 	if !required {
@@ -1227,6 +1238,24 @@ func validateParameters(parameters map[string]any) error {
 			return fmt.Errorf("%s: %w", contract.component, err)
 		}
 	}
+	for _, contract := range []struct {
+		name     string
+		keywords []string
+	}{
+		{name: "VeerRequestId", keywords: []string{"name", "in", "required", "description", "schema"}},
+		{name: "IdempotencyKey", keywords: []string{"name", "in", "required", "description", "schema"}},
+		{name: "IfMatch", keywords: []string{"name", "in", "required", "description", "schema"}},
+		{name: "PageSize", keywords: []string{"name", "in", "required", "description", "schema"}},
+		{name: "PageToken", keywords: []string{"name", "in", "required", "description", "schema"}},
+	} {
+		parameter, err := mapField(parameters, contract.name)
+		if err != nil {
+			return err
+		}
+		if !mapKeySetEquals(parameter, contract.keywords) {
+			return fmt.Errorf("%s parameter has unreviewed keywords", contract.name)
+		}
+	}
 	return nil
 }
 
@@ -1376,6 +1405,27 @@ func validateHeaders(headers map[string]any) error {
 		}
 		if !mapKeySetEquals(schema, keywords) {
 			return fmt.Errorf("%s header schema has unreviewed keywords", name)
+		}
+	}
+	for _, contract := range []struct {
+		name     string
+		keywords []string
+	}{
+		{name: "Deprecation", keywords: []string{"description", "schema"}},
+		{name: "DeprecationLink", keywords: []string{"description", "schema"}},
+		{name: "ETag", keywords: []string{"description", "schema"}},
+		{name: "Location", keywords: []string{"description", "schema"}},
+		{name: "RetryAfter", keywords: []string{"description", "schema"}},
+		{name: "Sunset", keywords: []string{"description", "schema"}},
+		{name: "VeerRequestId", keywords: []string{"description", "schema", "x-veer-request-id-binding"}},
+		{name: "WWWAuthenticate", keywords: []string{"description", "schema"}},
+	} {
+		header, err := mapField(headers, contract.name)
+		if err != nil {
+			return err
+		}
+		if !mapKeySetEquals(header, contract.keywords) {
+			return fmt.Errorf("%s header has unreviewed keywords", contract.name)
 		}
 	}
 	return nil
@@ -2261,6 +2311,100 @@ func validateSchemas(schemas map[string]any) error {
 	if err := validateSpecificProblemSchemas(schemas); err != nil {
 		return err
 	}
+	return validateNestedSchemaKeywords(schemas)
+}
+
+func validateNestedSchemaKeywords(schemas map[string]any) error {
+	contracts := []struct {
+		schema   string
+		property string
+		keywords []string
+	}{
+		{schema: "ResourceMetadata", property: "id", keywords: []string{"$ref", "readOnly", "type"}},
+		{schema: "ResourceMetadata", property: "displayName", keywords: []string{"maxLength", "minLength", "type"}},
+		{schema: "ResourceMetadata", property: "labels", keywords: []string{"$ref"}},
+		{schema: "ResourceMetadata", property: "generation", keywords: []string{"description", "format", "maximum", "minimum", "readOnly", "type"}},
+		{schema: "ResourceMetadata", property: "resourceVersion", keywords: []string{"description", "example", "maxLength", "minLength", "pattern", "readOnly", "type"}},
+		{schema: "ResourceMetadata", property: "createdAt", keywords: []string{"$ref", "readOnly", "type"}},
+		{schema: "ResourceMetadata", property: "updatedAt", keywords: []string{"$ref", "readOnly", "type"}},
+		{schema: "WritableMetadata", property: "displayName", keywords: []string{"maxLength", "minLength", "type"}},
+		{schema: "WritableMetadata", property: "labels", keywords: []string{"$ref"}},
+		{schema: "WorkspaceSpec", property: "suspendReconciliation", keywords: []string{"default", "description", "type"}},
+		{schema: "Condition", property: "type", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "Condition", property: "status", keywords: []string{"enum", "type"}},
+		{schema: "Condition", property: "reason", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
+		{schema: "Condition", property: "message", keywords: []string{"description", "maxLength", "type"}},
+		{schema: "Condition", property: "observedGeneration", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
+		{schema: "Condition", property: "lastTransitionAt", keywords: []string{"$ref"}},
+		{schema: "WorkspaceStatus", property: "observedGeneration", keywords: []string{"format", "maximum", "minimum", "type"}},
+		{schema: "WorkspaceStatus", property: "conditions", keywords: []string{"example", "items", "maxItems", "type"}},
+		{schema: "Workspace", property: "apiVersion", keywords: []string{"const", "type"}},
+		{schema: "Workspace", property: "kind", keywords: []string{"const", "type"}},
+		{schema: "Workspace", property: "metadata", keywords: []string{"$ref"}},
+		{schema: "Workspace", property: "spec", keywords: []string{"$ref"}},
+		{schema: "Workspace", property: "status", keywords: []string{"$ref"}},
+		{schema: "WorkspaceCreate", property: "apiVersion", keywords: []string{"const", "type"}},
+		{schema: "WorkspaceCreate", property: "kind", keywords: []string{"const", "type"}},
+		{schema: "WorkspaceCreate", property: "metadata", keywords: []string{"$ref"}},
+		{schema: "WorkspaceCreate", property: "spec", keywords: []string{"$ref"}},
+		{schema: "WorkspaceReplace", property: "apiVersion", keywords: []string{"const", "type"}},
+		{schema: "WorkspaceReplace", property: "kind", keywords: []string{"const", "type"}},
+		{schema: "WorkspaceReplace", property: "metadata", keywords: []string{"$ref"}},
+		{schema: "WorkspaceReplace", property: "spec", keywords: []string{"$ref"}},
+		{schema: "WorkspaceStatusWrite", property: "apiVersion", keywords: []string{"const", "type"}},
+		{schema: "WorkspaceStatusWrite", property: "kind", keywords: []string{"const", "type"}},
+		{schema: "WorkspaceStatusWrite", property: "status", keywords: []string{"$ref"}},
+		{schema: "StatusReceipt", property: "resourceId", keywords: []string{"$ref"}},
+		{schema: "StatusReceipt", property: "observedGeneration", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
+		{schema: "StatusReceipt", property: "resourceVersion", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "StatusReceipt", property: "updatedAt", keywords: []string{"$ref"}},
+		{schema: "WorkspaceList", property: "items", keywords: []string{"example", "items", "maxItems", "type"}},
+		{schema: "WorkspaceList", property: "nextPageToken", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "MutationReceipt", property: "resourceId", keywords: []string{"$ref"}},
+		{schema: "MutationReceipt", property: "operationId", keywords: []string{"$ref"}},
+		{schema: "MutationReceipt", property: "generation", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
+		{schema: "MutationReceipt", property: "resourceVersion", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "MutationReceipt", property: "acceptedAt", keywords: []string{"$ref"}},
+		{schema: "Operation", property: "id", keywords: []string{"$ref", "example", "type"}},
+		{schema: "Operation", property: "resourceId", keywords: []string{"$ref", "example", "type"}},
+		{schema: "Operation", property: "generation", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
+		{schema: "Operation", property: "resourceVersion", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "Operation", property: "phase", keywords: []string{"enum", "example", "type"}},
+		{schema: "Operation", property: "reason", keywords: []string{"example", "maxLength", "pattern", "type"}},
+		{schema: "Operation", property: "message", keywords: []string{"description", "example", "maxLength", "type"}},
+		{schema: "Operation", property: "createdAt", keywords: []string{"$ref"}},
+		{schema: "Operation", property: "updatedAt", keywords: []string{"$ref"}},
+		{schema: "FieldViolation", property: "field", keywords: []string{"example", "maxLength", "minLength", "pattern", "type", "x-veer-maximum-encoded-json-bytes"}},
+		{schema: "FieldViolation", property: "code", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "FieldViolation", property: "message", keywords: []string{"example", "maxLength", "pattern", "type"}},
+		{schema: "Problem", property: "type", keywords: []string{"example", "format", "maxLength", "pattern", "type"}},
+		{schema: "Problem", property: "title", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "Problem", property: "status", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
+		{schema: "Problem", property: "detail", keywords: []string{"example", "maxLength", "pattern", "type"}},
+		{schema: "Problem", property: "instance", keywords: []string{"example", "format", "maxLength", "pattern", "type"}},
+		{schema: "Problem", property: "code", keywords: []string{"example", "maxLength", "minLength", "pattern", "type"}},
+		{schema: "Problem", property: "requestId", keywords: []string{"$ref"}},
+		{schema: "Problem", property: "errors", keywords: []string{"example", "items", "maxItems", "type"}},
+		{schema: "Problem", property: "retryAfterSeconds", keywords: []string{"example", "format", "maximum", "minimum", "type"}},
+	}
+
+	for _, contract := range contracts {
+		schema, err := mapField(schemas, contract.schema)
+		if err != nil {
+			return err
+		}
+		properties, err := mapField(schema, "properties")
+		if err != nil {
+			return err
+		}
+		property, err := mapField(properties, contract.property)
+		if err != nil {
+			return err
+		}
+		if !mapKeySetEquals(property, contract.keywords) {
+			return fmt.Errorf("%s.%s schema has unreviewed keywords", contract.schema, contract.property)
+		}
+	}
 	return nil
 }
 
@@ -2607,6 +2751,19 @@ func validateProblemVariant(
 	if problemType["const"] != "urn:veer:problem:"+variant.code || title["const"] != variant.title ||
 		!numberEquals(status["const"], statusCode) || code["const"] != variant.code {
 		return fmt.Errorf("%s constants drifted for response %s", variant.schema, responseName)
+	}
+	for _, contract := range []struct {
+		name     string
+		property map[string]any
+	}{
+		{name: "type", property: problemType},
+		{name: "title", property: title},
+		{name: "status", property: status},
+		{name: "code", property: code},
+	} {
+		if !mapKeySetEquals(contract.property, []string{"const"}) {
+			return fmt.Errorf("%s.%s refinement has unreviewed keywords", variant.schema, contract.name)
+		}
 	}
 	return nil
 }

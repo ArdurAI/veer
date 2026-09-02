@@ -183,6 +183,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: `operationId "getOperation" path-response identity binding drifted`,
 		},
 		{
+			name: "delete response identity binding removed",
+			mutate: func(root map[string]any) {
+				operation := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "delete")
+				delete(operation, "x-veer-path-response-id-binding")
+			},
+			message: `operationId "deleteWorkspace" path-response identity binding drifted`,
+		},
+		{
+			name: "status response identity pointer drifts",
+			mutate: func(root map[string]any) {
+				binding := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "x-veer-path-response-id-binding")
+				binding["bodyPointer"] = "/operationId"
+			},
+			message: `operationId "replaceWorkspaceStatus" path-response identity binding drifted`,
+		},
+		{
+			name: "replacement response identity parameter drifts",
+			mutate: func(root map[string]any) {
+				binding := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}", "put", "x-veer-path-response-id-binding")
+				binding["pathParameter"] = "operationId"
+			},
+			message: `operationId "replaceWorkspace" path-response identity binding drifted`,
+		},
+		{
 			name: "status response exceeds non-read contract",
 			mutate: func(root map[string]any) {
 				responses := nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put", "responses")
@@ -505,6 +529,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "PageToken schema has unreviewed keywords",
 		},
 		{
+			name: "page token enables empty values",
+			mutate: func(root map[string]any) {
+				parameter := nestedMap(t, root, "components", "parameters", "PageToken")
+				parameter["allowEmptyValue"] = true
+			},
+			message: "PageToken parameter has unreviewed keywords",
+		},
+		{
+			name: "idempotency parameter marked deprecated",
+			mutate: func(root map[string]any) {
+				parameter := nestedMap(t, root, "components", "parameters", "IdempotencyKey")
+				parameter["deprecated"] = true
+			},
+			message: "IdempotencyKey parameter has unreviewed keywords",
+		},
+		{
 			name: "request ID reference gains narrowing sibling",
 			mutate: func(root map[string]any) {
 				schema := nestedMap(t, root, "components", "parameters", "VeerRequestId", "schema")
@@ -642,6 +682,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				delete(header, "x-veer-request-id-binding")
 			},
 			message: "VeerRequestId header request binding drifted",
+		},
+		{
+			name: "ETag response header marked deprecated",
+			mutate: func(root map[string]any) {
+				header := nestedMap(t, root, "components", "headers", "ETag")
+				header["deprecated"] = true
+			},
+			message: "ETag header has unreviewed keywords",
+		},
+		{
+			name: "request ID response header marked deprecated",
+			mutate: func(root map[string]any) {
+				header := nestedMap(t, root, "components", "headers", "VeerRequestId")
+				header["deprecated"] = true
+			},
+			message: "VeerRequestId header has unreviewed keywords",
 		},
 		{
 			name: "retry after header pattern",
@@ -876,6 +932,22 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "condition.status contract drifted",
 		},
 		{
+			name: "condition message gains narrowing const",
+			mutate: func(root map[string]any) {
+				message := nestedMap(t, root, "components", "schemas", "Condition", "properties", "message")
+				message["const"] = "Only this message"
+			},
+			message: "Condition.message schema has unreviewed keywords",
+		},
+		{
+			name: "workspace status conditions gains minimum",
+			mutate: func(root map[string]any) {
+				conditions := nestedMap(t, root, "components", "schemas", "WorkspaceStatus", "properties", "conditions")
+				conditions["minItems"] = json.Number("1")
+			},
+			message: "WorkspaceStatus.conditions schema has unreviewed keywords",
+		},
+		{
 			name: "workspace page byte ceiling removed",
 			mutate: func(root map[string]any) {
 				list := nestedMap(t, root, "components", "schemas", "WorkspaceList")
@@ -1036,6 +1108,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "WorkspaceList nextPageToken has unreviewed keywords",
 		},
 		{
+			name: "workspace list items gains minimum",
+			mutate: func(root map[string]any) {
+				items := nestedMap(t, root, "components", "schemas", "WorkspaceList", "properties", "items")
+				items["minItems"] = json.Number("1")
+			},
+			message: "WorkspaceList.items schema has unreviewed keywords",
+		},
+		{
 			name: "status receipt byte ceiling removed",
 			mutate: func(root map[string]any) {
 				receipt := nestedMap(t, root, "components", "schemas", "StatusReceipt")
@@ -1084,12 +1164,28 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			message: "operation.phase contract drifted",
 		},
 		{
+			name: "operation phase gains narrowing const",
+			mutate: func(root map[string]any) {
+				phase := nestedMap(t, root, "components", "schemas", "Operation", "properties", "phase")
+				phase["const"] = "Pending"
+			},
+			message: "Operation.phase schema has unreviewed keywords",
+		},
+		{
 			name: "problem field violations become unbounded aggregate",
 			mutate: func(root map[string]any) {
 				errors := nestedMap(t, root, "components", "schemas", "Problem", "properties", "errors")
 				errors["maxItems"] = json.Number("64")
 			},
 			message: "problem.errors aggregate bound drifted",
+		},
+		{
+			name: "problem detail gains narrowing const",
+			mutate: func(root map[string]any) {
+				detail := nestedMap(t, root, "components", "schemas", "Problem", "properties", "detail")
+				detail["const"] = "Only this detail"
+			},
+			message: "Problem.detail schema has unreviewed keywords",
 		},
 		{
 			name: "field violation message exceeds problem budget",
@@ -1114,6 +1210,14 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				field["pattern"] = "^(/([A-Za-z0-9._:-]|~0|~1)*)+$"
 			},
 			message: "FieldViolation primitive contract drifted",
+		},
+		{
+			name: "field violation code gains narrowing enum",
+			mutate: func(root map[string]any) {
+				code := nestedMap(t, root, "components", "schemas", "FieldViolation", "properties", "code")
+				code["enum"] = []any{"invalid"}
+			},
+			message: "FieldViolation.code schema has unreviewed keywords",
 		},
 		{
 			name: "problem encoded byte ceiling removed",
@@ -1365,6 +1469,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 				title["const"] = "Internal failure"
 			},
 			message: "IdempotencyConflictProblem constants drifted for response Conflict",
+		},
+		{
+			name: "problem refinement constant gains annotation",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "IdempotencyConflictProblem")
+				allOf := schema["allOf"].([]any)
+				refinement := allOf[1].(map[string]any)
+				code := nestedMap(t, refinement, "properties", "code")
+				code["description"] = "Unreviewed refinement annotation"
+			},
+			message: "IdempotencyConflictProblem.code refinement has unreviewed keywords",
+		},
+		{
+			name: "problem refinement reports first field deterministically",
+			mutate: func(root map[string]any) {
+				schema := nestedMap(t, root, "components", "schemas", "IdempotencyConflictProblem")
+				allOf := schema["allOf"].([]any)
+				refinement := allOf[1].(map[string]any)
+				typeProperty := nestedMap(t, refinement, "properties", "type")
+				code := nestedMap(t, refinement, "properties", "code")
+				typeProperty["description"] = "Unreviewed type annotation"
+				code["description"] = "Unreviewed code annotation"
+			},
+			message: "IdempotencyConflictProblem.type refinement has unreviewed keywords",
 		},
 		{
 			name: "throttled response makes retry delay optional",

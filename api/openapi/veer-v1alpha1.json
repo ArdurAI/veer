@@ -277,6 +277,10 @@
         "description": "Requires the current strong ETag. A semantic spec change advances generation once; metadata-only and replay writes do not.",
         "operationId": "replaceWorkspace",
         "x-veer-write-class": "spec",
+        "x-veer-path-response-id-binding": {
+          "pathParameter": "workspaceId",
+          "bodyPointer": "/resourceId"
+        },
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -359,6 +363,10 @@
         "description": "Accepts a generation-fenced deletion intent. The asynchronous operation owns finalization and provider cleanup evidence.",
         "operationId": "deleteWorkspace",
         "x-veer-write-class": "delete",
+        "x-veer-path-response-id-binding": {
+          "pathParameter": "workspaceId",
+          "bodyPointer": "/resourceId"
+        },
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -421,6 +429,10 @@
         "description": "Controller-only status write. It advances resourceVersion but never generation and cannot modify desired spec or metadata.",
         "operationId": "replaceWorkspaceStatus",
         "x-veer-write-class": "status",
+        "x-veer-path-response-id-binding": {
+          "pathParameter": "workspaceId",
+          "bodyPointer": "/resourceId"
+        },
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
