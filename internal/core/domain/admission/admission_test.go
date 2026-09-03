@@ -102,6 +102,17 @@ func TestWorkspaceOmissionEqualsExplicitFalse(t *testing.T) {
 	if workspace.Spec().SuspendReconciliation {
 		t.Fatal("omitted Workspace default = true, want false")
 	}
+
+	explicitTrue, err := AdmitCreate(
+		intentJSON(hierarchy.KindWorkspace, true),
+		createContext(hierarchy.KindWorkspace, hierarchy.Snapshot{}),
+	)
+	if err != nil {
+		t.Fatalf("AdmitCreate(explicit true) error = %v", err)
+	}
+	if !explicitTrue.Intent().(*model.WorkspaceIntent).Spec().SuspendReconciliation {
+		t.Fatal("explicit Workspace value true was overwritten by defaulting")
+	}
 }
 
 func TestAdmittedCreateMatrixGolden(t *testing.T) {
