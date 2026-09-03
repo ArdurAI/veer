@@ -13,6 +13,8 @@ import (
 
 func FuzzExtractBearer(f *testing.F) {
 	f.Add("Bearer "+bearerCanary, "page=1", "page=1", "theme=dark", false)
+	f.Add("Bearer redacted", "", "", "", false)
+	f.Add("Bearer credential", "", "", "", false)
 	f.Add("Bearer invalid token", "", "", "", false)
 	f.Add("", "access_token="+bearerCanary, "access_token="+bearerCanary, "", false)
 	f.Add("Bearer "+bearerCanary, "", "", "access_token=other", true)
@@ -77,7 +79,9 @@ func FuzzExtractBearer(f *testing.F) {
 			t.Fatal("successful extraction returned an invalid credential")
 		}
 		formatted := fmt.Sprintf("%s %v %+v %#v", credential, credential, credential, credential)
-		if len(token) >= 8 && strings.Contains(formatted, token) {
+		const wantFormatted = "bearer-credential(redacted) bearer-credential(redacted) " +
+			"bearer-credential(redacted) bearer-credential(redacted)"
+		if formatted != wantFormatted {
 			t.Fatal("credential formatting leaked an extracted token")
 		}
 	})

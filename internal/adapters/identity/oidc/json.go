@@ -13,6 +13,9 @@ import (
 )
 
 const (
+	// The 8,192-byte compact-token envelope checked by inspectCompactToken is
+	// authoritative. These decoded-segment limits are secondary parser bounds;
+	// the header and claims ceilings intentionally do not narrow that envelope.
 	maxProtectedHeaderBytes = 8 * 1024
 	maxClaimsBytes          = 48 * 1024
 	maxSignatureBytes       = 1024
