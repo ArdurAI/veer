@@ -1,0 +1,11 @@
+{
+  "apiVersion": "v1alpha1",
+  "kind": "Workspace",
+  "metadata": {
+    "displayName": "payments",
+    "labels": {
+      "team": "platform"
+    }
+  },
+  "spec": {}
+}

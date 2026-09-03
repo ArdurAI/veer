@@ -1,0 +1,400 @@
+{
+  "compatibility": [
+    {
+      "name": "workspace create",
+      "kind": "Workspace",
+      "role": "create",
+      "schema": "WorkspaceCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Workspace",
+        "metadata": {
+          "displayName": "workspace-create"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "workspace replace",
+      "kind": "Workspace",
+      "role": "replace",
+      "schema": "WorkspaceReplace",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Workspace",
+        "metadata": {
+          "displayName": "workspace-replace"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "workspace status",
+      "kind": "Workspace",
+      "role": "status",
+      "schema": "WorkspaceStatusWrite",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Workspace",
+        "status": {
+          "observedGeneration": 1.0,
+          "conditions": []
+        }
+      }
+    },
+    {
+      "name": "policy create",
+      "kind": "Policy",
+      "role": "create",
+      "schema": "PolicyCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Policy",
+        "metadata": {
+          "displayName": "policy-create"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "policy replace",
+      "kind": "Policy",
+      "role": "replace",
+      "schema": "PolicyReplace",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Policy",
+        "metadata": {
+          "displayName": "policy-replace"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "policy status",
+      "kind": "Policy",
+      "role": "status",
+      "schema": "PolicyStatusWrite",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Policy",
+        "status": {
+          "observedGeneration": 0,
+          "conditions": []
+        }
+      }
+    },
+    {
+      "name": "environment create",
+      "kind": "Environment",
+      "role": "create",
+      "schema": "EnvironmentCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Environment",
+        "metadata": {
+          "displayName": "environment-create"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "environment replace",
+      "kind": "Environment",
+      "role": "replace",
+      "schema": "EnvironmentReplace",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Environment",
+        "metadata": {
+          "displayName": "environment-replace"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "environment status",
+      "kind": "Environment",
+      "role": "status",
+      "schema": "EnvironmentStatusWrite",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Environment",
+        "status": {
+          "observedGeneration": 0,
+          "conditions": []
+        }
+      }
+    },
+    {
+      "name": "provider connection create",
+      "kind": "ProviderConnection",
+      "role": "create",
+      "schema": "ProviderConnectionCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "ProviderConnection",
+        "metadata": {
+          "displayName": "provider-connection-create"
+        },
+        "spec": {
+          "provider": "aws",
+          "credentialRef": {
+            "referenceId": "cred_01J0000000000000000000000",
+            "version": "ver_01J00000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "provider connection replace",
+      "kind": "ProviderConnection",
+      "role": "replace",
+      "schema": "ProviderConnectionReplace",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "ProviderConnection",
+        "metadata": {
+          "displayName": "provider-connection-replace"
+        },
+        "spec": {
+          "provider": "aws",
+          "credentialRef": {
+            "referenceId": "cred_01J0000000000000000000000",
+            "version": "ver_01J00000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "provider connection status",
+      "kind": "ProviderConnection",
+      "role": "status",
+      "schema": "ProviderConnectionStatusWrite",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "ProviderConnection",
+        "status": {
+          "observedGeneration": 0,
+          "conditions": [],
+          "capabilities": [],
+          "quotaChecks": []
+        }
+      }
+    },
+    {
+      "name": "application create",
+      "kind": "Application",
+      "role": "create",
+      "schema": "ApplicationCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Application",
+        "metadata": {
+          "displayName": "application-create"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "application replace",
+      "kind": "Application",
+      "role": "replace",
+      "schema": "ApplicationReplace",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Application",
+        "metadata": {
+          "displayName": "application-replace"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "application status",
+      "kind": "Application",
+      "role": "status",
+      "schema": "ApplicationStatusWrite",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Application",
+        "status": {
+          "observedGeneration": 0,
+          "conditions": []
+        }
+      }
+    },
+    {
+      "name": "component create",
+      "kind": "Component",
+      "role": "create",
+      "schema": "ComponentCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Component",
+        "metadata": {
+          "displayName": "component-create"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "component replace",
+      "kind": "Component",
+      "role": "replace",
+      "schema": "ComponentReplace",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Component",
+        "metadata": {
+          "displayName": "component-replace"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "component status",
+      "kind": "Component",
+      "role": "status",
+      "schema": "ComponentStatusWrite",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Component",
+        "status": {
+          "observedGeneration": 0,
+          "conditions": []
+        }
+      }
+    }
+  ],
+  "defaulting": [
+    {
+      "name": "workspace omitted defaults false",
+      "schema": "WorkspaceSpecWrite",
+      "instance": {},
+      "canonical": {
+        "suspendReconciliation": false
+      }
+    },
+    {
+      "name": "workspace explicit false remains false",
+      "schema": "WorkspaceSpecWrite",
+      "instance": {
+        "suspendReconciliation": false
+      },
+      "canonical": {
+        "suspendReconciliation": false
+      }
+    },
+    {
+      "name": "workspace explicit true remains true",
+      "schema": "WorkspaceSpecWrite",
+      "instance": {
+        "suspendReconciliation": true
+      },
+      "canonical": {
+        "suspendReconciliation": true
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "workspace write rejects null",
+      "schema": "WorkspaceSpecWrite",
+      "instance": {
+        "suspendReconciliation": null
+      }
+    },
+    {
+      "name": "workspace canonical spec requires defaulted member",
+      "schema": "WorkspaceSpec",
+      "instance": {}
+    },
+    {
+      "name": "workspace create requires spec",
+      "schema": "WorkspaceCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Workspace",
+        "metadata": {
+          "displayName": "missing-spec"
+        }
+      }
+    },
+    {
+      "name": "workspace status rejects desired state",
+      "schema": "WorkspaceStatusWrite",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Workspace",
+        "spec": {},
+        "status": {
+          "observedGeneration": 0,
+          "conditions": []
+        }
+      }
+    },
+    {
+      "name": "workspace create rejects server metadata",
+      "schema": "WorkspaceCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Workspace",
+        "metadata": {
+          "id": "wsp_01J00000000000000000000000",
+          "displayName": "server-metadata"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "workspace write rejects unknown spec member",
+      "schema": "WorkspaceSpecWrite",
+      "instance": {
+        "region": "us-east-1"
+      }
+    },
+    {
+      "name": "provider connection rejects malformed credential reference id",
+      "schema": "ProviderConnectionCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "ProviderConnection",
+        "metadata": {
+          "displayName": "malformed-credential-reference"
+        },
+        "spec": {
+          "provider": "aws",
+          "credentialRef": {
+            "referenceId": "cred/01J00000000000000000000000",
+            "version": "ver_01J00000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "workspace create rejects unsupported version",
+      "schema": "WorkspaceCreate",
+      "instance": {
+        "apiVersion": "v1beta1",
+        "kind": "Workspace",
+        "metadata": {
+          "displayName": "unsupported-version"
+        },
+        "spec": {}
+      }
+    },
+    {
+      "name": "workspace create rejects unsupported kind",
+      "schema": "WorkspaceCreate",
+      "instance": {
+        "apiVersion": "v1alpha1",
+        "kind": "Database",
+        "metadata": {
+          "displayName": "unsupported-kind"
+        },
+        "spec": {}
+      }
+    }
+  ]
+}

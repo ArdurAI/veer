@@ -1,0 +1,63 @@
+[
+  {
+    "kind": "Workspace",
+    "id": "new_workspace_01J0000000000000000",
+    "workspaceId": "new_workspace_01J0000000000000000",
+    "parent": null,
+    "displayName": "example",
+    "labels": {
+      "team": "platform"
+    },
+    "suspendReconciliation": false
+  },
+  {
+    "kind": "Policy",
+    "id": "new_policy_01J0000000000000000",
+    "workspaceId": "wsp_01J00000000000000000000000",
+    "parent": "wsp_01J00000000000000000000000",
+    "displayName": "example",
+    "labels": {
+      "team": "platform"
+    }
+  },
+  {
+    "kind": "Environment",
+    "id": "new_environment_01J0000000000000000",
+    "workspaceId": "wsp_01J00000000000000000000000",
+    "parent": "wsp_01J00000000000000000000000",
+    "displayName": "example",
+    "labels": {
+      "team": "platform"
+    }
+  },
+  {
+    "kind": "ProviderConnection",
+    "id": "new_providerconnection_01J0000000000000000",
+    "workspaceId": "wsp_01J00000000000000000000000",
+    "parent": "env_01J00000000000000000000000",
+    "displayName": "example",
+    "labels": {
+      "team": "platform"
+    }
+  },
+  {
+    "kind": "Application",
+    "id": "new_application_01J0000000000000000",
+    "workspaceId": "wsp_01J00000000000000000000000",
+    "parent": "env_01J00000000000000000000000",
+    "displayName": "example",
+    "labels": {
+      "team": "platform"
+    }
+  },
+  {
+    "kind": "Component",
+    "id": "new_component_01J0000000000000000",
+    "workspaceId": "wsp_01J00000000000000000000000",
+    "parent": "app_01J00000000000000000000000",
+    "displayName": "example",
+    "labels": {
+      "team": "platform"
+    }
+  }
+]

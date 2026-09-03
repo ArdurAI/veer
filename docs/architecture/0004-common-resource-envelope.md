@@ -77,9 +77,11 @@ The following copy-returning transitions are defined:
 - An exact canonical no-op returns the original resource and consumes neither
   a resource version nor an update timestamp.
 
-Issue [#20](https://github.com/ArdurAI/veer/issues/20) owns defaulting,
-semantic admission, immutable-field validation, and version conversion. The
-spec supplied to the envelope is therefore already admitted and defaulted.
+[ADR 0007](0007-deterministic-admission-and-version-conversion.md) defines
+defaulting, semantic admission, immutable-field validation, and version
+conversion for issue [#20](https://github.com/ArdurAI/veer/issues/20). The spec
+supplied to the envelope is therefore already admitted, defaulted, and
+converted through the internal hub.
 Issues [#26](https://github.com/ArdurAI/veer/issues/26) and
 [#30](https://github.com/ArdurAI/veer/issues/30) own atomic version issuance
 and persistence.

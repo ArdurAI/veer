@@ -309,6 +309,156 @@
       }
     ]
   },
+  "x-veer-admission": {
+    "stages": [
+      {
+        "name": "schema",
+        "codes": [
+          "request-too-large",
+          "invalid-json",
+          "json-too-deep",
+          "too-many-json-nodes",
+          "duplicate-field",
+          "unknown-field",
+          "missing-field",
+          "invalid-type",
+          "invalid-value",
+          "unsupported-version",
+          "unsupported-kind"
+        ],
+        "defaultResponse": {
+          "$ref": "#/components/responses/ValidationFailure"
+        },
+        "responseOverrides": {
+          "request-too-large": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          }
+        }
+      },
+      {
+        "name": "semantic",
+        "codes": [
+          "invalid-spec",
+          "invalid-status",
+          "invalid-order",
+          "duplicate-item",
+          "future-observation"
+        ],
+        "defaultResponse": {
+          "$ref": "#/components/responses/ValidationFailure"
+        }
+      },
+      {
+        "name": "immutable",
+        "codes": [
+          "immutable-field"
+        ],
+        "defaultResponse": {
+          "$ref": "#/components/responses/ValidationFailure"
+        }
+      },
+      {
+        "name": "reference",
+        "codes": [
+          "invalid-placement",
+          "parent-not-found",
+          "parent-kind-mismatch",
+          "workspace-mismatch"
+        ],
+        "defaultResponse": {
+          "$ref": "#/components/responses/ValidationFailure"
+        }
+      },
+      {
+        "name": "default",
+        "codes": [
+          "default-failed"
+        ],
+        "defaultResponse": {
+          "$ref": "#/components/responses/InternalFailure"
+        }
+      },
+      {
+        "name": "conversion",
+        "codes": [
+          "conversion-failed"
+        ],
+        "defaultResponse": {
+          "$ref": "#/components/responses/InternalFailure"
+        }
+      }
+    ],
+    "errorSelection": {
+      "maximum": 1,
+      "precedence": [
+        "stage-order",
+        "lexicographic-bounded-rfc6901-pointer-or-empty",
+        "lexicographic-code"
+      ],
+      "terminalSyntaxErrors": [
+        "invalid-json"
+      ],
+      "terminalWorkCeilings": [
+        "request-too-large",
+        "json-too-deep",
+        "too-many-json-nodes"
+      ]
+    },
+    "fieldPath": {
+      "syntax": "rfc6901-json-pointer",
+      "wholeDocument": "",
+      "unrepresentable": "empty-and-omit-field-violation",
+      "truncation": "forbidden",
+      "fieldViolationSchema": {
+        "$ref": "#/components/schemas/FieldViolation"
+      }
+    },
+    "failureEffects": {
+      "stateMutation": "none",
+      "queueMutation": "none",
+      "callbackInvocation": "none"
+    },
+    "defaulting": {
+      "mode": "copy-returning",
+      "deterministic": true,
+      "idempotent": true,
+      "rules": [
+        {
+          "apiVersion": "v1alpha1",
+          "kind": "Workspace",
+          "requestPointer": "/spec/suspendReconciliation",
+          "when": "absent",
+          "value": false,
+          "writeSpecSchema": {
+            "$ref": "#/components/schemas/WorkspaceSpecWrite"
+          },
+          "canonicalSpecSchema": {
+            "$ref": "#/components/schemas/WorkspaceSpec"
+          }
+        }
+      ]
+    },
+    "versionHub": {
+      "hub": "internal",
+      "scope": "spec-and-status-commands",
+      "servedVersions": [
+        "v1alpha1"
+      ],
+      "storageVersion": "v1alpha1",
+      "kinds": [
+        "Workspace",
+        "Policy",
+        "Environment",
+        "ProviderConnection",
+        "Application",
+        "Component"
+      ],
+      "conversion": "defaulted-source-to-hub",
+      "roundTrip": "semantic-equivalence-after-defaulting",
+      "unsupportedVersionCode": "unsupported-version",
+      "unsupportedKindCode": "unsupported-kind"
+    }
+  },
   "paths": {
     "/api/v1alpha1/workspaces": {
       "parameters": [
@@ -1721,7 +1871,7 @@
       },
       "WorkspaceSpec": {
         "type": "object",
-        "description": "Minimal baseline desired state. Issue #17 owns the implemented common envelope and later resource issues own richer specs.",
+        "description": "Canonical defaulted desired state returned by Veer. Issue #17 owns the implemented common envelope and later resource issues own richer specs.",
         "additionalProperties": false,
         "required": [
           "suspendReconciliation"
@@ -1729,8 +1879,19 @@
         "properties": {
           "suspendReconciliation": {
             "type": "boolean",
-            "default": false,
             "description": "Explicitly pauses new reconciliation admission without discarding durable intent."
+          }
+        }
+      },
+      "WorkspaceSpecWrite": {
+        "type": "object",
+        "description": "Sparse desired state accepted on create and replacement. An absent suspendReconciliation member defaults to false before conversion; explicit null is invalid.",
+        "additionalProperties": false,
+        "properties": {
+          "suspendReconciliation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Optional write intent; omission is materialized as false before conversion."
           }
         }
       },
@@ -1897,7 +2058,7 @@
             "$ref": "#/components/schemas/WritableMetadata"
           },
           "spec": {
-            "$ref": "#/components/schemas/WorkspaceSpec"
+            "$ref": "#/components/schemas/WorkspaceSpecWrite"
           }
         }
       },
@@ -1924,7 +2085,7 @@
             "$ref": "#/components/schemas/WritableMetadata"
           },
           "spec": {
-            "$ref": "#/components/schemas/WorkspaceSpec"
+            "$ref": "#/components/schemas/WorkspaceSpecWrite"
           }
         }
       },

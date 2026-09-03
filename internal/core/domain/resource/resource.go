@@ -424,6 +424,13 @@ func validateDisplayName(value string) error {
 	return nil
 }
 
+// ValidateDisplayName applies the common resource-envelope display-name
+// contract without constructing a resource. Admission models use this helper
+// so write metadata cannot drift from the envelope boundary.
+func ValidateDisplayName(value string) error {
+	return validateDisplayName(value)
+}
+
 func validateParent(value *ID) (*ID, error) {
 	if value == nil {
 		return nil, nil
@@ -453,6 +460,13 @@ func validateLabels(labels map[string]string) (map[string]string, error) {
 		result[key] = value
 	}
 	return result, nil
+}
+
+// NormalizeLabels validates caller-owned labels and returns an independent
+// normalized copy. Nil and empty maps both normalize to nil, matching the
+// common resource envelope's canonical representation.
+func NormalizeLabels(labels map[string]string) (map[string]string, error) {
+	return validateLabels(labels)
 }
 
 func validateResourceVersion(value string) (ResourceVersion, error) {
