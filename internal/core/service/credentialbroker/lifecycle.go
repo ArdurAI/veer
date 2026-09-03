@@ -274,30 +274,6 @@ func (broker *Broker) terminateOperation(
 		disposal.destroy()
 		return ports.RevocationNotRequired, pendingErr
 	}
-	if pending == nil && broker.lineages[keyForConnection(request)] == nil &&
-		len(broker.lineages) >= MaxTrackedConnections ||
-		pending == nil && broker.operations[keyForOperation(request)] == nil &&
-			uint64(len(broker.operations))+broker.operationReservations >= MaxTrackedOperations {
-		broker.mu.Unlock()
-		disposal.destroy()
-		return ports.RevocationNotRequired, ErrCapacity
-	}
-	var lineage *lineageState
-	if pending == nil {
-		lineage, err = broker.validateLifecycleLineageLocked(request)
-		if err != nil {
-			broker.mu.Unlock()
-			disposal.destroy()
-			return ports.RevocationNotRequired, err
-		}
-	} else {
-		lineage = broker.lineages[keyForConnection(request)]
-		if lineage == nil || lineage.epoch != pending.fromEpoch {
-			broker.mu.Unlock()
-			disposal.destroy()
-			return ports.RevocationNotRequired, ErrRevoked
-		}
-	}
 	opKey := keyForOperation(request)
 	operation := broker.operations[opKey]
 	if operation != nil && !operation.binding.Equal(request.BindingDigest()) {
@@ -327,6 +303,31 @@ func (broker *Broker) terminateOperation(
 			result = mergeRevocation(result, ports.RevocationPending)
 		}
 		return mergeRevocation(result, expiryEvidence), nil
+	}
+	if pending == nil &&
+		((broker.lineages[keyForConnection(request)] == nil &&
+			len(broker.lineages) >= MaxTrackedConnections) ||
+			(operation == nil &&
+				uint64(len(broker.operations))+broker.operationReservations >= MaxTrackedOperations)) {
+		broker.mu.Unlock()
+		disposal.destroy()
+		return ports.RevocationNotRequired, ErrCapacity
+	}
+	var lineage *lineageState
+	if pending == nil {
+		lineage, err = broker.validateLifecycleLineageLocked(request)
+		if err != nil {
+			broker.mu.Unlock()
+			disposal.destroy()
+			return ports.RevocationNotRequired, err
+		}
+	} else {
+		lineage = broker.lineages[keyForConnection(request)]
+		if lineage == nil || lineage.epoch != pending.fromEpoch {
+			broker.mu.Unlock()
+			disposal.destroy()
+			return ports.RevocationNotRequired, ErrRevoked
+		}
 	}
 	epochCount := uint64(1)
 	if lineage == nil {

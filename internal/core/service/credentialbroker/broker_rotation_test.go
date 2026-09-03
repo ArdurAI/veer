@@ -1007,7 +1007,9 @@ func TestRepeatedLifecycleDuringCanceledPendingRotationCleanupIsNeverNotRequired
 					}
 				},
 			}
-			broker := mustTestBroker(t, clock, &fakeBudget{}, &fakeResolver{}, issuer, base.Recipient())
+			budget := &fakeBudget{}
+			resolver := &fakeResolver{}
+			broker := mustTestBroker(t, clock, budget, resolver, issuer, base.Recipient())
 			prior, err := broker.Acquire(context.Background(), base)
 			if err != nil {
 				t.Fatalf("Acquire(base) error = %v", err)
@@ -1088,15 +1090,52 @@ func TestRepeatedLifecycleDuringCanceledPendingRotationCleanupIsNeverNotRequired
 			if got := issuer.revokeCount(); got != 1 {
 				t.Fatalf("cleanup Revoke calls = %d, want exactly 1", got)
 			}
-			if follower.name == "RevokeConnection" {
-				result, err := broker.RevokeConnection(context.Background(), next)
-				if err != nil ||
-					(result != ports.RevocationNotRequired && result != ports.RevocationExpiryBound) {
-					t.Fatalf("RevokeConnection(exact completed pending target) = %v, %v, want idempotent not-required/expiry-bound", result, err)
+			broker.mu.Lock()
+			lineageBefore := *broker.lineages[keyForConnection(next)]
+			operationBefore := *broker.operations[keyForOperation(next)]
+			nextEpochBefore := broker.nextEpoch
+			lineagesBefore := len(broker.lineages)
+			operationsBefore := len(broker.operations)
+			broker.mu.Unlock()
+			claimsBefore, resolvesBefore := budget.callCount(), resolver.callCount()
+			issuesBefore, revokesBefore := issuer.issueCount(), issuer.revokeCount()
+
+			result, replayErr := follower.call(context.Background(), broker, next)
+			if replayErr != nil ||
+				(result != ports.RevocationNotRequired && result != ports.RevocationExpiryBound) {
+				t.Fatalf("%s(exact completed pending target) = %v, %v, want idempotent not-required/expiry-bound", follower.name, result, replayErr)
+			}
+			if follower.name != "RevokeConnection" {
+				conflictConfig := nextConfig
+				conflictConfig.version = "opaque_conflict"
+				conflict := mustTestRequest(t, conflictConfig)
+				if result, conflictErr := follower.call(context.Background(), broker, conflict); result != ports.RevocationNotRequired || !errors.Is(conflictErr, ErrConflict) {
+					t.Fatalf("%s(conflicting terminal operation) = %v, %v, want not-required, ErrConflict", follower.name, result, conflictErr)
 				}
-				if got := issuer.revokeCount(); got != 1 {
-					t.Fatalf("idempotent RevokeConnection made %d cleanup calls, want 1 total", got)
+
+				higherConfig := nextConfig
+				higherConfig.operation = 3
+				higher := mustTestRequest(t, higherConfig)
+				if result, higherErr := follower.call(context.Background(), broker, higher); result != ports.RevocationNotRequired || !errors.Is(higherErr, ErrCredentialRotationRequired) {
+					t.Fatalf("%s(unbound higher-generation operation) = %v, %v, want not-required, ErrCredentialRotationRequired", follower.name, result, higherErr)
 				}
+			}
+			if budget.callCount() != claimsBefore || resolver.callCount() != resolvesBefore ||
+				issuer.issueCount() != issuesBefore || issuer.revokeCount() != revokesBefore {
+				t.Fatalf("idempotent or rejected %s replay called a backend", follower.name)
+			}
+			broker.mu.Lock()
+			lineageAfter := broker.lineages[keyForConnection(next)]
+			operationAfter := broker.operations[keyForOperation(next)]
+			nextEpochAfter := broker.nextEpoch
+			lineagesAfter := len(broker.lineages)
+			operationsAfter := len(broker.operations)
+			broker.mu.Unlock()
+			if lineageAfter == nil || *lineageAfter != lineageBefore ||
+				operationAfter == nil || *operationAfter != operationBefore ||
+				nextEpochAfter != nextEpochBefore || lineagesAfter != lineagesBefore ||
+				operationsAfter != operationsBefore {
+				t.Fatalf("%s replay classification mutated broker state", follower.name)
 			}
 			_, _ = broker.Close(context.Background())
 		})
