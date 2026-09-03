@@ -30,7 +30,7 @@ attacker, trust-boundary, and control-owner field to one compact review surface.
 
 | Deployment or workflow | Supported alpha boundary | Security status |
 | --- | --- | --- |
-| Production control plane | One regional, multi-Availability-Zone API/worker deployment with RDS PostgreSQL, SQS Standard, encrypted audit/recovery objects, and AWS and Kubernetes adapters | Accepted design target; runtime controls are not implemented yet |
+| Production control plane | One regional, multi-Availability-Zone API/worker deployment with RDS PostgreSQL, SQS Standard, encrypted audit/recovery objects, and AWS and Kubernetes adapters | The provider-neutral authentication library boundary is implemented; route/server, policy, persistence, reconciliation, audit, provider, and deployment controls remain design targets |
 | Developer and contract-test profile | One trusted developer host, local PostgreSQL with the same schema, PostgreSQL queue adapter, fake provider, and no cloud credentials or paid service | Bootstrap and local quality controls are implemented; tenant isolation is not claimed against a hostile host owner |
 | Recovery workflow | Restore into an isolated validation target, verify integrity and freshness, revalidate authority, and only then cut over | Conditional privileged workflow; qualification belongs to issue #64 |
 | Administration and redrive | Strong-authenticated, reasoned, time-bounded, scoped, audited inspect/retry/cancel/quarantine operations | Conditional privileged workflow; implementation belongs to issues #27, #34, and #64 |
@@ -45,7 +45,7 @@ and cost boundaries are fixed by `docs/architecture/0002-alpha-implementation-st
 | Component | Security-relevant responsibility | Source evidence |
 | --- | --- | --- |
 | API and GitOps edge | Bound request size and destination, authenticate, authorize, validate, admit, and atomically record accepted intent | `docs/architecture/overview.md:5-24`; `docs/architecture/0002-alpha-implementation-stack.md:72-87` |
-| Identity and policy | Normalize OIDC principals; default deny by stable workspace/environment identity; persist policy version and decision | `docs/security/model.md:11-18`; `docs/architecture/overview.md:72-77` |
+| Identity and policy | Validate configured OIDC JWT access-token trust anchors and normalize distinct Human/Workload principals; authorization remains default deny by stable workspace/environment identity | `docs/architecture/0008-oidc-authentication-and-principals.md:68-144`; `docs/architecture/overview.md:100-114` |
 | PostgreSQL state store | Authoritative desired/observed state, generation, idempotency, integrity anchor, audit data, and outbox in one transaction | `docs/architecture/0002-alpha-implementation-stack.md:128-165` |
 | Reconciliation queue and worker | Treat deliveries as duplicate and unordered; reload authoritative state; acquire a fence; reauthorize; commit before acknowledgement | `docs/architecture/0002-alpha-implementation-stack.md:136-151`; `docs/architecture/0002-alpha-implementation-stack.md:174-204` |
 | Credential broker and provider adapters | Resolve an owned connection into a short-lived, scoped session; verify destination identity; expose no caller or provider credential | `docs/security/model.md:35-63`; `docs/architecture/overview.md:92-97` |
@@ -97,7 +97,7 @@ flowchart LR
 | A-04 | Provider resources, account/cluster identity, external identifiers, ownership evidence, quota, and cost authority | Correct destination, ownership, integrity, bounded mutation, and safe deletion | `docs/architecture/overview.md:92-97` |
 | A-05 | Audit events, integrity anchors, manifests, exports, and recovery evidence | Completeness, ordering, tamper evidence, attribution, confidentiality, and retained availability | `docs/security/model.md:65-70`; `docs/architecture/0001-alpha-operational-bounds.md:727-738` |
 | A-06 | Outbox records, queue messages, receipts, idempotency records, leases, fences, and operation state | Integrity, freshness, bounded replay, single current owner, and recoverability | `docs/architecture/0002-alpha-implementation-stack.md:134-151` |
-| A-07 | OIDC tokens and normalized personal/workload identity claims | Authenticity, confidentiality, audience binding, minimum disclosure, expiry, and redaction | `docs/architecture/overview.md:72-77`; issue #22 |
+| A-07 | OIDC tokens and normalized personal/workload identity claims | Authenticity, confidentiality, audience binding, minimum disclosure, expiry, and redaction | `docs/architecture/0008-oidc-authentication-and-principals.md:37-66`; `docs/architecture/0008-oidc-authentication-and-principals.md:190-213`; issue #22 |
 | A-08 | Service availability, quotas, rate limits, concurrency, telemetry cardinality, and cost budgets | Fairness, bounded consumption, measurable saturation, and fail-safe shedding | `docs/architecture/0001-alpha-operational-bounds.md:665-699` |
 | A-09 | Source, dependencies, CI identities, binaries, images, SBOMs, signatures, and provenance | Integrity, authenticity, reproducibility, least privilege, and consumer verification | `docs/architecture/0002-alpha-implementation-stack.md:395-409`; issues #15 and #66 |
 
@@ -152,7 +152,7 @@ authority each Veer control must prevent.
 
 | ID | Crossing and transferred authority | Required enforcement | Verification owner |
 | --- | --- | --- | --- |
-| TB-01 | External clients and GitOps automation to API: token, request, desired state, source revision, and idempotency key | TLS, peer/destination rules, body/time limits, schema validation, OIDC validation, correlation, and unauthenticated fail-closed behavior | OWN-IDENTITY |
+| TB-01 | External clients and GitOps automation to API: token, request, desired state, source revision, and idempotency key | TLS, peer/destination rules, body/time limits, schema validation, one stripped header-only Bearer value, rejected-carrier metadata scrubbing, configured OIDC validation, correlation, and explicit absent-credential handling | OWN-IDENTITY |
 | TB-02 | API/core to identity and policy: normalized principal, action, resource hierarchy, attributes, and policy version | Stable IDs, default deny, deterministic matrix, no name-based authorization, explicit cross-boundary denial | OWN-IDENTITY |
 | TB-03 | API/worker/core to PostgreSQL: scoped queries, mutations, transactions, and health | Verified TLS, parameterized SQL, composite tenant constraints, non-owner runtime role, forced row policy defense-in-depth, atomicity, and safe errors | OWN-DATA |
 | TB-04 | PostgreSQL outbox to queue: work identity, scope, generation, digest, priority, and availability | Bounded non-secret reference, restrictive publisher role, TLS/encryption, durable publish status, and duplicate-safe semantics | OWN-RECONCILIATION |
@@ -301,14 +301,18 @@ review; a reduction must preserve legal, recovery, and audit evidence.
 
 ### Assumptions and unresolved evidence
 
-- The production API/worker, store schema, OIDC, policy engine, credential
-  broker, provider adapters, audit pipeline, and deployment manifests do not yet
-  exist. Their controls are design requirements linked to live issues.
+- The provider-neutral principal, strict Bearer extraction, configured OIDC JWT
+  validation, and bounded JWKS rotation library boundaries exist. The production
+  API/worker and route wiring, store schema, policy engine, credential broker,
+  provider adapters, audit pipeline, and deployment manifests do not yet exist;
+  their controls remain requirements linked to live issues.
 - The external identity provider, AWS account administrator, Kubernetes cluster
   administrator, DNS/PKI roots, and regional KMS boundaries are operated
   correctly. Compromise is handled as residual/recovery risk, not assumed
   tenant authority.
-- Exact OIDC issuers, audiences, client flows, token lifetimes, provider role
+- Exact deployed OIDC issuer, audience, JWKS URI, Human/Workload mappings,
+  algorithms, token lifetime, skew, and cache bounds are mandatory operator
+  configuration, not discovery inputs. Browser/client flows, provider role
   names/policies, Kubernetes topology, secret manager, audit integrity scheme,
   and export destination remain unresolved until their owning issues decide and
   test them.
@@ -329,7 +333,7 @@ verifier requires readable story actors and ledger actors to match exactly.
 
 | Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Follow-up and verification |
 | --- | --- | --- | --- | --- | --- | --- |
-| High | **TM-001 — Forged, replayed, or misbound OIDC identity.** ACT-NET gains a valid Veer principal or another audience's authority. | Public API and incorrect issuer, audience, signature, algorithm, expiry, JWKS, or replay handling | Unauthorized workspace read or mutation | OIDC, short lifetime, and token exclusion are accepted requirements only | Strict issuer/audience/algorithm/signature/time/JWKS validation, human/workload separation, raw-token canaries, and negative corpus | Follow-up: Issue #22; verification: Issues #22 and #28 |
+| High | **TM-001 — Forged, replayed, or misbound OIDC identity.** ACT-NET gains a valid Veer principal or another audience's authority. | Public API and incorrect issuer, audience, signature, algorithm, expiry, JWKS, or replay handling; direct adapter misuse or route wiring can expose the same boundary | Unauthorized workspace read or mutation | OIDC, short lifetime, and token exclusion are accepted requirements only for route/server wiring; bounded single-header extraction, explicit trust anchors, strict JWT validation, bounded JWKS rotation, Human/Workload separation, redaction canaries, and rejected-carrier request-metadata scrubbing are implemented as library boundaries | Strict issuer/audience/algorithm/signature/time/JWKS validation, human/workload separation, raw-token canaries, and negative corpus are implemented; preserve exact carrier/type checks, post-rejection request-surface checks, short configured lifetimes, fail-closed route wiring, and cross-cutting regression coverage | Follow-up: Issue #22; verification: Issues #22 and #28 |
 | High | **TM-002 — Cross-workspace authorization or role escalation.** ACT-MEMBER turns one workspace action into another workspace or administrator action. | Missing stable scope, name-based lookup, incomplete action matrix, or self-grant path | Tenant data disclosure, mutation, and provider authority | Default deny and stable IDs are accepted invariants | Deterministic role/action matrix, explicit parent scope, non-self-escalation, dual admission/execution checks, and isolation matrix | Follow-up: Issues #23, #24, and #26; verification: Issues #23, #26, and #28 |
 | High | **TM-003 — Stale authority executes an accepted plan.** ACT-MEMBER retains effects after revocation, policy change, generation change, or approval expiry. | Asynchronous work and no execution-time freshness binding | Unauthorized provider change despite correct initial admission | Plans persist decision context by design | Bind actor/policy/generation/connection/digest; reauthorize immediately before effects; invalidate stale approvals and plans | Follow-up: Issues #24, #33, and #61; verification: Issues #24 and #61 |
 | High | **TM-004 — ProviderConnection substitution creates a confused deputy.** ACT-MEMBER selects another workspace's connection or changes destination after approval. | Weak connection ownership or mutable execution context | Cross-account/cluster mutation using Veer's broker | Adapters are intended to receive scoped context, not caller credentials | Immutable owned connection ID in plan and operation, current scope check, destination identity verification, and recipient-bound session | Follow-up: Issues #25, #26, and #39; verification: Issues #25 and #39 |

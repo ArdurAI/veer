@@ -67,6 +67,10 @@ errors, and internal versionless conversion hub are fixed by
 validates shape and domain meaning before side effects; authentication,
 authorization, policy, quota, idempotency, and persistence remain separate
 service boundaries.
+[ADR 0008](0008-oidc-authentication-and-principals.md) fixes strict
+header-only bearer extraction, explicit provider-neutral OIDC trust anchors,
+Human and Workload principal modeling, bounded JWT/JWKS validation, safe
+authentication outcomes, and token/claim redaction. It adds no route or server.
 
 ## Reconciliation contract
 
@@ -95,7 +99,17 @@ not imply that asynchronous provider work has already completed.
 
 ### Identity and policy
 
-- OIDC authentication for people and workloads.
+- Exact configured HTTPS issuer, audience, JWKS URI, type, algorithm, lifetime,
+  clock-skew, and cache bounds; issuer discovery is not a trust source.
+- One bounded `Authorization` Bearer value for JWT access tokens; query, cookie,
+  and form token carriers are unsupported. Authorization is always removed;
+  rejected query and cookie carriers are scrubbed from downstream request and
+  access-log surfaces.
+- Explicit Human and Workload principals with exact issuer-and-subject logical
+  identity, canonical bounded audiences/groups, and a Workload-only identity
+  claim.
+- Closed token-free invalid/unavailable outcomes, no anonymous principal, and
+  no generic credential or personal-claim serialization.
 - Workspace- and environment-scoped authorization.
 - Policy decisions captured with actor, action, resource, inputs, and outcome.
 - Short-lived provider credentials wherever the provider supports them.

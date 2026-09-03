@@ -64,6 +64,29 @@ Run `./hack/dev versions` to verify and print the installed versions. A changed
 manifest invalidates the prepared-state marker, so subsequent commands stop
 with an instruction to rerun bootstrap.
 
+## Vendored Go dependencies
+
+Runtime Go module source is committed under `vendor/`. Normal format, lint,
+build, and test commands force `-mod=vendor` while module proxy, checksum
+database, and version-control downloads remain disabled. A clean checkout can
+therefore compile and test without module-network access, a repository token,
+or proxy credentials.
+
+The current runtime dependency is
+[`github.com/go-jose/go-jose/v4` v4.1.4](https://github.com/go-jose/go-jose/releases/tag/v4.1.4),
+selected for OIDC JWT signature and JWK handling. The committed version is
+Apache-2.0 licensed, requires Go 1.24 or newer, and has no non-standard-library
+module dependencies. [ADR 0008](architecture/0008-oidc-authentication-and-principals.md)
+defines the surrounding trust, parsing, network, redaction, and error boundary.
+
+`./hack/dev bootstrap` still downloads only the checksum-pinned tools in
+`tools/manifest.tsv`; it never resolves application modules. Dependency updates
+are a separate, explicitly online maintenance operation: review the primary
+release and license, change `go.mod`/`go.sum`, regenerate `vendor/`, inspect the
+result, and then rerun the complete network-disabled check. Do not work around a
+missing or inconsistent vendor tree by enabling a module proxy in an ordinary
+check.
+
 ## Commands
 
 | Command | Behavior |
