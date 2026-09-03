@@ -607,7 +607,7 @@ prepare_offline_environment() {
   GOPROXY=off
   GOSUMDB=off
   GOVCS='*:off'
-  GOFLAGS=-mod=readonly
+  GOFLAGS=-mod=vendor
   CGO_ENABLED=0
   export PATH GOROOT GOCACHE GOLANGCI_LINT_CACHE GOPATH GOMODCACHE \
     XDG_CACHE_HOME GOTOOLCHAIN GOWORK GOPROXY GOSUMDB GOVCS GOFLAGS CGO_ENABLED
@@ -625,7 +625,8 @@ regular_source_files() {
 }
 
 go_source_files() {
-  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- '*.go' |
+  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- \
+    '*.go' ':(exclude)vendor/**' |
     regular_source_files
 }
 

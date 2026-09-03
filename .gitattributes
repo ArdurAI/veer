@@ -1,0 +1,2 @@
+# Keep mechanically generated third-party source byte-for-byte reproducible.
+vendor/** -whitespace linguist-vendored
