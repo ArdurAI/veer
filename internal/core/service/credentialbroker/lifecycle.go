@@ -113,8 +113,20 @@ func (broker *Broker) RevokeConnection(
 		return mergeRevocation(result, ports.RevocationPending), nil
 	}
 	lineage := broker.lineages[keyForConnection(request)]
-	if lineage != nil &&
-		lineage.revokedThrough >= request.ConnectionGeneration() {
+	if lineage != nil {
+		switch {
+		case request.ConnectionGeneration() < lineage.generation:
+			broker.mu.Unlock()
+			disposal.destroy()
+			return ports.RevocationNotRequired, ErrStale
+		case request.ConnectionGeneration() == lineage.generation &&
+			!sameLineageRequest(lineage, request):
+			broker.mu.Unlock()
+			disposal.destroy()
+			return ports.RevocationNotRequired, ErrConflict
+		}
+	}
+	if lineage != nil && lineage.revokedThrough >= request.ConnectionGeneration() {
 		attempts := broker.unfinishedRevocationsLocked(
 			func(cell *sessionCell) bool {
 				return cell.connKey == keyForConnection(request)

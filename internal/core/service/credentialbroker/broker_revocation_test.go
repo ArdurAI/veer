@@ -48,6 +48,94 @@ func (tracker *blockingRevocations) snapshot() (active, maximum, calls int) {
 	return tracker.active, tracker.maximum, tracker.calls
 }
 
+func TestConnectionRevocationReplayPreservesLineageFences(t *testing.T) {
+	clock := newManualClock(testBrokerNow)
+	currentConfig := defaultTestRequestConfig()
+	currentConfig.generation = 2
+	currentConfig.version = "opaque_B"
+	current := mustTestRequest(t, currentConfig)
+	budget := &fakeBudget{}
+	resolver := &fakeResolver{}
+	issuer := &fakeIssuer{clock: clock}
+	broker := mustTestBroker(t, clock, budget, resolver, issuer, current.Recipient())
+	lease, err := broker.Acquire(context.Background(), current)
+	if err != nil {
+		t.Fatalf("Acquire(current) error = %v", err)
+	}
+	if result, revokeErr := broker.RevokeConnection(context.Background(), current); revokeErr != nil || result != ports.RevocationProviderConfirmed {
+		t.Fatalf(
+			"RevokeConnection(current) = %v, %v, want provider-confirmed, nil",
+			result,
+			revokeErr,
+		)
+	}
+
+	staleConfig := defaultTestRequestConfig()
+	stale := mustTestRequest(t, staleConfig)
+	conflictConfig := currentConfig
+	conflictConfig.version = "opaque_conflict"
+	conflict := mustTestRequest(t, conflictConfig)
+
+	broker.mu.Lock()
+	lineage := broker.lineages[keyForConnection(current)]
+	if lineage == nil {
+		broker.mu.Unlock()
+		t.Fatal("current lineage is absent after revocation")
+	}
+	lineageBefore := *lineage
+	nextEpochBefore := broker.nextEpoch
+	broker.mu.Unlock()
+	claimsBefore, resolvesBefore := budget.callCount(), resolver.callCount()
+	issuesBefore, revokesBefore := issuer.issueCount(), issuer.revokeCount()
+
+	if result, staleErr := broker.RevokeConnection(context.Background(), stale); result != ports.RevocationNotRequired || !errors.Is(staleErr, ErrStale) {
+		t.Fatalf(
+			"RevokeConnection(stale) = %v, %v, want not-required, ErrStale",
+			result,
+			staleErr,
+		)
+	}
+	if result, conflictErr := broker.RevokeConnection(context.Background(), conflict); result != ports.RevocationNotRequired || !errors.Is(conflictErr, ErrConflict) {
+		t.Fatalf(
+			"RevokeConnection(conflicting current generation) = %v, %v, want not-required, ErrConflict",
+			result,
+			conflictErr,
+		)
+	}
+	if result, replayErr := broker.RevokeConnection(context.Background(), current); replayErr != nil || result != ports.RevocationNotRequired {
+		t.Fatalf(
+			"RevokeConnection(exact replay) = %v, %v, want not-required, nil",
+			result,
+			replayErr,
+		)
+	}
+
+	if budget.callCount() != claimsBefore || resolver.callCount() != resolvesBefore ||
+		issuer.issueCount() != issuesBefore || issuer.revokeCount() != revokesBefore {
+		t.Fatal("revocation classification or replay called a backend")
+	}
+	broker.mu.Lock()
+	lineageAfter := broker.lineages[keyForConnection(current)]
+	nextEpochAfter := broker.nextEpoch
+	broker.mu.Unlock()
+	if lineageAfter == nil || *lineageAfter != lineageBefore || nextEpochAfter != nextEpochBefore {
+		t.Fatalf(
+			"revocation classification mutated lineage: before=%+v/%d after=%+v/%d",
+			lineageBefore,
+			nextEpochBefore,
+			lineageAfter,
+			nextEpochAfter,
+		)
+	}
+
+	if closeErr := lease.Close(); closeErr != nil {
+		t.Fatalf("Lease.Close() error = %v", closeErr)
+	}
+	if _, closeErr := broker.Close(context.Background()); closeErr != nil {
+		t.Fatalf("Broker.Close() error = %v", closeErr)
+	}
+}
+
 type barrierClock struct {
 	now     time.Time
 	entered chan<- struct{}
