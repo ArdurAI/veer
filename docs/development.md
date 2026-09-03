@@ -115,6 +115,45 @@ role matrix, reservations, inheritance, and PolicySpec semantics to the runtime
 package. The OpenAPI document remains a reference contract and does not prove
 that an API route or worker invokes authorization.
 
+Credential-broker contract changes must keep
+[`ADR 0010`](architecture/0010-provider-neutral-credential-broker.md), the
+`internal/core/domain/credential` constants and constructors, the split
+`SecretResolver` and `SessionIssuer` ports, the
+`internal/core/service/credentialbroker` surface, and the formal threat-model
+status in one reviewed change. Focused tests must cover exact Workspace,
+Environment, ProviderConnection, operation, target-generation, action, and
+recipient binding; generation/version rotation; expiry and refresh boundaries;
+ordered overlapping clock clamping, fresh zero/rollback and sequence-saturation
+failure, later recovery, and the raw resolver-return source-TTL anchor;
+the exact one-hour source-reuse cutoff plus timer-free cleanup-capable
+acquisition/rotation/lifecycle, sweep, and close paths; TTL borrow-deferred versus
+explicit-invalidation immediate destruction; private source ownership across the
+post-`Resolve` settlement gap; destroy-before-cancel ordering, including joined
+concurrent invalidators, for connection invalidation, broker close, rotation
+cutover, and last-waiter source/rotation abandonment; Operation termination that
+destroys a matching pending rotation source without destroying the shared
+current-generation source; local epochs and tombstones; capacity and
+single-flight behavior; and credential serialization canaries. They must also
+prove durable-budget claim settlement truth independently from local
+publication, priority partitioning, local-first cancellation and revocation,
+closed revocation-result aggregation, and the handle-only `Lease.Close`
+boundary. They must exercise all eleven classified failures, shared-state
+`Broker` and `Lease` copies, lease reservation across rotation commit and late
+cancellation, exactly-once cleanup of every valid unpublished issuer result,
+joining or pending old-flight cleanup, the broker-wide 16-call revocation queue,
+generation-wide tombstoning when current-generation revoke cancels a pending
+rotation, and expiry evidence through the exact provider expiry. Capacity tests
+must prove that material and disposal slots remain charged through `Destroy` and that
+connection high-water state and terminal Operation tombstones are not evicted to
+admit new identities. These are deterministic contract checks: they use
+injected time and test doubles, make no cloud or paid-service request, and do
+not establish runtime worker enforcement or distributed revocation.
+
+Issue #25 does not change the public transport. `./hack/dev api` must continue
+to report exactly four paths, seven operations, and 81 schemas. Adding broker
+material, a backend location, or session state to OpenAPI is a contract failure,
+not a required projection update.
+
 ## Network, disk, and CI cost safeguards
 
 - Only `bootstrap` needs public network access. Verified downloads are cached

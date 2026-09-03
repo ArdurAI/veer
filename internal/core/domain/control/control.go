@@ -33,29 +33,31 @@ var (
 	currencyPattern    = regexp.MustCompile(`^[A-Z]{3}$`)
 	regionPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-	ErrInvalidPolicyStatus             = errors.New("invalid policy status")
-	ErrInvalidProviderConnectionSpec   = errors.New("invalid provider connection spec")
-	ErrInvalidProviderConnectionStatus = errors.New("invalid provider connection status")
-	ErrInvalidCredentialReference      = errors.New("invalid credential reference")
-	ErrInvalidProvider                 = errors.New("invalid provider identifier")
-	ErrInvalidProviderCapability       = errors.New("invalid provider capability")
-	ErrInvalidCapabilityState          = errors.New("invalid provider capability state")
-	ErrInvalidQuotaCheck               = errors.New("invalid quota check")
-	ErrInvalidQuotaState               = errors.New("invalid quota state")
-	ErrInvalidCostEstimate             = errors.New("invalid cost estimate")
-	ErrInvalidCostState                = errors.New("invalid cost state")
-	ErrInvalidConfidence               = errors.New("invalid cost confidence")
-	ErrInvalidObservationName          = errors.New("invalid observation name")
-	ErrInvalidObservationSource        = errors.New("invalid observation source")
-	ErrInvalidObservationReason        = errors.New("invalid observation reason")
-	ErrInvalidObservationTimestamp     = errors.New("invalid observation timestamp")
-	ErrInvalidObservationGeneration    = errors.New("invalid observation generation")
-	ErrObservationCollectionRequired   = errors.New("observation collection is required")
-	ErrTooManyProviderCapabilities     = errors.New("provider capability set exceeds alpha limit")
-	ErrTooManyQuotaChecks              = errors.New("quota check set exceeds alpha limit")
-	ErrDuplicateObservation            = errors.New("duplicate observation name")
-	ErrObservationOrder                = errors.New("observation names are not sorted")
-	ErrInvalidControlPlacement         = errors.New("invalid control resource placement")
+	ErrInvalidPolicyStatus                     = errors.New("invalid policy status")
+	ErrInvalidProviderConnectionSpec           = errors.New("invalid provider connection spec")
+	ErrInvalidProviderConnectionSpecTransition = errors.New("invalid provider connection spec transition")
+	ErrProviderConnectionRebind                = errors.New("provider connection provider and credential reference identity are immutable")
+	ErrInvalidProviderConnectionStatus         = errors.New("invalid provider connection status")
+	ErrInvalidCredentialReference              = errors.New("invalid credential reference")
+	ErrInvalidProvider                         = errors.New("invalid provider identifier")
+	ErrInvalidProviderCapability               = errors.New("invalid provider capability")
+	ErrInvalidCapabilityState                  = errors.New("invalid provider capability state")
+	ErrInvalidQuotaCheck                       = errors.New("invalid quota check")
+	ErrInvalidQuotaState                       = errors.New("invalid quota state")
+	ErrInvalidCostEstimate                     = errors.New("invalid cost estimate")
+	ErrInvalidCostState                        = errors.New("invalid cost state")
+	ErrInvalidConfidence                       = errors.New("invalid cost confidence")
+	ErrInvalidObservationName                  = errors.New("invalid observation name")
+	ErrInvalidObservationSource                = errors.New("invalid observation source")
+	ErrInvalidObservationReason                = errors.New("invalid observation reason")
+	ErrInvalidObservationTimestamp             = errors.New("invalid observation timestamp")
+	ErrInvalidObservationGeneration            = errors.New("invalid observation generation")
+	ErrObservationCollectionRequired           = errors.New("observation collection is required")
+	ErrTooManyProviderCapabilities             = errors.New("provider capability set exceeds alpha limit")
+	ErrTooManyQuotaChecks                      = errors.New("quota check set exceeds alpha limit")
+	ErrDuplicateObservation                    = errors.New("duplicate observation name")
+	ErrObservationOrder                        = errors.New("observation names are not sorted")
+	ErrInvalidControlPlacement                 = errors.New("invalid control resource placement")
 )
 
 // PolicySpec is the provider-independent authorization policy contract.
@@ -217,6 +219,29 @@ func ValidateProviderConnectionSpec(spec ProviderConnectionSpec) error {
 	}
 	if err := ValidateCredentialReference(spec.CredentialRef); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidProviderConnectionSpec, err)
+	}
+	return nil
+}
+
+// CheckProviderConnectionSpecTransition validates two complete specs and
+// permits only an exact replay or independent rotation of the external
+// credential version. Changing provider or reference identity requires a new
+// ProviderConnection resource so an approved operation cannot be redirected
+// through an in-place confused-deputy rebind.
+func CheckProviderConnectionSpecTransition(before, after ProviderConnectionSpec) error {
+	if err := ValidateProviderConnectionSpec(before); err != nil {
+		return fmt.Errorf("%w: before: %w", ErrInvalidProviderConnectionSpecTransition, err)
+	}
+	if err := ValidateProviderConnectionSpec(after); err != nil {
+		return fmt.Errorf("%w: after: %w", ErrInvalidProviderConnectionSpecTransition, err)
+	}
+	if before.Provider != after.Provider ||
+		before.CredentialRef.ReferenceID != after.CredentialRef.ReferenceID {
+		return fmt.Errorf(
+			"%w: %w",
+			ErrInvalidProviderConnectionSpecTransition,
+			ErrProviderConnectionRebind,
+		)
 	}
 	return nil
 }
