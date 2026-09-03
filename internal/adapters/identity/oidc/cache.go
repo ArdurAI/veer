@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -291,15 +292,20 @@ func (cache *keyCache) refresh(
 	}
 	if cache.attempt != observedAttempt {
 		lastErr := cache.lastAttemptError
+		if lastErr != nil || reason == refreshReactive {
+			cache.recordCooldown(reason, cache.lastAttemptAt)
+		}
+		if lastErr != nil && reason == refreshProactive {
+			// Match a proactive caller joining the completed failed flight: its
+			// cooldown must continue to gate required refresh after staleness.
+			cache.recordCooldown(refreshRequired, cache.lastAttemptAt)
+		}
 		if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
 			cache.mu.Unlock()
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			return errKeySourceUnavailable
-		}
-		if lastErr != nil || reason == refreshReactive {
-			cache.recordCooldown(reason, cache.lastAttemptAt)
 		}
 		cache.mu.Unlock()
 		return lastErr
@@ -321,7 +327,11 @@ func (cache *keyCache) refresh(
 	}
 	cache.lastAttemptAt = now
 	if fetchErr != nil {
-		if flight.required {
+		// A failed proactive attempt must also gate a required refresh if the
+		// retained set becomes stale before the cooldown expires. Successful
+		// refreshes do not set this gate, so a newly fetched short-lived set can
+		// still refresh when its own freshness ends.
+		if flight.required || flight.proactive {
 			cache.recordCooldown(refreshRequired, now)
 		}
 		if flight.proactive {
@@ -420,14 +430,15 @@ func (cache *keyCache) fetch(ctx context.Context) (map[keyReference]jose.JSONWeb
 
 	keys := make(map[keyReference]jose.JSONWebKey)
 	for _, encodedKey := range encodedSet.Keys {
-		if !keyPermitsVerification(encodedKey) {
+		rawKey, usable := inspectVerificationJWK(encodedKey)
+		if !usable {
 			continue
 		}
 		var key jose.JSONWebKey
 		if err := json.Unmarshal(encodedKey, &key); err != nil {
 			continue
 		}
-		algorithm, usable := cache.boundAlgorithm(key)
+		algorithm, usable := cache.boundAlgorithm(key, rawKey)
 		if !usable {
 			continue
 		}
@@ -443,11 +454,64 @@ func (cache *keyCache) fetch(ctx context.Context) (map[keyReference]jose.JSONWeb
 	return keys, nil
 }
 
-func keyPermitsVerification(encodedKey json.RawMessage) bool {
+type rawVerificationJWK struct {
+	rsaExponent int
+}
+
+func inspectVerificationJWK(encodedKey json.RawMessage) (rawVerificationJWK, bool) {
 	var members map[string]json.RawMessage
 	if err := json.Unmarshal(encodedKey, &members); err != nil {
-		return false
+		return rawVerificationJWK{}, false
 	}
+	// go-jose represents an absent, null, or empty optional string identically.
+	// Inspect presence before its typed decoder so only truly omitted use/alg
+	// members receive the RFC 7517 omitted-member behavior.
+	if !validOptionalJWKString(members, "use", 32) ||
+		!validOptionalJWKString(members, "alg", 32) {
+		return rawVerificationJWK{}, false
+	}
+	if !keyOperationsPermitVerification(members) {
+		return rawVerificationJWK{}, false
+	}
+
+	keyType, ok := requiredJSONString(members, "kty")
+	if !ok {
+		return rawVerificationJWK{}, false
+	}
+	switch keyType {
+	case "OKP":
+		curve, ok := requiredJSONString(members, "crv")
+		if !ok || curve != "Ed25519" {
+			return rawVerificationJWK{}, false
+		}
+		x, ok := requiredJSONString(members, "x")
+		if !ok || !canonicalBase64URLSize(x, ed25519.PublicKeySize) {
+			return rawVerificationJWK{}, false
+		}
+	case "RSA":
+		exponent, ok := canonicalRSAExponent(members)
+		if !ok {
+			return rawVerificationJWK{}, false
+		}
+		return rawVerificationJWK{rsaExponent: exponent}, true
+	}
+	return rawVerificationJWK{}, true
+}
+
+func validOptionalJWKString(
+	members map[string]json.RawMessage,
+	name string,
+	maximumBytes int,
+) bool {
+	raw, present := members[name]
+	if !present {
+		return true
+	}
+	var value string
+	return json.Unmarshal(raw, &value) == nil && validOpaqueValue(value, maximumBytes)
+}
+
+func keyOperationsPermitVerification(members map[string]json.RawMessage) bool {
 	rawOperations, present := members["key_ops"]
 	if !present {
 		return true
@@ -474,9 +538,43 @@ func keyPermitsVerification(encodedKey json.RawMessage) bool {
 	return permitsVerification
 }
 
-func (cache *keyCache) boundAlgorithm(key jose.JSONWebKey) (jose.SignatureAlgorithm, bool) {
+func canonicalBase64URLSize(encoded string, expectedBytes int) bool {
+	decoded, ok := decodeCanonicalSegment(encoded, expectedBytes)
+	return ok && len(decoded) == expectedBytes
+}
+
+func canonicalRSAExponent(members map[string]json.RawMessage) (int, bool) {
+	encoded, ok := requiredJSONString(members, "e")
+	if !ok {
+		return 0, false
+	}
+	decoded, ok := decodeCanonicalSegment(encoded, strconv.IntSize/8)
+	if !ok || decoded[0] == 0 {
+		return 0, false
+	}
+	var value uint64
+	for _, current := range decoded {
+		value = value<<8 | uint64(current)
+	}
+	maximumInt := uint64(^uint(0) >> 1)
+	if value == 0 || value > maximumInt {
+		return 0, false
+	}
+	return int(value), true
+}
+
+func (cache *keyCache) boundAlgorithm(
+	key jose.JSONWebKey,
+	rawKey rawVerificationJWK,
+) (jose.SignatureAlgorithm, bool) {
 	if !key.Valid() || !key.IsPublic() || !validOpaqueValue(key.KeyID, maxKeyIDBytes) {
 		return "", false
+	}
+	if rawKey.rsaExponent != 0 {
+		rsaKey, ok := key.Key.(*rsa.PublicKey)
+		if !ok || rsaKey.E != rawKey.rsaExponent {
+			return "", false
+		}
 	}
 	if key.Use != "" && key.Use != "sig" {
 		return "", false

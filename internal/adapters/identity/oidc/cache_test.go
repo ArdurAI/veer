@@ -1,17 +1,21 @@
 package oidc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -148,6 +152,198 @@ func TestJWKSProactiveRefreshAndFreshKeyFallback(t *testing.T) {
 	requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
 	if strings.Contains(err.Error(), "CANARY") || strings.Contains(err.Error(), anchor.JWKSURI) {
 		t.Fatalf("outage error disclosed endpoint or provider body: %q", err)
+	}
+}
+
+func TestJWKSFailedProactiveRefreshCooldownCarriesIntoRequiredRefresh(t *testing.T) {
+	fixture := newKeyServer(t)
+	clock := newFakeClock(testNow)
+	key := generateECDSAKey(t)
+	fixture.setKeys(t, publicJWK(key, "proactive-cooldown-key", jose.ES256))
+	anchor := testTrustAnchor(fixture, identity.KindHuman)
+	anchor.Cache.RefreshCooldown = 5 * time.Minute
+	verifier := newTestVerifier(t, fixture, anchor, clock)
+	token := signClaims(
+		t,
+		key,
+		jose.ES256,
+		"proactive-cooldown-key",
+		"at+jwt",
+		cacheClaims(anchor, clock.Now()),
+	)
+	if _, err := authenticate(t, verifier, token); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+
+	clock.Advance(anchor.Cache.Freshness - anchor.Cache.RefreshAhead)
+	fixture.setResponse(http.StatusServiceUnavailable, []byte(`{"error":"unavailable"}`))
+	if _, err := authenticate(t, verifier, token); err != nil {
+		t.Fatalf("fresh fallback after failed proactive refresh: %v", err)
+	}
+	if got := fixture.hits.Load(); got != 2 {
+		t.Fatalf("failed proactive refresh fetches = %d, want 2", got)
+	}
+
+	fixture.setKeys(t, publicJWK(key, "proactive-cooldown-key", jose.ES256))
+	clock.Advance(anchor.Cache.RefreshAhead)
+	_, err := authenticate(t, verifier, token)
+	requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+	if got := fixture.hits.Load(); got != 2 {
+		t.Fatalf("staleness bypassed proactive failure cooldown with %d fetches, want 2", got)
+	}
+
+	clock.Advance(anchor.Cache.RefreshCooldown - anchor.Cache.RefreshAhead)
+	if _, err := authenticate(t, verifier, token); err != nil {
+		t.Fatalf("required refresh after cooldown: %v", err)
+	}
+	if got := fixture.hits.Load(); got != 3 {
+		t.Fatalf("post-cooldown required refresh fetches = %d, want 3", got)
+	}
+}
+
+func TestJWKSProactiveSnapshotObservesFailedReactiveAttemptCooldown(t *testing.T) {
+	fixture := newKeyServer(t)
+	clock := newFakeClock(testNow)
+	knownKey := generateECDSAKey(t)
+	unknownKey := generateECDSAKey(t)
+	fixture.setKeys(t, publicJWK(knownKey, "known-interleaved-key", jose.ES256))
+	anchor := testTrustAnchor(fixture, identity.KindHuman)
+	anchor.Cache.RefreshCooldown = 5 * time.Minute
+	verifier := newTestVerifier(t, fixture, anchor, clock)
+	claims := cacheClaims(anchor, clock.Now())
+	knownToken := signClaims(t, knownKey, jose.ES256, "known-interleaved-key", "at+jwt", claims)
+	unknownToken := signClaims(t, unknownKey, jose.ES256, "unknown-interleaved-key", "at+jwt", claims)
+	if _, err := authenticate(t, verifier, knownToken); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+
+	clock.Advance(anchor.Cache.Freshness - anchor.Cache.RefreshAhead)
+	now := clock.Now()
+	knownReference := keyReference{keyID: "known-interleaved-key", algorithm: jose.ES256}
+	verifier.cache.mu.Lock()
+	_, known := verifier.cache.keys[knownReference]
+	fresh := now.Before(verifier.cache.freshUntil)
+	due := !now.Before(verifier.cache.refreshAt)
+	pausedProactiveAttempt := verifier.cache.attempt
+	verifier.cache.mu.Unlock()
+	if !known || !fresh || !due {
+		t.Fatal("test did not capture a due known-key proactive snapshot")
+	}
+
+	fixture.setResponse(http.StatusServiceUnavailable, []byte(`{"error":"unavailable"}`))
+	_, err := authenticate(t, verifier, unknownToken)
+	requireAuthenticationError(t, err, ports.ErrAuthenticationInvalid)
+	if got := fixture.hits.Load(); got != 2 {
+		t.Fatalf("failed reactive attempt fetches = %d, want 2", got)
+	}
+
+	refreshErr := verifier.cache.refresh(t.Context(), pausedProactiveAttempt, refreshProactive)
+	if !errors.Is(refreshErr, errKeySourceUnavailable) {
+		t.Fatalf("proactive attempt-mismatch error = %v, want key source unavailable", refreshErr)
+	}
+	if got := fixture.hits.Load(); got != 2 {
+		t.Fatalf("attempt-mismatch path made %d fetches, want 2", got)
+	}
+
+	fixture.setKeys(t, publicJWK(knownKey, "known-interleaved-key", jose.ES256))
+	clock.Advance(anchor.Cache.RefreshAhead)
+	_, err = authenticate(t, verifier, knownToken)
+	requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+	if got := fixture.hits.Load(); got != 2 {
+		t.Fatalf("staleness bypassed interleaved failure cooldown with %d fetches, want 2", got)
+	}
+
+	clock.Advance(anchor.Cache.RefreshCooldown - anchor.Cache.RefreshAhead)
+	if _, err := authenticate(t, verifier, knownToken); err != nil {
+		t.Fatalf("required refresh after cooldown: %v", err)
+	}
+	if got := fixture.hits.Load(); got != 3 {
+		t.Fatalf("post-cooldown required refresh fetches = %d, want 3", got)
+	}
+}
+
+func TestJWKSAttemptMismatchCooldownBookkeeping(t *testing.T) {
+	tests := []struct {
+		name          string
+		lastErr       error
+		reason        refreshReason
+		wantErr       error
+		wantRequired  bool
+		wantProactive bool
+		wantReactive  bool
+	}{
+		{
+			name:          "proactive after unavailable failure",
+			lastErr:       errKeySourceUnavailable,
+			reason:        refreshProactive,
+			wantErr:       errKeySourceUnavailable,
+			wantRequired:  true,
+			wantProactive: true,
+		},
+		{
+			name:          "proactive after canceled owner",
+			lastErr:       context.Canceled,
+			reason:        refreshProactive,
+			wantErr:       errKeySourceUnavailable,
+			wantRequired:  true,
+			wantProactive: true,
+		},
+		{
+			name:          "proactive after owner deadline",
+			lastErr:       context.DeadlineExceeded,
+			reason:        refreshProactive,
+			wantErr:       errKeySourceUnavailable,
+			wantRequired:  true,
+			wantProactive: true,
+		},
+		{
+			name:         "reactive after successful attempt",
+			reason:       refreshReactive,
+			wantReactive: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newKeyServer(t)
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			cache := newTestVerifier(t, fixture, anchor, newFakeClock(testNow)).cache
+			cache.mu.Lock()
+			cache.attempt = 2
+			cache.lastAttemptAt = testNow
+			cache.lastAttemptError = test.lastErr
+			cache.mu.Unlock()
+
+			err := cache.refresh(t.Context(), 1, test.reason)
+			if test.wantErr == nil {
+				if err != nil {
+					t.Fatalf("refresh attempt mismatch error = %v, want nil", err)
+				}
+			} else if !errors.Is(err, test.wantErr) {
+				t.Fatalf("refresh attempt mismatch error = %v, want %v", err, test.wantErr)
+			}
+
+			wantCooldown := testNow.Add(anchor.Cache.RefreshCooldown)
+			cache.mu.Lock()
+			required := cache.nextRequiredRefreshAllowed
+			proactive := cache.nextProactiveRefreshAllowed
+			reactive := cache.nextReactiveRefreshAllowed
+			cache.mu.Unlock()
+			assertCooldown := func(name string, got time.Time, want bool) {
+				t.Helper()
+				if want && !got.Equal(wantCooldown) {
+					t.Fatalf("%s cooldown = %v, want %v", name, got, wantCooldown)
+				}
+				if !want && !got.IsZero() {
+					t.Fatalf("%s cooldown = %v, want zero", name, got)
+				}
+			}
+			assertCooldown("required", required, test.wantRequired)
+			assertCooldown("proactive", proactive, test.wantProactive)
+			assertCooldown("reactive", reactive, test.wantReactive)
+			if got := fixture.hits.Load(); got != 0 {
+				t.Fatalf("attempt-mismatch bookkeeping made %d fetches, want zero", got)
+			}
+		})
 	}
 }
 
@@ -597,6 +793,185 @@ func TestJWKSAlgorithmBinding(t *testing.T) {
 	}
 }
 
+func TestJWKSOptionalStringMembersDistinguishOmissionFromInvalidValues(t *testing.T) {
+	key := generateEd25519Key(t)
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		valid  bool
+	}{
+		{name: "omitted use", mutate: func(members map[string]any) { delete(members, "use") }, valid: true},
+		{name: "explicit sig use", mutate: func(map[string]any) {}, valid: true},
+		{name: "empty use", mutate: func(members map[string]any) { members["use"] = "" }},
+		{name: "null use", mutate: func(members map[string]any) { members["use"] = nil }},
+		{name: "non-string use", mutate: func(members map[string]any) { members["use"] = []string{"sig"} }},
+		{name: "whitespace use", mutate: func(members map[string]any) { members["use"] = " sig " }},
+		{name: "omitted alg", mutate: func(members map[string]any) { delete(members, "alg") }, valid: true},
+		{name: "explicit EdDSA alg", mutate: func(map[string]any) {}, valid: true},
+		{name: "empty alg", mutate: func(members map[string]any) { members["alg"] = "" }},
+		{name: "null alg", mutate: func(members map[string]any) { members["alg"] = nil }},
+		{name: "non-string alg", mutate: func(members map[string]any) { members["alg"] = 1 }},
+		{name: "whitespace alg", mutate: func(members map[string]any) { members["alg"] = " EdDSA " }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			jwk := publicJWK(key, "optional-string-key", jose.EdDSA)
+			fixture.setResponse(http.StatusOK, rawJWKS(t, rewriteJWK(t, jwk, test.mutate)))
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.EdDSA}
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			token := signClaims(
+				t,
+				key,
+				jose.EdDSA,
+				"optional-string-key",
+				"at+jwt",
+				cacheClaims(anchor, clock.Now()),
+			)
+			_, err := authenticate(t, verifier, token)
+			if test.valid {
+				if err != nil {
+					t.Fatalf("Authenticate: %v", err)
+				}
+				return
+			}
+			requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+		})
+	}
+}
+
+func TestJWKSOKPXMustBeCanonicalEd25519PublicKey(t *testing.T) {
+	key := generateEd25519Key(t)
+	publicKey := key.Public().(ed25519.PublicKey)
+	canonical := base64.RawURLEncoding.EncodeToString(publicKey)
+	tooLong := append(append([]byte(nil), publicKey...), 0x42)
+	tests := []struct {
+		name  string
+		value any
+		valid bool
+	}{
+		{name: "exact public key", value: canonical, valid: true},
+		{name: "one byte short", value: base64.RawURLEncoding.EncodeToString(publicKey[:len(publicKey)-1])},
+		{name: "trailing byte would be truncated", value: base64.RawURLEncoding.EncodeToString(tooLong)},
+		{name: "non-canonical trailing bits", value: nonCanonicalBase64URL(t, canonical)},
+		{name: "padded", value: canonical + "="},
+		{name: "empty", value: ""},
+		{name: "null", value: nil},
+		{name: "non-string", value: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			jwk := publicJWK(key, "okp-key", jose.EdDSA)
+			encodedKey := rewriteJWK(t, jwk, func(members map[string]any) {
+				members["x"] = test.value
+			})
+			fixture.setResponse(http.StatusOK, rawJWKS(t, encodedKey))
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.EdDSA}
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			token := signClaims(
+				t,
+				key,
+				jose.EdDSA,
+				"okp-key",
+				"at+jwt",
+				cacheClaims(anchor, clock.Now()),
+			)
+			_, err := authenticate(t, verifier, token)
+			if test.valid {
+				if err != nil {
+					t.Fatalf("Authenticate: %v", err)
+				}
+				return
+			}
+			requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+		})
+	}
+}
+
+func TestJWKSRSAPublicExponentMustBeCanonicalAndRepresentable(t *testing.T) {
+	key := generateRSAKey(t)
+	exponentBytes := big.NewInt(int64(key.E)).Bytes()
+	canonical := base64.RawURLEncoding.EncodeToString(exponentBytes)
+	leadingZero := append([]byte{0}, exponentBytes...)
+	truncating := make([]byte, strconv.IntSize/8+1)
+	truncating[0] = 1
+	copy(truncating[len(truncating)-len(exponentBytes):], exponentBytes)
+	overMaximumInt := make([]byte, strconv.IntSize/8)
+	overMaximumInt[0] = 0x80
+	tests := []struct {
+		name  string
+		value any
+		omit  bool
+		valid bool
+	}{
+		{name: "canonical exponent", value: canonical, valid: true},
+		{name: "leading zero octet", value: base64.RawURLEncoding.EncodeToString(leadingZero)},
+		{name: "higher bits would be truncated", value: base64.RawURLEncoding.EncodeToString(truncating)},
+		{name: "not representable by int", value: base64.RawURLEncoding.EncodeToString(overMaximumInt)},
+		{name: "padded", value: canonical + "="},
+		{name: "zero", value: "AA"},
+		{name: "empty", value: ""},
+		{name: "null", value: nil},
+		{name: "non-string", value: 65537},
+		{name: "omitted", omit: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			jwk := publicJWK(key, "rsa-exponent-key", jose.RS256)
+			encodedKey := rewriteJWK(t, jwk, func(members map[string]any) {
+				if test.omit {
+					delete(members, "e")
+					return
+				}
+				members["e"] = test.value
+			})
+			fixture.setResponse(http.StatusOK, rawJWKS(t, encodedKey))
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.RS256}
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			token := signClaims(
+				t,
+				key,
+				jose.RS256,
+				"rsa-exponent-key",
+				"at+jwt",
+				cacheClaims(anchor, clock.Now()),
+			)
+			_, err := authenticate(t, verifier, token)
+			if test.valid {
+				if err != nil {
+					t.Fatalf("Authenticate: %v", err)
+				}
+				return
+			}
+			requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+		})
+	}
+}
+
+func TestCanonicalRSAExponentRejectsNonzeroTrailingBits(t *testing.T) {
+	canonical := base64.RawURLEncoding.EncodeToString([]byte{3})
+	members := map[string]json.RawMessage{
+		"e": json.RawMessage(strconv.Quote(canonical)),
+	}
+	if exponent, ok := canonicalRSAExponent(members); !ok || exponent != 3 {
+		t.Fatalf("canonicalRSAExponent(canonical) = %d, %t, want 3, true", exponent, ok)
+	}
+
+	nonCanonical := nonCanonicalBase64URL(t, canonical)
+	members["e"] = json.RawMessage(strconv.Quote(nonCanonical))
+	if exponent, ok := canonicalRSAExponent(members); ok || exponent != 0 {
+		t.Fatalf("canonicalRSAExponent(non-canonical) = %d, %t, want 0, false", exponent, ok)
+	}
+}
+
 func TestJWKSKeyOperationsMustPermitVerification(t *testing.T) {
 	key := generateEd25519Key(t)
 	tests := []struct {
@@ -723,6 +1098,19 @@ func cacheClaims(anchor TrustAnchor, now time.Time) map[string]any {
 
 func encodedJWK(t *testing.T, key jose.JSONWebKey, keyOperations any, includeOperations bool) json.RawMessage {
 	t.Helper()
+	return rewriteJWK(t, key, func(members map[string]any) {
+		if includeOperations {
+			members["key_ops"] = keyOperations
+		}
+	})
+}
+
+func rewriteJWK(
+	t *testing.T,
+	key jose.JSONWebKey,
+	mutate func(map[string]any),
+) json.RawMessage {
+	t.Helper()
 	encoded, err := json.Marshal(key)
 	if err != nil {
 		t.Fatalf("marshal JWK: %v", err)
@@ -731,14 +1119,34 @@ func encodedJWK(t *testing.T, key jose.JSONWebKey, keyOperations any, includeOpe
 	if err := json.Unmarshal(encoded, &members); err != nil {
 		t.Fatalf("unmarshal generated JWK: %v", err)
 	}
-	if includeOperations {
-		members["key_ops"] = keyOperations
-	}
+	mutate(members)
 	encoded, err = json.Marshal(members)
 	if err != nil {
 		t.Fatalf("marshal decorated JWK: %v", err)
 	}
 	return encoded
+}
+
+func nonCanonicalBase64URL(t *testing.T, canonical string) string {
+	t.Helper()
+	decoded, err := base64.RawURLEncoding.DecodeString(canonical)
+	if err != nil || len(canonical) == 0 {
+		t.Fatal("test input is not canonical base64url")
+	}
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	for index := range len(alphabet) {
+		if alphabet[index] == canonical[len(canonical)-1] {
+			continue
+		}
+		candidate := canonical[:len(canonical)-1] + string(alphabet[index])
+		candidateBytes, decodeErr := base64.RawURLEncoding.DecodeString(candidate)
+		if decodeErr == nil && bytes.Equal(candidateBytes, decoded) &&
+			base64.RawURLEncoding.EncodeToString(candidateBytes) != candidate {
+			return candidate
+		}
+	}
+	t.Fatal("could not construct a non-canonical base64url encoding")
+	return ""
 }
 
 func rawJWKS(t *testing.T, keys ...json.RawMessage) []byte {
