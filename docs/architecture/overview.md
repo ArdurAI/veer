@@ -77,6 +77,13 @@ action and role registries, star-only Viewer inheritance, canonical Policy
 bindings, sealed Workspace/Environment targets, default-deny evaluation, and
 bounded decision representation. Its OpenAPI projection is a pure reference
 contract; no API route or worker enforcement is implemented by that document.
+[ADR 0010](0010-provider-neutral-credential-broker.md) fixes a provider-neutral,
+process-local credential broker with separate secret-resolution and
+session-issuance ports, immutable operation/target/recipient bindings, exact
+generation-based rotation, bounded material and lifetimes, version-aware
+single-flight, local epochs and tombstones, and forbidden credential
+serialization. It adds no public API, production backend, provider destination
+verification, distributed revocation, or runtime enforcement.
 
 ## Reconciliation contract
 
@@ -147,6 +154,31 @@ not imply that asynchronous provider work has already completed.
 
 - Typed, narrow interfaces owned by the control plane.
 - No provider credentials in resource payloads or logs.
+- The implemented process-local broker resolves one exact versioned source and
+  issues one operation-, action-, target-, and recipient-bound session through
+  separate core-owned ports. It accepts at most 500 source entries, 1,000 shared
+  session cells, 1,000 live leases, 32 active resolver leaders, and 16 exact
+  issuer registrations. Source reuse ends exactly one hour after resolver
+  material returns. With no background timer, ordinary TTL cleanup occurs on
+  the next cleanup-capable acquisition, rotation, lifecycle entry, or explicit
+  sweep and may wait for an existing borrow; explicit lineage invalidation or
+  broker close destroys affected master sources before cancellation becomes
+  observable. Operation termination preserves a shared current-lineage source
+  while destroying any matching pending rotation's private source.
+- It tracks at most 500 connection lineages and 10,000 Operations. Generation
+  high-water state and terminal Operation tombstones are not evicted; a new
+  identity fails closed at capacity rather than forgetting stale or terminal
+  authority.
+- Broker sessions request at most 15 minutes, require at least five minutes when
+  issued and two minutes plus 30 seconds of skew for a new use, refresh three
+  minutes before expiry, and give each backend context at most ten seconds.
+- Rotation pre-reserves one lease per waiter and commit wins a late cancellation.
+  Unpublished valid sessions are revoked once before destruction; lifecycle
+  callers join cleanup or receive an honest pending result while broker-owned
+  work continues. A broker-wide queue permits at most 16 upstream revocations.
+- Broker state is a reference-library boundary. No real secret manager, AWS or
+  Kubernetes session issuer, adapter wiring, destination verification, or
+  cross-process revocation exists yet.
 - Rate-limit awareness, retry classification, and request correlation.
 - Capability discovery so unsupported features fail before execution.
 

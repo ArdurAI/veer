@@ -79,6 +79,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [Deterministic admission and version conversion](docs/architecture/0007-deterministic-admission-and-version-conversion.md)
 - [OIDC authentication and principals](docs/architecture/0008-oidc-authentication-and-principals.md)
 - [Deterministic hierarchical authorization](docs/architecture/0009-deterministic-hierarchical-authorization.md)
+- [Provider-neutral process-local credential broker](docs/architecture/0010-provider-neutral-credential-broker.md)
 - [OpenAPI v1alpha1 baseline](api/openapi/veer-v1alpha1.json)
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)

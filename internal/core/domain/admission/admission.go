@@ -29,11 +29,15 @@ type CreateContext struct {
 	Members  authorization.MemberDirectory
 }
 
-// ReplaceContext groups the immutable workspace-scoped views needed by the
-// reference stage. Members is required only for Policy replacement.
+// ReplaceContext groups immutable retained state used by replacement
+// admission. CurrentProviderConnectionSpec must be decoded from the exact
+// retained ProviderConnection resource and is required only for
+// ProviderConnection replacement. Admission takes a value-owned clone before
+// comparing it. Members is required only for Policy replacement.
 type ReplaceContext struct {
-	Snapshot hierarchy.Snapshot
-	Members  authorization.MemberDirectory
+	Snapshot                      hierarchy.Snapshot
+	Members                       authorization.MemberDirectory
+	CurrentProviderConnectionSpec model.ProviderConnectionSpec
 }
 
 // CreateResult is an immutable admitted create value. Accessors return
@@ -100,7 +104,7 @@ func AdmitReplace(raw []byte, current hierarchy.Record, context ReplaceContext) 
 	if failure := semanticIntent(source); failure != nil {
 		return nil, failure
 	}
-	if failure := immutableCurrent(source.apiVersion, source.kind, current); failure != nil {
+	if failure := immutableReplace(source, current, context); failure != nil {
 		return nil, failure
 	}
 	if failure := referenceReplace(source, current, context); failure != nil {
@@ -168,6 +172,42 @@ func immutableCurrent(apiVersion string, kind hierarchy.Kind, current hierarchy.
 		return reject(StageImmutable, CodeImmutableField, "/kind")
 	}
 	return nil
+}
+
+func immutableReplace(source sourceIntent, current hierarchy.Record, context ReplaceContext) *Error {
+	if failure := immutableCurrent(source.apiVersion, source.kind, current); failure != nil {
+		return failure
+	}
+	if source.kind != hierarchy.KindProviderConnection {
+		return nil
+	}
+
+	before := model.CloneProviderConnectionSpec(context.CurrentProviderConnectionSpec)
+	transitionErr := model.CheckProviderConnectionSpecTransition(before, source.provider)
+	if transitionErr == nil {
+		return nil
+	}
+	if err := model.ValidateProviderConnectionSpec(before); err != nil {
+		// A missing or malformed retained spec is not a caller-selected field
+		// transition. Fail closed on the complete spec rather than comparing
+		// the submitted value against a zero or untrusted baseline.
+		return reject(StageImmutable, CodeImmutableField, "/spec")
+	}
+
+	set := candidateSet{}
+	if before.Provider != source.provider.Provider {
+		set.add(CodeImmutableField, "/spec/provider")
+	}
+	if before.CredentialRef.ReferenceID != source.provider.CredentialRef.ReferenceID {
+		set.add(CodeImmutableField, "/spec/credentialRef/referenceId")
+	}
+	if failure := set.failure(StageImmutable); failure != nil {
+		return failure
+	}
+	// The semantic stage already validated the submitted spec, and the
+	// identity comparisons above map every currently immutable axis. Preserve
+	// a deterministic fail-closed boundary if those contracts ever drift.
+	return reject(StageImmutable, CodeImmutableField, "/spec")
 }
 
 func referenceCreate(source sourceIntent, context CreateContext) (hierarchy.Placement, *Error) {

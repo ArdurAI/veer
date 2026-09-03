@@ -30,7 +30,7 @@ attacker, trust-boundary, and control-owner field to one compact review surface.
 
 | Deployment or workflow | Supported alpha boundary | Security status |
 | --- | --- | --- |
-| Production control plane | One regional, multi-Availability-Zone API/worker deployment with RDS PostgreSQL, SQS Standard, encrypted audit/recovery objects, and AWS and Kubernetes adapters | Provider-neutral authentication and authorization reference libraries are implemented; route/server enforcement, persistence, reconciliation, audit, provider, and deployment controls remain design targets |
+| Production control plane | One regional, multi-Availability-Zone API/worker deployment with RDS PostgreSQL, SQS Standard, encrypted audit/recovery objects, and AWS and Kubernetes adapters | Provider-neutral authentication, authorization, and process-local credential-broker reference libraries are implemented; route/server enforcement, persistence, reconciliation, real credential backends, provider adapters, and deployment controls remain design targets |
 | Developer and contract-test profile | One trusted developer host, local PostgreSQL with the same schema, PostgreSQL queue adapter, fake provider, and no cloud credentials or paid service | Bootstrap and local quality controls are implemented; tenant isolation is not claimed against a hostile host owner |
 | Recovery workflow | Restore into an isolated validation target, verify integrity and freshness, revalidate authority, and only then cut over | Conditional privileged workflow; qualification belongs to issue #64 |
 | Administration and redrive | Strong-authenticated, reasoned, time-bounded, scoped, audited inspect/retry/cancel/quarantine operations | Conditional privileged workflow; implementation belongs to issues #27, #34, and #64 |
@@ -48,8 +48,8 @@ and cost boundaries are fixed by `docs/architecture/0002-alpha-implementation-st
 | Identity and policy | Validate configured OIDC JWT access-token trust anchors, normalize distinct Human/Workload principals, and deterministically evaluate bounded PolicySets against sealed Workspace/Environment targets; API and worker enforcement remain deferred | `docs/architecture/0008-oidc-authentication-and-principals.md:68-144`; `docs/architecture/0009-deterministic-hierarchical-authorization.md:24-215` |
 | PostgreSQL state store | Authoritative desired/observed state, generation, idempotency, integrity anchor, audit data, and outbox in one transaction | `docs/architecture/0002-alpha-implementation-stack.md:128-165` |
 | Reconciliation queue and worker | Treat deliveries as duplicate and unordered; reload authoritative state; acquire a fence; reauthorize; commit before acknowledgement | `docs/architecture/0002-alpha-implementation-stack.md:136-151`; `docs/architecture/0002-alpha-implementation-stack.md:174-204` |
-| Credential broker and provider adapters | Resolve an owned connection into a short-lived, scoped session; verify destination identity; expose no caller or provider credential | `docs/security/model.md:73-84`; `docs/architecture/overview.md:146-151` |
-| Audit, telemetry, and archive | Commit required audit data with state; redact and bound operational signals; make audit loss or alteration detectable | `docs/security/model.md:86-91`; `docs/architecture/0001-alpha-operational-bounds.md:665-680` |
+| Credential broker and provider adapters | Bind one retained ProviderConnection and Operation into a bounded process-local session through split resolver/issuer ports; provider adapters later verify destination identity | `docs/architecture/0010-provider-neutral-credential-broker.md:24-66`; `docs/security/model.md:73-174` |
+| Audit, telemetry, and archive | Commit required audit data with state; redact and bound operational signals; make audit loss or alteration detectable | `docs/security/model.md:176-181`; `docs/architecture/0001-alpha-operational-bounds.md:665-680` |
 | Migration, backup, and recovery tooling | Separate privileged roles, verify schema and backup integrity, and prevent runtime identities from changing control structures | `docs/architecture/0002-alpha-implementation-stack.md:395-409`; `docs/architecture/0001-alpha-operational-bounds.md:727-738` |
 | Build and release path | Pin and verify inputs, restrict automation authority, and produce consumer-verifiable outputs | `docs/development.md:82-114`; issue #15 and issue #66 |
 
@@ -77,6 +77,7 @@ flowchart LR
 | Production API and worker | PostgreSQL endpoint and credential | Typed deployment configuration resolves a secret reference or workload identity; command-line and image values are forbidden | Verified-TLS RDS endpoint; distinct runtime, migration, backup, and integrity roles | API/worker runtime gets only runtime role; migrator and recovery tooling use separate identities | Unknown until issues #30 and #65 implement config, roles, row isolation, and tests | `docs/architecture/0002-alpha-implementation-stack.md:114-132`; `docs/architecture/0002-alpha-implementation-stack.md:395-404` |
 | Developer profile | PostgreSQL endpoint and queue | Local configuration on one trusted host; no cloud credential fallback | Local PostgreSQL 18.6 and PostgreSQL queue adapter | Developer and local Veer processes | Host file permissions and local database roles; no hostile-host isolation claim | `docs/architecture/0002-alpha-implementation-stack.md:116-121`; `docs/architecture/0002-alpha-implementation-stack.md:206-215` |
 | Authorization reference evaluation | Normalized principal, immutable PolicySet, registered action, and hierarchy-sealed target | Closed roles and actions, exact membership, canonical policy/input versions, default deny, and reserved actions | Local deterministic decision containing only versions/digest, effect, and reason; no network or provider call | Domain callers after they are integrated; no API route or worker currently invokes it | Domain and OpenAPI golden, negative, matrix, and drift tests; this is not runtime enforcement evidence | `docs/architecture/0009-deterministic-hierarchical-authorization.md:24-215`; issues #23 and #24 |
+| Credential broker reference | Typed ProviderConnection envelope, retained hierarchy, provider-bound Operation, target, action, recipient, source material, and issued session | Private constructors bind stable Workspace/Environment/connection/operation/target fields; generation orders rotation while opaque reference version selects the exact source | Process-local request, source and binding digests, bounded material wrappers, source cache, leases, epochs, and tombstones | Broker, one exact registered issuer, and synchronous material callback only | Exact limits, serialization rejection, local-first invalidation, stale-completion suppression, and deterministic tests; snapshot ancestry does not prove runtime connection currentness, and no real backend or distributed enforcement exists | `docs/architecture/0010-provider-neutral-credential-broker.md:24-66`; `docs/architecture/0010-provider-neutral-credential-broker.md:68-114`; issues #25 and #39 |
 | Production dispatch | Queue message and receipt authority | Outbox produces a maximum 2 KiB reference; SQS resource policy and separate roles override no repository setting | Exact queue ARN; message contains IDs, generation, digest, priority, and timing but no desired state or secrets | Publisher sends; worker receives/extends/deletes; operator alone redrives | SQS policy, TLS, SSE-SQS, store fence, and execution-time authorization | Design target in `docs/architecture/0002-alpha-implementation-stack.md:174-204`; issues #32 and #34 must prove it |
 | AWS provider execution | Assumed-role session | ProviderConnection ownership, current policy, destination identity, role trust, session policy, source identity, and expiry all apply | Dedicated workspace/environment role; session can only reduce, never exceed, provider-granted authority | Credential broker and one adapter operation; never API caller or queue | AWS STS plus Veer binding and reauthorization; broad role or resource policy expands residual blast radius | Issues #25, #39, and #52; no runtime implementation exists |
 | Kubernetes provider execution | Service-account session | ProviderConnection ownership, cluster identity, namespace scope, RBAC, token audience/expiry, and cluster policy all apply | Dedicated service account and bounded namespace set; dedicated cluster or separately approved isolation for hostile tenants | Credential broker and Kubernetes adapter | Kubernetes authentication, RBAC, network/storage policy, ownership checks, and Veer scope binding | Namespace alone is not a hard boundary; issues #44, #45, and #50 must qualify the mode |
@@ -94,9 +95,9 @@ flowchart LR
 | --- | --- | --- | --- |
 | A-01 | Workspace-scoped desired state, observed state, stable identities, and hierarchy | Confidentiality, integrity, availability, and no cross-workspace reference | `docs/architecture/overview.md:26-45` |
 | A-02 | Principals, policies, decisions, plans, digests, approvals, and generations | Authenticity, deterministic authorization, freshness, and non-substitution | `docs/architecture/0009-deterministic-hierarchical-authorization.md:36-194`; `docs/security/model.md:35-72` |
-| A-03 | ProviderConnection references, external secrets, tokens, role sessions, kubeconfigs, and private keys | Confidentiality, minimum scope and lifetime, revocability, and non-serialization | `docs/security/model.md:73-84` |
-| A-04 | Provider resources, account/cluster identity, external identifiers, ownership evidence, quota, and cost authority | Correct destination, ownership, integrity, bounded mutation, and safe deletion | `docs/architecture/overview.md:146-151` |
-| A-05 | Audit events, integrity anchors, manifests, exports, and recovery evidence | Completeness, ordering, tamper evidence, attribution, confidentiality, and retained availability | `docs/security/model.md:86-91`; `docs/architecture/0001-alpha-operational-bounds.md:727-738` |
+| A-03 | ProviderConnection references, external secrets, tokens, role sessions, kubeconfigs, and private keys | Confidentiality, minimum scope and lifetime, revocability, and non-serialization | `docs/security/model.md:73-174` |
+| A-04 | Provider resources, account/cluster identity, external identifiers, ownership evidence, quota, and cost authority | Correct destination, ownership, integrity, bounded mutation, and safe deletion | `docs/architecture/overview.md:153-181` |
+| A-05 | Audit events, integrity anchors, manifests, exports, and recovery evidence | Completeness, ordering, tamper evidence, attribution, confidentiality, and retained availability | `docs/security/model.md:176-181`; `docs/architecture/0001-alpha-operational-bounds.md:727-738` |
 | A-06 | Outbox records, queue messages, receipts, idempotency records, leases, fences, and operation state | Integrity, freshness, bounded replay, single current owner, and recoverability | `docs/architecture/0002-alpha-implementation-stack.md:134-151` |
 | A-07 | OIDC tokens and normalized personal/workload identity claims | Authenticity, confidentiality, audience binding, minimum disclosure, expiry, and redaction | `docs/architecture/0008-oidc-authentication-and-principals.md:37-66`; `docs/architecture/0008-oidc-authentication-and-principals.md:190-213`; issue #22 |
 | A-08 | Service availability, quotas, rate limits, concurrency, telemetry cardinality, and cost budgets | Fairness, bounded consumption, measurable saturation, and fail-safe shedding | `docs/architecture/0001-alpha-operational-bounds.md:665-699` |
@@ -226,19 +227,27 @@ self-proving isolation.
 ### Provider credential flow and blast radius
 
 1. A ProviderConnection is owned by exactly one workspace and environment and
-   persists only an external secret/identity reference, version, provider
-   destination, and non-secret capability metadata.
+   persists only an external secret/identity reference, opaque version,
+   provider identifier, and non-secret capability metadata.
 2. Admission verifies the caller can select that connection. The immutable plan
    binds the connection ID, workspace, environment, generation, actor, policy
    version, requested capabilities, quota/cost inputs, and digest.
-3. Before an effect, the worker reauthorizes and asks the credential broker for
-   a short-lived session bound to that operation, adapter, provider destination,
-   and current connection version. Caller credentials never reach the adapter.
+3. Before an effect, the future worker reauthorizes and asks the credential
+   broker for a short-lived session bound to that operation, target generation,
+   action, recipient, and current connection generation and reference version.
+   The implemented process-local broker proves this binding through split
+   resolver and issuer ports; caller credentials are absent from both.
 4. The adapter verifies the effective AWS account/partition/region or
    Kubernetes cluster identity and required capabilities before mutation.
-5. Credential material remains in process memory only for the bounded session,
-   is never serialized, and is discarded on completion, expiry, revocation,
-   cancellation, or lost ownership. Rotation is independent per connection.
+5. The implemented material wrappers and service handles are bounded, private,
+   redacted, and reject serialization. A valid issuer result that cannot be
+   published is revoked exactly once before local destruction and waiter
+   completion. Local invalidation is immediate; a broker-wide 16-call queue
+   runs provider revocation under baggage-free ten-second contexts, preserves
+   non-secret provider-expiry evidence for unconfirmed authority, and lets
+   caller waits end independently while cleanup continues. Buffer clearing is
+   best-effort exposure reduction rather than guaranteed memory erasure.
+   Rotation remains independent per connection.
 
 For AWS, a dedicated role per workspace/environment is the supported baseline.
 The trust policy, external ID where a third-party confused-deputy relationship
@@ -257,8 +266,11 @@ RBAC authority, including cluster-scoped permissions. Hard isolation for
 mutually hostile tenants requires a dedicated or separately qualified cluster
 boundary, not a namespace label alone.
 
-Issues #25, #39, #45, and #52 own the implementation and negative blast-radius
-evidence. Until they pass, this flow is a requirement, not a security claim.
+Issue #25 implements the provider-neutral, process-local broker contract and
+its deterministic negative evidence. Issues #39, #45, and #52 still own runtime
+adapter wiring, provider issuance, destination identity, and effective
+permission evidence. The complete provider flow remains a requirement until
+those issues pass.
 
 ### Data classification
 
@@ -310,12 +322,13 @@ review; a reduction must preserve legal, recovery, and audit evidence.
 ### Assumptions and unresolved evidence
 
 - The provider-neutral principal, strict Bearer extraction, configured OIDC JWT
-  validation, bounded JWKS rotation, deterministic PolicySet evaluation, and
-  canonical authorization decision library boundaries exist. The OpenAPI
-  projection is a pure reference contract. Production API/worker authorization
-  wiring, store schema, credential broker, provider adapters, audit pipeline,
-  and deployment manifests do not yet exist; their controls remain requirements
-  linked to live issues.
+  validation, bounded JWKS rotation, deterministic PolicySet evaluation,
+  canonical authorization decision, and process-local credential-broker library
+  boundaries exist. Their OpenAPI and core projections are reference contracts.
+  Production API/worker authorization wiring, store schema, durable
+  credential-budget ledger, real resolver and issuer adapters, provider
+  adapters, audit pipeline, and deployment manifests do not yet exist; their
+  controls remain requirements linked to live issues.
 - The external identity provider, AWS account administrator, Kubernetes cluster
   administrator, DNS/PKI roots, and regional KMS boundaries are operated
   correctly. Compromise is handled as residual/recovery risk, not assumed
@@ -346,8 +359,8 @@ verifier requires readable story actors and ledger actors to match exactly.
 | High | **TM-001 — Forged, replayed, or misbound OIDC identity.** ACT-NET gains a valid Veer principal or another audience's authority. | Public API and incorrect issuer, audience, signature, algorithm, expiry, JWKS, or replay handling; direct adapter misuse or route wiring can expose the same boundary | Unauthorized workspace read or mutation | OIDC, short lifetime, and token exclusion are accepted requirements only for route/server wiring; bounded single-header extraction, explicit trust anchors, strict JWT validation, bounded JWKS rotation, Human/Workload separation, redaction canaries, and rejected-carrier request-metadata scrubbing are implemented as library boundaries | Strict issuer/audience/algorithm/signature/time/JWKS validation, human/workload separation, raw-token canaries, and negative corpus are implemented; preserve exact carrier/type checks, post-rejection request-surface checks, short configured lifetimes, fail-closed route wiring, and cross-cutting regression coverage | Follow-up: Issue #22; verification: Issues #22 and #28 |
 | High | **TM-002 — Cross-workspace authorization or role escalation.** ACT-MEMBER turns one workspace action into another workspace or administrator action. | Missing stable scope, name-based lookup, incomplete action matrix, self-grant path, or failure to wire the reference evaluator | Tenant data disclosure, mutation, and provider authority | Stable hierarchy IDs, exact membership, sealed targets, a closed default-deny matrix, reserved tenant actions, and cross-workspace/escalation fixtures are implemented as reference-library boundaries; production route/worker enforcement is not | Preserve non-self-escalation and reservations while wiring separate admission/execution checks and storage isolation | Follow-up: Issues #23, #24, and #26; verification: Issues #23, #26, and #28 |
 | High | **TM-003 — Stale authority executes an accepted plan.** ACT-MEMBER retains effects after revocation, policy change, generation change, or approval expiry. | Asynchronous work and no execution-time freshness binding | Unauthorized provider change despite correct initial admission | Plans persist decision context by design | Bind actor/policy/generation/connection/digest; reauthorize immediately before effects; invalidate stale approvals and plans | Follow-up: Issues #24, #33, and #61; verification: Issues #24 and #61 |
-| High | **TM-004 — ProviderConnection substitution creates a confused deputy.** ACT-MEMBER selects another workspace's connection or changes destination after approval. | Weak connection ownership or mutable execution context | Cross-account/cluster mutation using Veer's broker | Adapters are intended to receive scoped context, not caller credentials | Immutable owned connection ID in plan and operation, current scope check, destination identity verification, and recipient-bound session | Follow-up: Issues #25, #26, and #39; verification: Issues #25 and #39 |
-| High | **TM-005 — Credential material escapes the broker or adapter.** ACT-WORKLOAD or output reader gains a reusable provider/user credential. | Serialization, verbose errors, telemetry, fixtures, support bundles, crash output, or overlong cache | Provider compromise for credential lifetime and scope | Secret references and redaction are accepted requirements | Memory-only short sessions, field denylist plus allowlist, no `String`/marshal surface, secret canaries, revocation, and independent rotation | Follow-up: Issues #25 and #39; verification: Issues #25, #28, and #39 |
+| High | **TM-004 — ProviderConnection substitution creates a confused deputy.** ACT-MEMBER selects another workspace's connection or changes destination after approval. | Weak connection ownership or mutable execution context | Cross-account/cluster mutation using Veer's broker | The process-local broker binds an exact retained connection, Operation, target generation, action, and recipient and rejects stale or conflicting connection lineage; plans, runtime reauthorization, and destination verification remain deferred | Immutable owned connection ID in plan and operation, current scope check, destination identity verification, and recipient-bound session | Follow-up: Issues #25, #26, and #39; verification: Issues #25 and #39 |
+| High | **TM-005 — Credential material escapes the broker or adapter.** ACT-WORKLOAD or output reader gains a reusable provider/user credential. | Serialization, verbose errors, telemetry, fixtures, support bundles, crash output, or overlong cache | Provider compromise for credential lifetime and scope | Bounded constructed source/session wrappers and service handles use fixed redacted diagnostics, reject generic serialization, expose bytes only to synchronous callbacks, keep cleanup capacity charged through destruction, and destroy lifecycle-invalidated cached or flight-owned source buffers before cancellation becomes observable; every valid unpublished issuer result is revoked once before destruction, while typed nil contains no material and may encode only as JSON `null`; adapter and telemetry integration remain deferred | Memory-only short sessions, field denylist plus allowlist, fixed redacted diagnostic and rejecting marshal surfaces, secret canaries, bounded revocation, and independent rotation | Follow-up: Issues #25 and #39; verification: Issues #25, #28, and #39 |
 | High | **TM-006 — Effective provider identity is broader than Veer's declared scope.** ACT-TENANT or a stolen session reaches unrelated account, cluster, namespace, or resources. | Broad IAM/resource policy, cluster role, legacy token, shared credential, or unverified destination | Destructive effects outside the owning workspace/environment | Dedicated identity and short-lived sessions are requirements, not proof | Dedicated role/service account, restrictive trust/RBAC/resource policy, STS session restriction/source identity, bound K8s token, live policy analysis, and fail-closed identity preflight | Follow-up: Issues #25, #45, and #52; verification: Issues #43, #50, and #57 |
 | High | **TM-007 — Storage query or migration bypasses workspace scope.** ACT-WORKLOAD reads/writes another workspace through an omitted predicate, RLS bypass, owner role, or unsafe DDL. | Shared database and insufficient structural scope/role separation | Cross-workspace disclosure, corruption, or authorization bypass | Stable workspace keys and separated roles are accepted design rules | Composite ownership constraints, scope-requiring query API, non-owner `NOBYPASSRLS` runtime, forced RLS defense-in-depth, parameterized SQL, and migration tests | Follow-up: Issues #26 and #30; verification: Issues #26 and #31 |
 | High | **TM-008 — Poisoned, duplicated, reordered, or replayed queue work gains execution authority.** ACT-WORKLOAD injects or replays a plausible message. | Queue access or uncertain publish/ack and a worker trusting the delivery | Unauthorized, stale, or repeated provider effects | Messages are compact references and delivery is explicitly weak | Exact producer/consumer policies, bounded schema, authoritative reload, current authorization, generation/digest check, fence, idempotency, bounded DLQ, and audited redrive | Follow-up: Issues #32 and #34; verification: Issues #28, #32, and #37 |
