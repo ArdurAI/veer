@@ -61,6 +61,12 @@ document; the domain hierarchy validates complete cross-resource graphs.
 The provider-neutral control resources, explicit unknown evidence states,
 operation phases, and condition transitions are fixed by
 [ADR 0006](0006-control-execution-and-evidence.md).
+The pure six-stage request pipeline, sparse-write defaulting, stable admission
+errors, and internal versionless conversion hub are fixed by
+[ADR 0007](0007-deterministic-admission-and-version-conversion.md). Admission
+validates shape and domain meaning before side effects; authentication,
+authorization, policy, quota, idempotency, and persistence remain separate
+service boundaries.
 
 ## Reconciliation contract
 

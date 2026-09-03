@@ -612,11 +612,71 @@ func TestZeroSnapshotFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	var snapshot Snapshot
+	if _, err := snapshot.Lookup(workspaceAID); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("zero Snapshot.Lookup() error = %v, want ErrInvalidSnapshot", err)
+	}
 	if _, err := snapshot.DeriveChild(KindEnvironment, environmentAID, workspaceAID); !errors.Is(err, ErrInvalidSnapshot) {
 		t.Fatalf("zero Snapshot.DeriveChild() error = %v, want ErrInvalidSnapshot", err)
 	}
 	if err := snapshot.CheckDelete(workspaceAID); !errors.Is(err, ErrInvalidSnapshot) {
 		t.Fatalf("zero Snapshot.CheckDelete() error = %v, want ErrInvalidSnapshot", err)
+	}
+}
+
+func TestSnapshotLookupReturnsIndependentRecord(t *testing.T) {
+	t.Parallel()
+
+	fixture := newHierarchyFixture(t, workspaceAID, "workspace", "environment", "application", "component")
+	snapshot, err := NewSnapshot(workspaceAID, fixture.records)
+	if err != nil {
+		t.Fatalf("NewSnapshot() error = %v", err)
+	}
+
+	got, err := snapshot.Lookup(environmentAID)
+	if err != nil {
+		t.Fatalf("Lookup() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, fixture.records[1]) {
+		t.Fatalf("Lookup() = %#v, want %#v", got, fixture.records[1])
+	}
+
+	// Mutating the returned private pointer is possible inside this package;
+	// doing so must not alter the snapshot's retained record.
+	*got.parent = applicationAID
+	again, err := snapshot.Lookup(environmentAID)
+	if err != nil {
+		t.Fatalf("second Lookup() error = %v", err)
+	}
+	parent, present := again.Parent()
+	if !present || parent != workspaceAID {
+		t.Fatalf("Lookup() retained parent = %q, %t; want %q, true", parent, present, workspaceAID)
+	}
+
+	if _, err := snapshot.Lookup(environmentBID); !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("Lookup(missing) error = %v, want ErrResourceNotFound", err)
+	}
+	if _, err := snapshot.Lookup(""); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("Lookup(invalid ID) error = %v, want ErrInvalidSnapshot", err)
+	}
+}
+
+func TestPlacementCloneIsIndependent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newHierarchyFixture(t, workspaceAID, "workspace", "environment", "application", "component")
+	snapshot, err := NewSnapshot(workspaceAID, fixture.records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	placement, err := snapshot.DeriveChild(KindEnvironment, environmentBID, workspaceAID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := placement.Clone()
+	*placement.parent = applicationAID
+	parent, present := clone.Parent()
+	if !present || parent != workspaceAID {
+		t.Fatalf("cloned parent = %q, %t; want %q, true", parent, present, workspaceAID)
 	}
 }
 

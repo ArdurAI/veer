@@ -24,7 +24,7 @@ const (
 	maxContractBytes             = 1 << 20
 	maxJSONDepth                 = 64
 	maxJSONNodes                 = 50000
-	expectedSchemaCount          = 78
+	expectedSchemaCount          = 79
 	minimumDeprecationNoticeDays = 90
 	canonicalDecimalPattern      = `^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$`
 	providerTokenPattern         = `^[a-z][a-z0-9.-]*$`
@@ -132,6 +132,72 @@ type conditionTransitionContract struct {
 	ChangedStatusTimestamp    string   `json:"changedStatusTimestamp"`
 	ObservedGeneration        string   `json:"observedGeneration"`
 	SetOrder                  string   `json:"setOrder"`
+}
+
+type admissionContract struct {
+	Stages         []admissionStage        `json:"stages"`
+	ErrorSelection admissionErrorSelection `json:"errorSelection"`
+	FieldPath      admissionFieldPath      `json:"fieldPath"`
+	FailureEffects admissionFailureEffects `json:"failureEffects"`
+	Defaulting     admissionDefaulting     `json:"defaulting"`
+	VersionHub     admissionVersionHub     `json:"versionHub"`
+}
+
+type admissionStage struct {
+	Name              string                        `json:"name"`
+	Codes             []string                      `json:"codes"`
+	DefaultResponse   hierarchyReference            `json:"defaultResponse"`
+	ResponseOverrides map[string]hierarchyReference `json:"responseOverrides,omitempty"`
+}
+
+type admissionErrorSelection struct {
+	Maximum              int      `json:"maximum"`
+	Precedence           []string `json:"precedence"`
+	TerminalSyntaxErrors []string `json:"terminalSyntaxErrors"`
+	TerminalWorkCeilings []string `json:"terminalWorkCeilings"`
+}
+
+type admissionFieldPath struct {
+	Syntax               string             `json:"syntax"`
+	WholeDocument        string             `json:"wholeDocument"`
+	Unrepresentable      string             `json:"unrepresentable"`
+	Truncation           string             `json:"truncation"`
+	FieldViolationSchema hierarchyReference `json:"fieldViolationSchema"`
+}
+
+type admissionFailureEffects struct {
+	StateMutation      string `json:"stateMutation"`
+	QueueMutation      string `json:"queueMutation"`
+	CallbackInvocation string `json:"callbackInvocation"`
+}
+
+type admissionDefaulting struct {
+	Mode          string                 `json:"mode"`
+	Deterministic bool                   `json:"deterministic"`
+	Idempotent    bool                   `json:"idempotent"`
+	Rules         []admissionDefaultRule `json:"rules"`
+}
+
+type admissionDefaultRule struct {
+	APIVersion          string             `json:"apiVersion"`
+	Kind                string             `json:"kind"`
+	RequestPointer      string             `json:"requestPointer"`
+	When                string             `json:"when"`
+	Value               bool               `json:"value"`
+	WriteSpecSchema     hierarchyReference `json:"writeSpecSchema"`
+	CanonicalSpecSchema hierarchyReference `json:"canonicalSpecSchema"`
+}
+
+type admissionVersionHub struct {
+	Hub                    string   `json:"hub"`
+	Scope                  string   `json:"scope"`
+	ServedVersions         []string `json:"servedVersions"`
+	StorageVersion         string   `json:"storageVersion"`
+	Kinds                  []string `json:"kinds"`
+	Conversion             string   `json:"conversion"`
+	RoundTrip              string   `json:"roundTrip"`
+	UnsupportedVersionCode string   `json:"unsupportedVersionCode"`
+	UnsupportedKindCode    string   `json:"unsupportedKindCode"`
 }
 
 type resourceSpecShape uint8
@@ -432,6 +498,7 @@ func Validate(data []byte) error {
 		{name: "root", fn: validateRoot},
 		{name: "evolution", fn: validateEvolution},
 		{name: "hierarchy", fn: validateHierarchy},
+		{name: "admission", fn: validateAdmission},
 		{name: "operation transitions", fn: validateOperationTransitions},
 		{name: "condition transitions", fn: validateConditionTransitions},
 		{name: "operations", fn: validateOperations},
@@ -671,7 +738,7 @@ func isReviewedFreeFormMap(path string, schema map[string]any) bool {
 
 func isReviewedExtension(path, name string) bool {
 	switch name {
-	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-operation-transitions", "x-veer-condition-transitions":
+	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-admission", "x-veer-operation-transitions", "x-veer-condition-transitions":
 		return path == "$"
 	case "x-veer-write-class":
 		return strings.HasPrefix(path, "$/paths/") &&
@@ -932,6 +999,206 @@ func validateHierarchyFieldSets(raw any) error {
 			if err != nil || !mapKeySetEquals(reference, []string{"$ref"}) {
 				return fmt.Errorf("x-veer-hierarchy.resources[%d].%s field set drifted", index, name)
 			}
+		}
+	}
+	return nil
+}
+
+func validateAdmission(root map[string]any) error {
+	raw, exists := root["x-veer-admission"]
+	if !exists {
+		return errors.New("x-veer-admission is missing")
+	}
+	if err := validateAdmissionFieldSets(raw); err != nil {
+		return err
+	}
+
+	var got admissionContract
+	if err := decodeStrictValue(raw, &got); err != nil {
+		return fmt.Errorf("x-veer-admission shape: %w", err)
+	}
+	validationFailure := hierarchyReference{Ref: "#/components/responses/ValidationFailure"}
+	internalFailure := hierarchyReference{Ref: "#/components/responses/InternalFailure"}
+	wantStages := []admissionStage{
+		{
+			Name: "schema",
+			Codes: []string{
+				"request-too-large", "invalid-json", "json-too-deep", "too-many-json-nodes",
+				"duplicate-field", "unknown-field", "missing-field", "invalid-type", "invalid-value",
+				"unsupported-version", "unsupported-kind",
+			},
+			DefaultResponse: validationFailure,
+			ResponseOverrides: map[string]hierarchyReference{
+				"request-too-large": {Ref: "#/components/responses/RequestTooLarge"},
+			},
+		},
+		{
+			Name:            "semantic",
+			Codes:           []string{"invalid-spec", "invalid-status", "invalid-order", "duplicate-item", "future-observation"},
+			DefaultResponse: validationFailure,
+		},
+		{Name: "immutable", Codes: []string{"immutable-field"}, DefaultResponse: validationFailure},
+		{
+			Name: "reference",
+			Codes: []string{
+				"invalid-placement", "parent-not-found", "parent-kind-mismatch", "workspace-mismatch",
+			},
+			DefaultResponse: validationFailure,
+		},
+		{Name: "default", Codes: []string{"default-failed"}, DefaultResponse: internalFailure},
+		{Name: "conversion", Codes: []string{"conversion-failed"}, DefaultResponse: internalFailure},
+	}
+	if !reflect.DeepEqual(got.Stages, wantStages) {
+		return errors.New("admission stage order, codes, or response mapping drifted")
+	}
+	if !reflect.DeepEqual(got.ErrorSelection, admissionErrorSelection{
+		Maximum: 1,
+		Precedence: []string{
+			"stage-order", "lexicographic-bounded-rfc6901-pointer-or-empty", "lexicographic-code",
+		},
+		TerminalSyntaxErrors: []string{"invalid-json"},
+		TerminalWorkCeilings: []string{
+			"request-too-large", "json-too-deep", "too-many-json-nodes",
+		},
+	}) {
+		return errors.New("admission error selection policy drifted")
+	}
+	if got.FieldPath != (admissionFieldPath{
+		Syntax:               "rfc6901-json-pointer",
+		WholeDocument:        "",
+		Unrepresentable:      "empty-and-omit-field-violation",
+		Truncation:           "forbidden",
+		FieldViolationSchema: hierarchyReference{Ref: "#/components/schemas/FieldViolation"},
+	}) {
+		return errors.New("admission field path policy drifted")
+	}
+	if got.FailureEffects != (admissionFailureEffects{
+		StateMutation: "none", QueueMutation: "none", CallbackInvocation: "none",
+	}) {
+		return errors.New("admission failure effects drifted")
+	}
+	wantDefaulting := admissionDefaulting{
+		Mode: "copy-returning", Deterministic: true, Idempotent: true,
+		Rules: []admissionDefaultRule{{
+			APIVersion:     "v1alpha1",
+			Kind:           "Workspace",
+			RequestPointer: "/spec/suspendReconciliation",
+			When:           "absent",
+			Value:          false,
+			WriteSpecSchema: hierarchyReference{
+				Ref: "#/components/schemas/WorkspaceSpecWrite",
+			},
+			CanonicalSpecSchema: hierarchyReference{Ref: "#/components/schemas/WorkspaceSpec"},
+		}},
+	}
+	if !reflect.DeepEqual(got.Defaulting, wantDefaulting) {
+		return errors.New("admission defaulting policy drifted")
+	}
+	wantKinds := make([]string, 0, len(resourceSchemaContracts))
+	for _, contract := range resourceSchemaContracts {
+		wantKinds = append(wantKinds, contract.kind)
+	}
+	wantVersionHub := admissionVersionHub{
+		Hub:                    "internal",
+		Scope:                  "spec-and-status-commands",
+		ServedVersions:         []string{"v1alpha1"},
+		StorageVersion:         "v1alpha1",
+		Kinds:                  wantKinds,
+		Conversion:             "defaulted-source-to-hub",
+		RoundTrip:              "semantic-equivalence-after-defaulting",
+		UnsupportedVersionCode: "unsupported-version",
+		UnsupportedKindCode:    "unsupported-kind",
+	}
+	if !reflect.DeepEqual(got.VersionHub, wantVersionHub) {
+		return errors.New("admission version hub policy drifted")
+	}
+	info, err := mapField(root, "info")
+	if err != nil {
+		return err
+	}
+	evolution, err := mapField(root, "x-veer-evolution")
+	if err != nil {
+		return err
+	}
+	if info["version"] != got.VersionHub.StorageVersion ||
+		evolution["transportVersion"] != got.VersionHub.ServedVersions[0] {
+		return errors.New("admission version hub is not bound to the transport contract")
+	}
+	return nil
+}
+
+func validateAdmissionFieldSets(raw any) error {
+	manifest, ok := raw.(map[string]any)
+	if !ok || !mapKeySetEquals(manifest, []string{
+		"stages", "errorSelection", "fieldPath", "failureEffects", "defaulting", "versionHub",
+	}) {
+		return errors.New("x-veer-admission field set drifted")
+	}
+	stages, ok := manifest["stages"].([]any)
+	if !ok || len(stages) != 6 {
+		return errors.New("x-veer-admission.stages must contain exactly six entries")
+	}
+	for index, rawStage := range stages {
+		stage, ok := rawStage.(map[string]any)
+		wantFields := []string{"name", "codes", "defaultResponse"}
+		if index == 0 {
+			wantFields = append(wantFields, "responseOverrides")
+		}
+		if !ok || !mapKeySetEquals(stage, wantFields) {
+			return fmt.Errorf("x-veer-admission.stages[%d] field set drifted", index)
+		}
+		response, err := mapField(stage, "defaultResponse")
+		if err != nil || !mapKeySetEquals(response, []string{"$ref"}) {
+			return fmt.Errorf("x-veer-admission.stages[%d].defaultResponse field set drifted", index)
+		}
+		if index == 0 {
+			overrides, err := mapField(stage, "responseOverrides")
+			if err != nil || !mapKeySetEquals(overrides, []string{"request-too-large"}) {
+				return errors.New("x-veer-admission schema response overrides drifted")
+			}
+			override, err := mapField(overrides, "request-too-large")
+			if err != nil || !mapKeySetEquals(override, []string{"$ref"}) {
+				return errors.New("x-veer-admission request-too-large response field set drifted")
+			}
+		}
+	}
+	for name, fields := range map[string][]string{
+		"errorSelection": {"maximum", "precedence", "terminalSyntaxErrors", "terminalWorkCeilings"},
+		"fieldPath": {
+			"syntax", "wholeDocument", "unrepresentable", "truncation", "fieldViolationSchema",
+		},
+		"failureEffects": {"stateMutation", "queueMutation", "callbackInvocation"},
+		"defaulting":     {"mode", "deterministic", "idempotent", "rules"},
+		"versionHub": {
+			"hub", "scope", "servedVersions", "storageVersion", "kinds", "conversion", "roundTrip",
+			"unsupportedVersionCode", "unsupportedKindCode",
+		},
+	} {
+		object, err := mapField(manifest, name)
+		if err != nil || !mapKeySetEquals(object, fields) {
+			return fmt.Errorf("x-veer-admission.%s field set drifted", name)
+		}
+	}
+	fieldPath, _ := mapField(manifest, "fieldPath")
+	fieldViolation, err := mapField(fieldPath, "fieldViolationSchema")
+	if err != nil || !mapKeySetEquals(fieldViolation, []string{"$ref"}) {
+		return errors.New("x-veer-admission.fieldPath.fieldViolationSchema field set drifted")
+	}
+	defaulting, _ := mapField(manifest, "defaulting")
+	rules, ok := defaulting["rules"].([]any)
+	if !ok || len(rules) != 1 {
+		return errors.New("x-veer-admission.defaulting.rules must contain exactly one rule")
+	}
+	rule, ok := rules[0].(map[string]any)
+	if !ok || !mapKeySetEquals(rule, []string{
+		"apiVersion", "kind", "requestPointer", "when", "value", "writeSpecSchema", "canonicalSpecSchema",
+	}) {
+		return errors.New("x-veer-admission.defaulting.rules[0] field set drifted")
+	}
+	for _, name := range []string{"writeSpecSchema", "canonicalSpecSchema"} {
+		reference, err := mapField(rule, name)
+		if err != nil || !mapKeySetEquals(reference, []string{"$ref"}) {
+			return fmt.Errorf("x-veer-admission.defaulting.rules[0].%s field set drifted", name)
 		}
 	}
 	return nil
@@ -2192,6 +2459,7 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 		{name: "WorkspaceList", extras: []string{"x-veer-maximum-json-bytes", "x-veer-page-byte-policy"}},
 		{name: "WorkspaceReplace"},
 		{name: "WorkspaceSpec"},
+		{name: "WorkspaceSpecWrite"},
 		{name: "WorkspaceStatus", extras: []string{"example"}},
 		{name: "WorkspaceStatusWrite"},
 		{name: "WritableMetadata", extras: []string{"example"}},
@@ -2287,7 +2555,7 @@ func validateSchemas(schemas map[string]any) error {
 		"Condition", "CostEstimate", "CredentialReference", "FieldViolation", "IdempotencyKey", "Labels", "MutationReceipt",
 		"OpaqueId", "Operation", "Problem", "RequestId", "ResourceMetadata", "StatusReceipt", "StrongETag",
 		"Timestamp", "ProviderCapability", "QuotaCheck", "Workspace", "WorkspaceCreate", "WorkspaceList", "WorkspaceReplace",
-		"WorkspaceSpec", "WorkspaceStatus", "WorkspaceStatusWrite", "WritableMetadata",
+		"WorkspaceSpec", "WorkspaceSpecWrite", "WorkspaceStatus", "WorkspaceStatusWrite", "WritableMetadata",
 		"RootResourceMetadata", "ChildResourceMetadata",
 	}
 	for _, contract := range resourceSchemaContracts[1:] {
@@ -2584,11 +2852,31 @@ func validateSchemas(schemas map[string]any) error {
 		return err
 	}
 	if !stringSetEquals(workspaceSpec["required"], []string{"suspendReconciliation"}) ||
-		len(specProperties) != 1 || suspend["type"] != "boolean" || suspend["default"] != false {
+		len(specProperties) != 1 || suspend["type"] != "boolean" {
 		return errors.New("WorkspaceSpec contract drifted")
 	}
-	if !mapKeySetEquals(suspend, []string{"type", "default", "description"}) {
+	if !mapKeySetEquals(suspend, []string{"type", "description"}) {
 		return errors.New("WorkspaceSpec.suspendReconciliation has unreviewed keywords")
+	}
+	workspaceSpecWrite, err := mapField(schemas, "WorkspaceSpecWrite")
+	if err != nil {
+		return err
+	}
+	writeSpecProperties, err := mapField(workspaceSpecWrite, "properties")
+	if err != nil {
+		return err
+	}
+	writeSuspend, err := mapField(writeSpecProperties, "suspendReconciliation")
+	if err != nil {
+		return err
+	}
+	if _, required := workspaceSpecWrite["required"]; required || len(writeSpecProperties) != 1 ||
+		writeSuspend["type"] != "boolean" || writeSuspend["default"] != false {
+		return errors.New("WorkspaceSpecWrite contract drifted")
+	}
+	if !mapKeySetEquals(workspaceSpecWrite, []string{"type", "description", "additionalProperties", "properties"}) ||
+		!mapKeySetEquals(writeSuspend, []string{"type", "default", "description"}) {
+		return errors.New("WorkspaceSpecWrite schema has unreviewed keywords")
 	}
 
 	statusWrite, err := mapField(schemas, "WorkspaceStatusWrite")
@@ -2909,7 +3197,8 @@ func validateNestedSchemaKeywords(schemas map[string]any) error {
 		{schema: "ResourceMetadata", property: "updatedAt", keywords: []string{"$ref", "readOnly", "type"}},
 		{schema: "WritableMetadata", property: "displayName", keywords: []string{"maxLength", "minLength", "type"}},
 		{schema: "WritableMetadata", property: "labels", keywords: []string{"$ref"}},
-		{schema: "WorkspaceSpec", property: "suspendReconciliation", keywords: []string{"default", "description", "type"}},
+		{schema: "WorkspaceSpec", property: "suspendReconciliation", keywords: []string{"description", "type"}},
+		{schema: "WorkspaceSpecWrite", property: "suspendReconciliation", keywords: []string{"default", "description", "type"}},
 		{schema: "Condition", property: "type", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
 		{schema: "Condition", property: "status", keywords: []string{"enum", "type"}},
 		{schema: "Condition", property: "reason", keywords: []string{"maxLength", "minLength", "pattern", "type"}},
@@ -4499,7 +4788,7 @@ func validateWorkspaceWriteSchema(schemas map[string]any, name string) error {
 	}
 	for property, target := range map[string]string{
 		"metadata": "WritableMetadata",
-		"spec":     "WorkspaceSpec",
+		"spec":     "WorkspaceSpecWrite",
 	} {
 		if err := requireReference(properties, property, "#/components/schemas/"+target); err != nil {
 			return fmt.Errorf("%s: %w", name, err)

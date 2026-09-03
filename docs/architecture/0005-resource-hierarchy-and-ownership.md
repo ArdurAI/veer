@@ -105,10 +105,11 @@ provider identifier and credential reference only.
 
 JSON Schema proves individual document shape. The hierarchy package proves
 cross-resource parent existence, ownership equality, edge kinds, cycles,
-immutability, and deletion restriction. Issue
-[#20](https://github.com/ArdurAI/veer/issues/20) owns request admission order,
-stable external error codes, JSON Pointer mapping, defaulting, and
-cross-version conversion. Issue
+immutability, and deletion restriction.
+[ADR 0007](0007-deterministic-admission-and-version-conversion.md) defines
+request admission order, stable external error codes, JSON Pointer mapping,
+defaulting, and version-hub conversion for issue
+[#20](https://github.com/ArdurAI/veer/issues/20). Issue
 [#30](https://github.com/ArdurAI/veer/issues/30) must enforce equivalent
 scoped indexed reads and create/delete decisions atomically in persistence.
 
@@ -133,10 +134,12 @@ latency and cost budgets.
 
 ### Version evidence
 
-All six kinds round-trip through the common canonical `v1alpha1` envelope.
-The evidence proves same-version byte stability only. It does not claim a
-conversion path or compatibility with a future version; issue #20 owns those
-decisions and fixtures.
+All six kinds remain byte-stable through the common canonical `v1alpha1`
+envelope. [ADR 0007](0007-deterministic-admission-and-version-conversion.md)
+adds a versionless internal hub and semantic round trips for each kind's spec
+and status commands. Sparse Workspace omission may normalize to canonical
+explicit `false`; equivalence is measured after defaulting, not by source
+presence. This does not claim compatibility with a second public version.
 
 ## Consequences
 

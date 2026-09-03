@@ -158,6 +158,14 @@ func (placement Placement) Parent() (resource.ID, bool) {
 	return *placement.parent, true
 }
 
+// Clone returns an independent placement value. This matters when placement
+// crosses package boundaries even though its current pointer-bearing state is
+// exposed only through copy-returning accessors.
+func (placement Placement) Clone() Placement {
+	placement.parent = cloneIDPointer(placement.parent)
+	return placement
+}
+
 // CreateInput contains caller-owned state plus server-issued version and
 // time values. Immutable ID, kind, parent, and workspace ownership come only
 // from Placement.
@@ -302,6 +310,25 @@ func (snapshot Snapshot) WorkspaceID() resource.ID { return snapshot.workspaceID
 
 // Len returns the number of records in the validated workspace view.
 func (snapshot Snapshot) Len() int { return len(snapshot.records) }
+
+// Lookup returns an independent copy of the retained hierarchy record with
+// the supplied stable ID. A zero-value snapshot fails closed. The accessor is
+// deliberately read-only so admission can prove that a caller-supplied
+// current record belongs to the exact validated snapshot without exposing the
+// snapshot's mutable index.
+func (snapshot Snapshot) Lookup(id resource.ID) (Record, error) {
+	if !snapshot.initialized {
+		return Record{}, ErrInvalidSnapshot
+	}
+	if _, err := resource.ParseID(id.String()); err != nil {
+		return Record{}, ErrInvalidSnapshot
+	}
+	record, exists := snapshot.records[id]
+	if !exists {
+		return Record{}, ErrResourceNotFound
+	}
+	return cloneRecord(record), nil
+}
 
 // DeriveChild creates placement for a direct child of a record in this
 // validated workspace. The workspace ID is copied from the snapshot, never

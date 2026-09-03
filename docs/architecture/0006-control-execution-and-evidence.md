@@ -165,7 +165,8 @@ This decision adds schemas and provider-free domain oracles. It adds no HTTP
 route, server, database, queue, policy evaluator, credential broker, provider
 SDK, provider call, or generated code.
 
-- Issue [#20](https://github.com/ArdurAI/veer/issues/20) owns admission order,
+- [ADR 0007](0007-deterministic-admission-and-version-conversion.md) and issue
+  [#20](https://github.com/ArdurAI/veer/issues/20) define admission order,
   defaulting, field-path errors, immutable-field mapping, and conversion.
 - Issue [#21](https://github.com/ArdurAI/veer/issues/21) owns the reference
   server, lifecycle handlers, filtering, pagination, and idempotency harness.

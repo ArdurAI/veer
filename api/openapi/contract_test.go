@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ArdurAI/veer/internal/core/domain/admission"
 )
 
 type schemaExampleWire struct {
@@ -46,6 +48,27 @@ type controlSchemaInstanceFixture struct {
 	Instance      map[string]any `json:"instance"`
 }
 
+type admissionSchemaFixtureSet struct {
+	Compatibility []admissionSchemaInstanceFixture `json:"compatibility"`
+	Defaulting    []admissionDefaultFixture        `json:"defaulting"`
+	Negative      []admissionSchemaInstanceFixture `json:"negative"`
+}
+
+type admissionSchemaInstanceFixture struct {
+	Name     string         `json:"name"`
+	Kind     string         `json:"kind,omitempty"`
+	Role     string         `json:"role,omitempty"`
+	Schema   string         `json:"schema"`
+	Instance map[string]any `json:"instance"`
+}
+
+type admissionDefaultFixture struct {
+	Name      string         `json:"name"`
+	Schema    string         `json:"schema"`
+	Instance  map[string]any `json:"instance"`
+	Canonical map[string]any `json:"canonical"`
+}
+
 type controlTransitionFixture struct {
 	Operations []operationTransitionFixture `json:"operations"`
 	Conditions []conditionTransitionFixture `json:"conditions"`
@@ -74,6 +97,91 @@ func TestBaselineContract(t *testing.T) {
 	}
 	if err := Validate(data); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestAdmissionManifestMatchesRuntimeTokens(t *testing.T) {
+	t.Parallel()
+
+	data, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, data)
+	manifestStages, ok := nestedMap(t, root, "x-veer-admission")["stages"].([]any)
+	if !ok {
+		t.Fatal("x-veer-admission.stages is not an array")
+	}
+
+	want := []struct {
+		stage admission.Stage
+		codes []admission.Code
+	}{
+		{stage: admission.StageSchema, codes: []admission.Code{
+			admission.CodeRequestTooLarge,
+			admission.CodeInvalidJSON,
+			admission.CodeJSONTooDeep,
+			admission.CodeTooManyJSONNodes,
+			admission.CodeDuplicateField,
+			admission.CodeUnknownField,
+			admission.CodeMissingField,
+			admission.CodeInvalidType,
+			admission.CodeInvalidValue,
+			admission.CodeUnsupportedVersion,
+			admission.CodeUnsupportedKind,
+		}},
+		{stage: admission.StageSemantic, codes: []admission.Code{
+			admission.CodeInvalidSpec,
+			admission.CodeInvalidStatus,
+			admission.CodeInvalidOrder,
+			admission.CodeDuplicateItem,
+			admission.CodeFutureObservation,
+		}},
+		{stage: admission.StageImmutable, codes: []admission.Code{
+			admission.CodeImmutableField,
+		}},
+		{stage: admission.StageReference, codes: []admission.Code{
+			admission.CodeInvalidPlacement,
+			admission.CodeParentNotFound,
+			admission.CodeParentKindMismatch,
+			admission.CodeWorkspaceMismatch,
+		}},
+		{stage: admission.StageDefault, codes: []admission.Code{
+			admission.CodeDefaultFailed,
+		}},
+		{stage: admission.StageConversion, codes: []admission.Code{
+			admission.CodeConversionFailed,
+		}},
+	}
+	if len(manifestStages) != len(want) {
+		t.Fatalf("x-veer-admission.stages length = %d, want %d", len(manifestStages), len(want))
+	}
+	for index, expected := range want {
+		stage, ok := manifestStages[index].(map[string]any)
+		if !ok {
+			t.Fatalf("x-veer-admission.stages[%d] is not an object", index)
+		}
+		if stage["name"] != string(expected.stage) {
+			t.Fatalf("x-veer-admission.stages[%d].name = %v, want %q", index, stage["name"], expected.stage)
+		}
+		codes, ok := stage["codes"].([]any)
+		if !ok {
+			t.Fatalf("x-veer-admission.stages[%d].codes is not an array", index)
+		}
+		if len(codes) != len(expected.codes) {
+			t.Fatalf("x-veer-admission.stages[%d].codes length = %d, want %d", index, len(codes), len(expected.codes))
+		}
+		for codeIndex, expectedCode := range expected.codes {
+			if codes[codeIndex] != string(expectedCode) {
+				t.Fatalf(
+					"x-veer-admission.stages[%d].codes[%d] = %v, want %q",
+					index,
+					codeIndex,
+					codes[codeIndex],
+					expectedCode,
+				)
+			}
+		}
 	}
 }
 
@@ -230,6 +338,148 @@ func TestControlSchemaSemanticFixtureMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAdmissionSchemaFixtureMatrix(t *testing.T) {
+	t.Parallel()
+	var fixtures admissionSchemaFixtureSet
+	decodeStrictFixture(t, "testdata/admission-schema-instances.json", &fixtures)
+
+	wantCells := make(map[string]string, len(resourceSchemaContracts)*3)
+	for _, contract := range resourceSchemaContracts {
+		for _, role := range []struct {
+			name   string
+			suffix string
+		}{
+			{name: "create", suffix: "Create"},
+			{name: "replace", suffix: "Replace"},
+			{name: "status", suffix: "StatusWrite"},
+		} {
+			wantCells[contract.kind+"/"+role.name] = contract.schema(role.suffix)
+		}
+	}
+	if len(fixtures.Compatibility) != len(wantCells) {
+		t.Fatalf("compatibility fixture count = %d, want exactly %d", len(fixtures.Compatibility), len(wantCells))
+	}
+	seenCells := make(map[string]struct{}, len(fixtures.Compatibility))
+	seenNames := make(map[string]struct{}, len(fixtures.Compatibility))
+	for _, fixture := range fixtures.Compatibility {
+		cell := fixture.Kind + "/" + fixture.Role
+		wantSchema, exists := wantCells[cell]
+		if !exists {
+			t.Fatalf("unexpected compatibility cell %q", cell)
+		}
+		if _, duplicate := seenCells[cell]; duplicate {
+			t.Fatalf("duplicate compatibility cell %q", cell)
+		}
+		if _, duplicate := seenNames[fixture.Name]; duplicate {
+			t.Fatalf("duplicate admission fixture name %q", fixture.Name)
+		}
+		seenCells[cell] = struct{}{}
+		seenNames[fixture.Name] = struct{}{}
+		if fixture.Schema != wantSchema {
+			t.Fatalf("compatibility cell %q schema = %q, want %q", cell, fixture.Schema, wantSchema)
+		}
+		if fixture.Instance["apiVersion"] != "v1alpha1" || fixture.Instance["kind"] != fixture.Kind {
+			t.Fatalf("compatibility cell %q identity drifted", cell)
+		}
+	}
+
+	type defaultFixtureContract struct {
+		instance  map[string]any
+		canonical map[string]any
+	}
+	wantDefaults := map[string]defaultFixtureContract{
+		"workspace omitted defaults false": {
+			instance:  map[string]any{},
+			canonical: map[string]any{"suspendReconciliation": false},
+		},
+		"workspace explicit false remains false": {
+			instance:  map[string]any{"suspendReconciliation": false},
+			canonical: map[string]any{"suspendReconciliation": false},
+		},
+		"workspace explicit true remains true": {
+			instance:  map[string]any{"suspendReconciliation": true},
+			canonical: map[string]any{"suspendReconciliation": true},
+		},
+	}
+	if len(fixtures.Defaulting) != len(wantDefaults) {
+		t.Fatalf("default fixture count = %d, want exactly %d", len(fixtures.Defaulting), len(wantDefaults))
+	}
+	contractData, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, contractData)
+	defaulting := nestedMap(t, root, "x-veer-admission", "defaulting")
+	rules := defaulting["rules"].([]any)
+	rule := rules[0].(map[string]any)
+	for _, fixture := range fixtures.Defaulting {
+		want, exists := wantDefaults[fixture.Name]
+		if !exists {
+			t.Fatalf("unexpected default fixture %q", fixture.Name)
+		}
+		if _, duplicate := seenNames[fixture.Name]; duplicate {
+			t.Fatalf("duplicate admission fixture name %q", fixture.Name)
+		}
+		seenNames[fixture.Name] = struct{}{}
+		if fixture.Schema != "WorkspaceSpecWrite" ||
+			!reflect.DeepEqual(fixture.Instance, want.instance) ||
+			!reflect.DeepEqual(fixture.Canonical, want.canonical) {
+			t.Fatalf("default fixture %q schema or canonical value drifted", fixture.Name)
+		}
+		before := cloneFixtureMap(fixture.Instance)
+		first := applyWorkspaceDefaultRule(fixture.Instance, rule)
+		second := applyWorkspaceDefaultRule(first, rule)
+		if !reflect.DeepEqual(fixture.Instance, before) {
+			t.Fatalf("default fixture %q input was mutated", fixture.Name)
+		}
+		if !reflect.DeepEqual(first, fixture.Canonical) || !reflect.DeepEqual(second, first) {
+			t.Fatalf("default fixture %q is not deterministic and idempotent: first %#v second %#v want %#v",
+				fixture.Name, first, second, fixture.Canonical)
+		}
+	}
+
+	wantNegative := map[string]string{
+		"workspace write rejects null":                                  "WorkspaceSpecWrite",
+		"workspace canonical spec requires defaulted member":            "WorkspaceSpec",
+		"workspace create requires spec":                                "WorkspaceCreate",
+		"workspace status rejects desired state":                        "WorkspaceStatusWrite",
+		"workspace create rejects server metadata":                      "WorkspaceCreate",
+		"workspace write rejects unknown spec member":                   "WorkspaceSpecWrite",
+		"provider connection rejects malformed credential reference id": "ProviderConnectionCreate",
+		"workspace create rejects unsupported version":                  "WorkspaceCreate",
+		"workspace create rejects unsupported kind":                     "WorkspaceCreate",
+	}
+	if len(fixtures.Negative) != len(wantNegative) {
+		t.Fatalf("negative fixture count = %d, want exactly %d", len(fixtures.Negative), len(wantNegative))
+	}
+	for _, fixture := range fixtures.Negative {
+		wantSchema, exists := wantNegative[fixture.Name]
+		if !exists || fixture.Schema != wantSchema {
+			t.Fatalf("negative fixture %q schema = %q, want %q", fixture.Name, fixture.Schema, wantSchema)
+		}
+		if _, duplicate := seenNames[fixture.Name]; duplicate {
+			t.Fatalf("duplicate admission fixture name %q", fixture.Name)
+		}
+		seenNames[fixture.Name] = struct{}{}
+	}
+}
+
+func cloneFixtureMap(input map[string]any) map[string]any {
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func applyWorkspaceDefaultRule(input map[string]any, rule map[string]any) map[string]any {
+	result := cloneFixtureMap(input)
+	if _, exists := result["suspendReconciliation"]; !exists {
+		result["suspendReconciliation"] = rule["value"]
+	}
+	return result
 }
 
 func TestSemanticMessageRuneBounds(t *testing.T) {
@@ -648,6 +898,75 @@ func TestVacuumControlSchemaInstanceMatrix(t *testing.T) {
 	}
 }
 
+func TestVacuumAdmissionSchemaInstanceMatrix(t *testing.T) {
+	vacuumPath := os.Getenv("VEER_TEST_VACUUM_BIN")
+	if vacuumPath == "" {
+		t.Skip("schema-instance matrix runs through ./hack/dev api")
+	}
+	expectedVacuumPath, err := filepath.Abs(filepath.Join("..", "..", ".tools", "bin", "vacuum"))
+	if err != nil {
+		t.Fatalf("resolve repository Vacuum path: %v", err)
+	}
+	if filepath.Clean(vacuumPath) != expectedVacuumPath {
+		t.Fatalf("Vacuum path = %q, want repository-pinned %q", vacuumPath, expectedVacuumPath)
+	}
+	info, err := os.Lstat(vacuumPath)
+	if err != nil {
+		t.Fatalf("inspect repository Vacuum: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("Vacuum must be a regular non-symlink executable: mode %s", info.Mode())
+	}
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	configPath, err := filepath.Abs("vacuum.conf.yaml")
+	if err != nil {
+		t.Fatalf("resolve Vacuum config: %v", err)
+	}
+
+	var fixtures admissionSchemaFixtureSet
+	decodeStrictFixture(t, "testdata/admission-schema-instances.json", &fixtures)
+	for _, fixture := range fixtures.Compatibility {
+		fixture := fixture
+		t.Run("compatibility/"+fixture.Name, func(t *testing.T) {
+			assertVacuumAcceptsInstance(t, vacuumPath, configPath, baseline, fixture.Schema, fixture.Instance)
+		})
+	}
+	for _, fixture := range fixtures.Defaulting {
+		fixture := fixture
+		t.Run("defaulting/"+fixture.Name, func(t *testing.T) {
+			assertVacuumAcceptsInstance(t, vacuumPath, configPath, baseline, fixture.Schema, fixture.Instance)
+			assertVacuumAcceptsInstance(t, vacuumPath, configPath, baseline, "WorkspaceSpec", fixture.Canonical)
+		})
+	}
+	for _, fixture := range fixtures.Negative {
+		fixture := fixture
+		t.Run("negative/"+fixture.Name, func(t *testing.T) {
+			output, err := runVacuumInstance(t, vacuumPath, configPath, baseline, fixture.Schema, fixture.Instance)
+			if err == nil || !bytes.Contains(output, []byte("oas3-valid-schema-example")) {
+				t.Fatalf("Vacuum accepted invalid %s instance: %v\n%s", fixture.Schema, err, output)
+			}
+		})
+	}
+}
+
+func assertVacuumAcceptsInstance(
+	t *testing.T,
+	vacuumPath, configPath string,
+	baseline []byte,
+	schema string,
+	instance map[string]any,
+) {
+	t.Helper()
+	output, err := runVacuumInstance(t, vacuumPath, configPath, baseline, schema, instance)
+	if bytes.Contains(output, []byte("oas3-valid-schema-example")) ||
+		(err != nil && !bytes.Contains(output, []byte("oas3-missing-example"))) {
+		t.Fatalf("Vacuum rejected valid %s instance: %v\n%s", schema, err, output)
+	}
+}
+
 func runVacuumInstance(
 	t *testing.T,
 	vacuumPath, configPath string,
@@ -667,6 +986,373 @@ func runVacuumInstance(
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
 	return runVacuumSchemaExamples(t, vacuumPath, configPath, contractPath)
+}
+
+func TestAdmissionContractRejectsSemanticDrift(t *testing.T) {
+	t.Parallel()
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		message string
+	}{
+		{
+			name: "manifest removed",
+			mutate: func(root map[string]any) {
+				delete(root, "x-veer-admission")
+			},
+			message: "x-veer-admission is missing",
+		},
+		{
+			name: "manifest moved below info",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "info")["x-veer-admission"] = root["x-veer-admission"]
+				delete(root, "x-veer-admission")
+			},
+			message: `uses unreviewed extension "x-veer-admission"`,
+		},
+		{
+			name: "unknown manifest field",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission")["unreviewed"] = true
+			},
+			message: "x-veer-admission field set drifted",
+		},
+		{
+			name: "stage removed",
+			mutate: func(root map[string]any) {
+				manifest := nestedMap(t, root, "x-veer-admission")
+				manifest["stages"] = manifest["stages"].([]any)[:5]
+			},
+			message: "must contain exactly six entries",
+		},
+		{
+			name: "stage order changed",
+			mutate: func(root map[string]any) {
+				stages := nestedMap(t, root, "x-veer-admission")["stages"].([]any)
+				stages[1], stages[2] = stages[2], stages[1]
+			},
+			message: "stage order, codes, or response mapping drifted",
+		},
+		{
+			name: "stage renamed",
+			mutate: func(root map[string]any) {
+				admissionStageForMutation(t, root, 4)["name"] = "defaults"
+			},
+			message: "stage order, codes, or response mapping drifted",
+		},
+		{
+			name: "code moved to another stage",
+			mutate: func(root map[string]any) {
+				schema := admissionStageForMutation(t, root, 0)
+				semantic := admissionStageForMutation(t, root, 1)
+				schemaCodes := schema["codes"].([]any)
+				schema["codes"] = schemaCodes[:len(schemaCodes)-1]
+				semantic["codes"] = append(semantic["codes"].([]any), "unsupported-kind")
+			},
+			message: "stage order, codes, or response mapping drifted",
+		},
+		{
+			name: "code duplicated",
+			mutate: func(root map[string]any) {
+				stage := admissionStageForMutation(t, root, 3)
+				stage["codes"] = append(stage["codes"].([]any), "parent-not-found")
+			},
+			message: "stage order, codes, or response mapping drifted",
+		},
+		{
+			name: "client failure response remapped",
+			mutate: func(root map[string]any) {
+				nestedMap(t, admissionStageForMutation(t, root, 2), "defaultResponse")["$ref"] =
+					"#/components/responses/InternalFailure"
+			},
+			message: "stage order, codes, or response mapping drifted",
+		},
+		{
+			name: "request too large response remapped",
+			mutate: func(root map[string]any) {
+				nestedMap(t, admissionStageForMutation(t, root, 0), "responseOverrides", "request-too-large")["$ref"] =
+					"#/components/responses/ValidationFailure"
+			},
+			message: "stage order, codes, or response mapping drifted",
+		},
+		{
+			name: "internal failure response remapped",
+			mutate: func(root map[string]any) {
+				nestedMap(t, admissionStageForMutation(t, root, 5), "defaultResponse")["$ref"] =
+					"#/components/responses/ValidationFailure"
+			},
+			message: "stage order, codes, or response mapping drifted",
+		},
+		{
+			name: "multiple terminal errors allowed",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "errorSelection")["maximum"] = json.Number("2")
+			},
+			message: "error selection policy drifted",
+		},
+		{
+			name: "error precedence changed",
+			mutate: func(root map[string]any) {
+				selection := nestedMap(t, root, "x-veer-admission", "errorSelection")
+				selection["precedence"] = []any{
+					"lexicographic-code", "stage-order", "lexicographic-bounded-rfc6901-pointer-or-empty",
+				}
+			},
+			message: "error selection policy drifted",
+		},
+		{
+			name: "terminal work ceiling order changed",
+			mutate: func(root map[string]any) {
+				selection := nestedMap(t, root, "x-veer-admission", "errorSelection")
+				selection["terminalWorkCeilings"] = []any{
+					"request-too-large", "too-many-json-nodes", "json-too-deep",
+				}
+			},
+			message: "error selection policy drifted",
+		},
+		{
+			name: "terminal syntax error removed",
+			mutate: func(root map[string]any) {
+				selection := nestedMap(t, root, "x-veer-admission", "errorSelection")
+				selection["terminalSyntaxErrors"] = []any{}
+			},
+			message: "error selection policy drifted",
+		},
+		{
+			name: "field path becomes dot notation",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "fieldPath")["syntax"] = "dot-notation"
+			},
+			message: "field path policy drifted",
+		},
+		{
+			name: "whole document gains sentinel path",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "fieldPath")["wholeDocument"] = "/"
+			},
+			message: "field path policy drifted",
+		},
+		{
+			name: "field path truncation allowed",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "fieldPath")["truncation"] = "allowed"
+			},
+			message: "field path policy drifted",
+		},
+		{
+			name: "unrepresentable path leaks partial field",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "fieldPath")["unrepresentable"] = "truncate"
+			},
+			message: "field path policy drifted",
+		},
+		{
+			name: "field violation schema remapped",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "fieldPath", "fieldViolationSchema")["$ref"] =
+					"#/components/schemas/Problem"
+			},
+			message: "field path policy drifted",
+		},
+		{
+			name: "failure can mutate state",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "failureEffects")["stateMutation"] = "allowed"
+			},
+			message: "failure effects drifted",
+		},
+		{
+			name: "failure can enqueue work",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "failureEffects")["queueMutation"] = "allowed"
+			},
+			message: "failure effects drifted",
+		},
+		{
+			name: "failure can invoke callbacks",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "failureEffects")["callbackInvocation"] = "allowed"
+			},
+			message: "failure effects drifted",
+		},
+		{
+			name: "default mutates input",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "defaulting")["mode"] = "in-place"
+			},
+			message: "defaulting policy drifted",
+		},
+		{
+			name: "default becomes nondeterministic",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "defaulting")["deterministic"] = false
+			},
+			message: "defaulting policy drifted",
+		},
+		{
+			name: "default becomes non-idempotent",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "defaulting")["idempotent"] = false
+			},
+			message: "defaulting policy drifted",
+		},
+		{
+			name: "default pointer changed",
+			mutate: func(root map[string]any) {
+				admissionDefaultRuleForMutation(t, root)["requestPointer"] = "/spec/reconcile"
+			},
+			message: "defaulting policy drifted",
+		},
+		{
+			name: "default value changed",
+			mutate: func(root map[string]any) {
+				admissionDefaultRuleForMutation(t, root)["value"] = true
+			},
+			message: "defaulting policy drifted",
+		},
+		{
+			name: "write default schema remapped",
+			mutate: func(root map[string]any) {
+				nestedMap(t, admissionDefaultRuleForMutation(t, root), "writeSpecSchema")["$ref"] =
+					"#/components/schemas/WorkspaceSpec"
+			},
+			message: "defaulting policy drifted",
+		},
+		{
+			name: "canonical default schema remapped",
+			mutate: func(root map[string]any) {
+				nestedMap(t, admissionDefaultRuleForMutation(t, root), "canonicalSpecSchema")["$ref"] =
+					"#/components/schemas/WorkspaceSpecWrite"
+			},
+			message: "defaulting policy drifted",
+		},
+		{
+			name: "hub exposed as transport version",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "versionHub")["hub"] = "v1alpha1"
+			},
+			message: "version hub policy drifted",
+		},
+		{
+			name: "served version added without conversion",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "versionHub")["servedVersions"] =
+					[]any{"v1alpha1", "v1beta1"}
+			},
+			message: "version hub policy drifted",
+		},
+		{
+			name: "kind order changed",
+			mutate: func(root map[string]any) {
+				hub := nestedMap(t, root, "x-veer-admission", "versionHub")
+				kinds := hub["kinds"].([]any)
+				kinds[0], kinds[1] = kinds[1], kinds[0]
+			},
+			message: "version hub policy drifted",
+		},
+		{
+			name: "round trip requires representation equality",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-admission", "versionHub")["roundTrip"] = "source-presence-equality"
+			},
+			message: "version hub policy drifted",
+		},
+		{
+			name: "canonical spec becomes sparse",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "components", "schemas", "WorkspaceSpec"), "required")
+			},
+			message: "WorkspaceSpec contract drifted",
+		},
+		{
+			name: "canonical spec regains default annotation",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "WorkspaceSpec", "properties", "suspendReconciliation")["default"] = false
+			},
+			message: "WorkspaceSpec.suspendReconciliation has unreviewed keywords",
+		},
+		{
+			name: "write spec requires defaulted member",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "WorkspaceSpecWrite")["required"] =
+					[]any{"suspendReconciliation"}
+			},
+			message: "WorkspaceSpecWrite contract drifted",
+		},
+		{
+			name: "write spec loses default",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "components", "schemas", "WorkspaceSpecWrite", "properties", "suspendReconciliation"), "default")
+			},
+			message: "WorkspaceSpecWrite contract drifted",
+		},
+		{
+			name: "create uses canonical spec",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "WorkspaceCreate", "properties", "spec")["$ref"] =
+					"#/components/schemas/WorkspaceSpec"
+			},
+			message: "spec must reference #/components/schemas/WorkspaceSpecWrite",
+		},
+		{
+			name: "replace uses canonical spec",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "WorkspaceReplace", "properties", "spec")["$ref"] =
+					"#/components/schemas/WorkspaceSpec"
+			},
+			message: "spec must reference #/components/schemas/WorkspaceSpecWrite",
+		},
+		{
+			name: "read uses sparse spec",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "Workspace", "properties", "spec")["$ref"] =
+					"#/components/schemas/WorkspaceSpecWrite"
+			},
+			message: "spec must reference #/components/schemas/WorkspaceSpec",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			err = Validate(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want message containing %q", err, test.message)
+			}
+		})
+	}
+}
+
+func admissionStageForMutation(t *testing.T, root map[string]any, index int) map[string]any {
+	t.Helper()
+	stages := nestedMap(t, root, "x-veer-admission")["stages"].([]any)
+	stage, ok := stages[index].(map[string]any)
+	if !ok {
+		t.Fatalf("admission stage %d is not an object", index)
+	}
+	return stage
+}
+
+func admissionDefaultRuleForMutation(t *testing.T, root map[string]any) map[string]any {
+	t.Helper()
+	rules := nestedMap(t, root, "x-veer-admission", "defaulting")["rules"].([]any)
+	rule, ok := rules[0].(map[string]any)
+	if !ok {
+		t.Fatal("admission default rule is not an object")
+	}
+	return rule
 }
 
 func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
@@ -843,7 +1529,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 			mutate: func(root map[string]any) {
 				delete(nestedMap(t, root, "components", "schemas"), "ComponentList")
 			},
-			message: "expected exactly 78 schemas, got 77",
+			message: "expected exactly 79 schemas, got 78",
 		},
 		{
 			name: "schema added",
@@ -852,7 +1538,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 					"type": "object", "additionalProperties": false, "properties": map[string]any{},
 				}
 			},
-			message: "expected exactly 78 schemas, got 79",
+			message: "expected exactly 79 schemas, got 80",
 		},
 		{
 			name: "workspace ownership no longer required",

@@ -76,6 +76,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [Common resource envelope](docs/architecture/0004-common-resource-envelope.md)
 - [Resource hierarchy and ownership](docs/architecture/0005-resource-hierarchy-and-ownership.md)
 - [Control, execution, and evidence contracts](docs/architecture/0006-control-execution-and-evidence.md)
+- [Deterministic admission and version conversion](docs/architecture/0007-deterministic-admission-and-version-conversion.md)
 - [OpenAPI v1alpha1 baseline](api/openapi/veer-v1alpha1.json)
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)

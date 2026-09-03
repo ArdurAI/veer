@@ -58,6 +58,14 @@ Workspace ownership, immutable placement, and RESTRICT deletion. The semantic
 verifier compares it with an independent exact table; it is not an arbitrary
 generator extension point.
 
+The root-only `x-veer-admission` extension fixes the pure request stages,
+stable stage codes and response mappings, deterministic error selection,
+RFC 6901 path behavior, copy-returning defaults, failure side-effect boundary,
+and internal version hub. [ADR 0007](0007-deterministic-admission-and-version-conversion.md)
+defines those semantics. The verifier compares every member with an
+independent exact table and rejects a moved, missing, reordered, or weakened
+rule.
+
 ## Decision boundary
 
 This decision specifies a transport contract. It does not claim that the
@@ -70,8 +78,9 @@ implementation.
 - Issue [#18](https://github.com/ArdurAI/veer/issues/18) implements the four
   resource schema families, server-derived Workspace ownership, and
   provider-free graph validation without adding child routes.
-- Issue [#20](https://github.com/ArdurAI/veer/issues/20) implements ordered
-  validation, defaulting, immutable-field checks, references, and conversion.
+- [ADR 0007](0007-deterministic-admission-and-version-conversion.md) and issue
+  [#20](https://github.com/ArdurAI/veer/issues/20) define ordered validation,
+  defaulting, immutable-field checks, references, and conversion.
 - Issue [#22](https://github.com/ArdurAI/veer/issues/22) implements OIDC
   authentication and principal normalization.
 - Issues [#23](https://github.com/ArdurAI/veer/issues/23) and
@@ -208,6 +217,13 @@ Server-owned fields are absent from write schemas or marked read-only in read
 schemas. A client cannot set `id`, `workspaceId`, `parent`, `generation`,
 `resourceVersion`, creation or update timestamps, or status through a
 desired-state write.
+
+Workspace create and replace bodies use the sparse `WorkspaceSpecWrite`
+schema: the outer `spec` is required, while an omitted
+`suspendReconciliation` member defaults to `false` in executable admission.
+Returned Workspaces use canonical `WorkspaceSpec`, where the materialized
+Boolean is required. A `default` annotation documents the write rule but does
+not substitute for applying it.
 
 Every schema value declared as `int64` also carries the explicit signed
 64-bit maximum `9223372036854775807`; the format annotation alone does not
@@ -353,6 +369,14 @@ optional `retryAfterSeconds`. Field errors contain an RFC 6901 JSON Pointer,
 stable code, and safe message. Raw tokens, credentials, SQL, stack traces,
 provider bodies, connection strings, internal hostnames, and cross-workspace
 identifiers are forbidden.
+
+Admission returns one deterministic terminal stage/code/path triple. The
+manifest maps `request-too-large` to `413`, other schema/semantic/immutable/
+reference faults to `400`, and invariant default/conversion failures to `500`.
+An empty path means the whole document. An exact pointer that cannot fit the
+field bound is omitted rather than truncated; see
+[ADR 0007](0007-deterministic-admission-and-version-conversion.md) for the
+closed code vocabulary and precedence.
 
 Field pointers accept arbitrary RFC 6901 member names, including spaces and
 Unicode, while requiring `~0` and `~1` escapes for literal tilde and slash. A
@@ -508,6 +532,9 @@ The semantic verifier rejects:
   writable placement fields, metadata refinement drift, or mismatched
   Workspace, Environment, Application, Component, Policy, and
   ProviderConnection schema-family refs;
+- admission stage order, code or response drift, nondeterministic error
+  precedence, path truncation, failure side effects, sparse/canonical Workspace
+  schema reversal, non-idempotent defaults, or internal-hub version drift;
 - control, credential-reference, explicit-unknown evidence, operation-phase,
   or condition-transition contract drift;
 - unreviewed primitive-schema assertion keywords or additions to the closed

@@ -169,6 +169,35 @@ func (status testStatus) ObservedGenerations() []int64 {
 	return result
 }
 
+func TestExportedWriteMetadataValidationMatchesEnvelopeRules(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidateDisplayName("payments"); err != nil {
+		t.Fatalf("ValidateDisplayName(valid) error = %v", err)
+	}
+	for _, value := range []string{"", string([]byte{0xff})} {
+		if err := ValidateDisplayName(value); err == nil {
+			t.Fatalf("ValidateDisplayName(%q) succeeded", value)
+		}
+	}
+
+	input := map[string]string{"team": "platform"}
+	normalized, err := NormalizeLabels(input)
+	if err != nil {
+		t.Fatalf("NormalizeLabels(valid) error = %v", err)
+	}
+	normalized["team"] = "changed"
+	if input["team"] != "platform" {
+		t.Fatal("NormalizeLabels retained an input map alias")
+	}
+	if empty, err := NormalizeLabels(map[string]string{}); err != nil || empty != nil {
+		t.Fatalf("NormalizeLabels(empty) = %#v, %v; want nil, nil", empty, err)
+	}
+	if _, err := NormalizeLabels(map[string]string{"Invalid": "value"}); err == nil {
+		t.Fatal("NormalizeLabels(invalid key) succeeded")
+	}
+}
+
 func TestParseID(t *testing.T) {
 	t.Parallel()
 
