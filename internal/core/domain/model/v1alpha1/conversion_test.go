@@ -8,9 +8,11 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/model"
+	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
 const validCredentialID = "cred_01J0000000000000000000000"
@@ -103,15 +105,33 @@ func TestClosedSpecDefaultingIsPureAndIdempotent(t *testing.T) {
 	assertNoOpDefaulting(t, ComponentWrite{
 		APIVersion: APIVersion, Kind: hierarchy.KindComponent.String(), Metadata: metadata, Spec: ComponentSpec{},
 	}, DefaultComponentWrite)
-	assertNoOpDefaulting(t, PolicyWrite{
-		APIVersion: APIVersion, Kind: hierarchy.KindPolicy.String(), Metadata: metadata, Spec: PolicySpec{},
-	}, DefaultPolicyWrite)
 	assertNoOpDefaulting(t, ProviderConnectionWrite{
 		APIVersion: APIVersion,
 		Kind:       hierarchy.KindProviderConnection.String(),
 		Metadata:   metadata,
 		Spec:       validProviderConnectionWrite().Spec,
 	}, DefaultProviderConnectionWrite)
+}
+
+func TestPolicyDefaultingIsPureAndIdempotent(t *testing.T) {
+	t.Parallel()
+
+	source := PolicyWrite{
+		APIVersion: APIVersion,
+		Kind:       hierarchy.KindPolicy.String(),
+		Metadata:   validMetadata(),
+		Spec:       validPolicyWrite().Spec,
+	}
+	first := DefaultPolicyWrite(source)
+	second := DefaultPolicyWrite(first)
+	if !model.EqualPolicySpec(first.Spec, source.Spec) || !model.EqualPolicySpec(second.Spec, first.Spec) {
+		t.Fatal("Policy defaulting changed policy meaning")
+	}
+	first.Spec.Bindings[0].Role = authorization.RoleOperator
+	if source.Spec.Bindings[0].Role != authorization.RoleViewer ||
+		second.Spec.Bindings[0].Role != authorization.RoleViewer {
+		t.Fatal("Policy defaulting retained a binding slice alias")
+	}
 }
 
 func TestIntentConversionsRoundTripThroughUnversionedHub(t *testing.T) {
@@ -423,6 +443,24 @@ func TestConversionsDoNotRetainOrExposeMutableSourceState(t *testing.T) {
 		t.Fatal("Workspace source conversion exposed mutable hub aliases")
 	}
 
+	policySource := validPolicyWrite()
+	policyHub, err := ToHubPolicyIntent(policySource)
+	if err != nil {
+		t.Fatalf("ToHubPolicyIntent() error = %v", err)
+	}
+	policySource.Spec.Bindings[0].Role = authorization.RoleOperator
+	if policyHub.Spec().Bindings[0].Role != authorization.RoleViewer {
+		t.Fatal("Policy hub retained mutable source aliases")
+	}
+	policyOutput, err := FromHubPolicyIntent(policyHub)
+	if err != nil {
+		t.Fatalf("FromHubPolicyIntent() error = %v", err)
+	}
+	policyOutput.Spec.Bindings[0].Role = authorization.RoleDeveloper
+	if policyHub.Spec().Bindings[0].Role != authorization.RoleViewer {
+		t.Fatal("Policy source conversion exposed mutable hub aliases")
+	}
+
 	providerSource := ProviderConnectionStatusWrite{
 		APIVersion: APIVersion,
 		Kind:       hierarchy.KindProviderConnection.String(),
@@ -581,7 +619,16 @@ func validComponentWrite() ComponentWrite {
 }
 
 func validPolicyWrite() PolicyWrite {
-	return PolicyWrite{APIVersion: APIVersion, Kind: "Policy", Metadata: validMetadata(), Spec: PolicySpec{}}
+	return PolicyWrite{
+		APIVersion: APIVersion,
+		Kind:       "Policy",
+		Metadata:   validMetadata(),
+		Spec: PolicySpec{Bindings: []authorization.RoleBinding{{
+			MemberID: resource.ID("mem_01J00000000000000000000000"),
+			Role:     authorization.RoleViewer,
+			Scope:    authorization.Scope{Kind: authorization.ScopeKindWorkspace},
+		}}},
+	}
 }
 
 func validProviderConnectionWrite() ProviderConnectionWrite {

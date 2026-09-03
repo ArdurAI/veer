@@ -1,5 +1,7 @@
 package v1alpha1
 
+import "github.com/ArdurAI/veer/internal/core/domain/model"
+
 // DefaultWorkspaceWriteSpec returns an independent, explicit source value.
 // Omission becomes false; an explicit true or false value is preserved.
 func DefaultWorkspaceWriteSpec(source WorkspaceWriteSpec) WorkspaceWriteSpec {
@@ -36,10 +38,12 @@ func DefaultComponentWrite(source ComponentWrite) ComponentWrite {
 	return cloneDesiredWrite(source)
 }
 
-// DefaultPolicyWrite returns an independent source value. Policy intent is a
-// closed object until its owning policy issue adopts fields.
+// DefaultPolicyWrite returns an independent source value. Policy has no
+// defaulted fields, but its binding collection must not retain caller aliases.
 func DefaultPolicyWrite(source PolicyWrite) PolicyWrite {
-	return cloneDesiredWrite(source)
+	result := cloneDesiredWrite(source)
+	result.Spec = model.ClonePolicySpec(source.Spec)
+	return result
 }
 
 // DefaultProviderConnectionWrite returns an independent source value. Its

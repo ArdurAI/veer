@@ -7,21 +7,33 @@ package admission
 import (
 	"errors"
 	"reflect"
+	"strconv"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
+	"github.com/ArdurAI/veer/internal/core/domain/identity"
 	"github.com/ArdurAI/veer/internal/core/domain/model"
 	modelv1 "github.com/ArdurAI/veer/internal/core/domain/model/v1alpha1"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
-// CreateContext contains only server-issued identity and an immutable
-// hierarchy view. ParentID is absent for Workspace and required for every
-// child kind. Placement is derived during the reference stage.
+// CreateContext contains only server-issued identity and immutable
+// workspace-scoped reference views. ParentID is absent for Workspace and
+// required for every child kind. Placement is derived during the reference
+// stage. Members is required only for Policy creation.
 type CreateContext struct {
 	ID       resource.ID
 	ParentID *resource.ID
 	Snapshot hierarchy.Snapshot
+	Members  authorization.MemberDirectory
+}
+
+// ReplaceContext groups the immutable workspace-scoped views needed by the
+// reference stage. Members is required only for Policy replacement.
+type ReplaceContext struct {
+	Snapshot hierarchy.Snapshot
+	Members  authorization.MemberDirectory
 }
 
 // CreateResult is an immutable admitted create value. Accessors return
@@ -58,7 +70,7 @@ func AdmitCreate(raw []byte, context CreateContext) (CreateResult, error) {
 	if failure := immutableCreate(source); failure != nil {
 		return CreateResult{}, failure
 	}
-	placement, failure := referenceCreate(source.kind, context)
+	placement, failure := referenceCreate(source, context)
 	if failure != nil {
 		return CreateResult{}, failure
 	}
@@ -76,7 +88,7 @@ func AdmitCreate(raw []byte, context CreateContext) (CreateResult, error) {
 // AdmitReplace admits a complete caller-owned metadata and desired-state
 // replacement. The supplied current record must be exactly retained by the
 // immutable snapshot; existence routing and persistence remain out of scope.
-func AdmitReplace(raw []byte, current hierarchy.Record, snapshot hierarchy.Snapshot) (model.Intent, error) {
+func AdmitReplace(raw []byte, current hierarchy.Record, context ReplaceContext) (model.Intent, error) {
 	document, failure := parseRaw(raw)
 	if failure != nil {
 		return nil, failure
@@ -91,7 +103,7 @@ func AdmitReplace(raw []byte, current hierarchy.Record, snapshot hierarchy.Snaps
 	if failure := immutableCurrent(source.apiVersion, source.kind, current); failure != nil {
 		return nil, failure
 	}
-	if failure := referenceCurrent(current, snapshot); failure != nil {
+	if failure := referenceReplace(source, current, context); failure != nil {
 		return nil, failure
 	}
 	defaulted, failure := defaultIntent(source)
@@ -158,8 +170,8 @@ func immutableCurrent(apiVersion string, kind hierarchy.Kind, current hierarchy.
 	return nil
 }
 
-func referenceCreate(kind hierarchy.Kind, context CreateContext) (hierarchy.Placement, *Error) {
-	if kind == hierarchy.KindWorkspace {
+func referenceCreate(source sourceIntent, context CreateContext) (hierarchy.Placement, *Error) {
+	if source.kind == hierarchy.KindWorkspace {
 		if context.ParentID != nil {
 			return hierarchy.Placement{}, reject(StageReference, CodeInvalidPlacement, "")
 		}
@@ -172,11 +184,31 @@ func referenceCreate(kind hierarchy.Kind, context CreateContext) (hierarchy.Plac
 	if context.ParentID == nil {
 		return hierarchy.Placement{}, reject(StageReference, CodeInvalidPlacement, "")
 	}
-	placement, err := context.Snapshot.DeriveChild(kind, context.ID, *context.ParentID)
+	placement, err := context.Snapshot.DeriveChild(source.kind, context.ID, *context.ParentID)
 	if err != nil {
 		return hierarchy.Placement{}, mapReferenceError(err)
 	}
+	if source.kind == hierarchy.KindPolicy {
+		if failure := referencePolicy(
+			source.policy,
+			placement.WorkspaceID(),
+			context.Snapshot,
+			context.Members,
+		); failure != nil {
+			return hierarchy.Placement{}, failure
+		}
+	}
 	return placement, nil
+}
+
+func referenceReplace(source sourceIntent, current hierarchy.Record, context ReplaceContext) *Error {
+	if failure := referenceCurrent(current, context.Snapshot); failure != nil {
+		return failure
+	}
+	if source.kind != hierarchy.KindPolicy {
+		return nil
+	}
+	return referencePolicy(source.policy, current.WorkspaceID(), context.Snapshot, context.Members)
 }
 
 func referenceCurrent(current hierarchy.Record, snapshot hierarchy.Snapshot) *Error {
@@ -200,6 +232,132 @@ func mapReferenceError(err error) *Error {
 		return reject(StageReference, CodeWorkspaceMismatch, "")
 	default:
 		return reject(StageReference, CodeInvalidPlacement, "")
+	}
+}
+
+func referencePolicy(
+	spec model.PolicySpec,
+	workspaceID resource.ID,
+	snapshot hierarchy.Snapshot,
+	members authorization.MemberDirectory,
+) *Error {
+	if snapshot.Len() == 0 {
+		return reject(StageReference, CodeInvalidPlacement, "")
+	}
+	if snapshot.WorkspaceID() != workspaceID {
+		return reject(StageReference, CodeWorkspaceMismatch, "")
+	}
+	root, err := snapshot.Lookup(snapshot.WorkspaceID())
+	if err != nil {
+		return reject(StageReference, CodeInvalidPlacement, "")
+	}
+	if root.Kind() != hierarchy.KindWorkspace {
+		return reject(StageReference, CodeReferenceKindMismatch, "")
+	}
+	if err := authorization.ValidateMemberDirectory(members); err != nil {
+		return reject(StageReference, CodeInvalidPlacement, "")
+	}
+	if members.WorkspaceID() != snapshot.WorkspaceID() || root.WorkspaceID() != members.WorkspaceID() {
+		return reject(StageReference, CodeWorkspaceMismatch, "")
+	}
+
+	set := candidateSet{}
+	collectPolicyReferences(&set, spec, workspaceID, snapshot, members)
+	if failure := set.failure(StageReference); failure != nil {
+		return failure
+	}
+	// Admission selects across every bounded binding. The domain validator is
+	// retained as a final invariant check for states the public constructors
+	// and preceding stages cannot produce.
+	if err := authorization.ValidatePolicyReferences(spec, snapshot, members); err != nil {
+		return mapPolicyReferenceError(err)
+	}
+	return nil
+}
+
+func collectPolicyReferences(
+	set *candidateSet,
+	spec model.PolicySpec,
+	workspaceID resource.ID,
+	snapshot hierarchy.Snapshot,
+	members authorization.MemberDirectory,
+) {
+	if len(spec.Bindings) > authorization.MaxBindingsPerPolicy {
+		return
+	}
+	bindingsPath := "/spec/bindings"
+	for index, binding := range spec.Bindings {
+		itemPath := appendPointer(bindingsPath, integerToken(index))
+		memberPath := appendPointer(itemPath, "memberId")
+		member, err := members.Lookup(binding.MemberID)
+		switch {
+		case errors.Is(err, authorization.ErrMemberNotFound):
+			set.add(CodeReferenceNotFound, memberPath)
+		case err != nil:
+			set.add(CodeInvalidPlacement, memberPath)
+		default:
+			if member.WorkspaceID() != workspaceID {
+				set.add(CodeWorkspaceMismatch, memberPath)
+			}
+			if binding.Role == authorization.RoleWorkspaceAdministrator && member.Kind() != identity.KindHuman {
+				set.add(CodeReferenceKindMismatch, appendPointer(itemPath, "role"))
+			}
+		}
+
+		if binding.Scope.Kind != authorization.ScopeKindEnvironment || binding.Scope.EnvironmentID == nil {
+			continue
+		}
+		environmentPath := appendPointer(appendPointer(itemPath, "scope"), "environmentId")
+		environment, err := snapshot.Lookup(*binding.Scope.EnvironmentID)
+		switch {
+		case errors.Is(err, hierarchy.ErrResourceNotFound):
+			set.add(CodeReferenceNotFound, environmentPath)
+		case err != nil:
+			set.add(CodeInvalidPlacement, environmentPath)
+		default:
+			if environment.Kind() != hierarchy.KindEnvironment {
+				set.add(CodeReferenceKindMismatch, environmentPath)
+			}
+			if environment.WorkspaceID() != workspaceID {
+				set.add(CodeWorkspaceMismatch, environmentPath)
+			}
+		}
+	}
+}
+
+func mapPolicyReferenceError(err error) *Error {
+	path := policyBindingErrorPath(err)
+	switch {
+	case errors.Is(err, authorization.ErrMemberNotFound),
+		errors.Is(err, authorization.ErrEnvironmentNotFound):
+		return reject(StageReference, CodeReferenceNotFound, path)
+	case errors.Is(err, authorization.ErrReferenceKindMismatch),
+		errors.Is(err, authorization.ErrPrincipalKindNotAllowed):
+		return reject(StageReference, CodeReferenceKindMismatch, path)
+	case errors.Is(err, authorization.ErrWorkspaceMismatch):
+		return reject(StageReference, CodeWorkspaceMismatch, path)
+	default:
+		return reject(StageReference, CodeInvalidPlacement, path)
+	}
+}
+
+func policyBindingErrorPath(err error) string {
+	var bindingError *authorization.BindingError
+	if !errors.As(err, &bindingError) {
+		return ""
+	}
+	path := appendPointer("/spec/bindings", strconv.Itoa(bindingError.BindingIndex()))
+	switch bindingError.Field() {
+	case authorization.BindingFieldMemberID:
+		return appendPointer(path, "memberId")
+	case authorization.BindingFieldRole:
+		return appendPointer(path, "role")
+	case authorization.BindingFieldScopeKind:
+		return appendPointer(appendPointer(path, "scope"), "kind")
+	case authorization.BindingFieldEnvironmentID:
+		return appendPointer(appendPointer(path, "scope"), "environmentId")
+	default:
+		return path
 	}
 }
 
@@ -237,7 +395,7 @@ func defaultIntent(source sourceIntent) (defaultedIntent, *Error) {
 		})})
 	case hierarchy.KindPolicy:
 		return checkedDefaultIntent(defaultedIntent{kind: source.kind, value: modelv1.DefaultPolicyWrite(modelv1.PolicyWrite{
-			APIVersion: source.apiVersion, Kind: source.kind.String(), Metadata: metadata, Spec: modelv1.PolicySpec{},
+			APIVersion: source.apiVersion, Kind: source.kind.String(), Metadata: metadata, Spec: model.ClonePolicySpec(source.policy),
 		})})
 	case hierarchy.KindProviderConnection:
 		return checkedDefaultIntent(defaultedIntent{kind: source.kind, value: modelv1.DefaultProviderConnectionWrite(modelv1.ProviderConnectionWrite{

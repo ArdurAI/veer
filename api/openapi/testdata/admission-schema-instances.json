@@ -53,7 +53,9 @@
         "metadata": {
           "displayName": "policy-create"
         },
-        "spec": {}
+        "spec": {
+          "bindings": []
+        }
       }
     },
     {
@@ -67,7 +69,9 @@
         "metadata": {
           "displayName": "policy-replace"
         },
-        "spec": {}
+        "spec": {
+          "bindings": []
+        }
       }
     },
     {

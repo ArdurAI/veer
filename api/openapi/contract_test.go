@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/ArdurAI/veer/internal/core/domain/admission"
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 )
 
 type schemaExampleWire struct {
@@ -144,6 +146,8 @@ func TestAdmissionManifestMatchesRuntimeTokens(t *testing.T) {
 			admission.CodeInvalidPlacement,
 			admission.CodeParentNotFound,
 			admission.CodeParentKindMismatch,
+			admission.CodeReferenceNotFound,
+			admission.CodeReferenceKindMismatch,
 			admission.CodeWorkspaceMismatch,
 		}},
 		{stage: admission.StageDefault, codes: []admission.Code{
@@ -182,6 +186,145 @@ func TestAdmissionManifestMatchesRuntimeTokens(t *testing.T) {
 				)
 			}
 		}
+	}
+}
+
+func TestAuthorizationManifestMatchesRuntimeTokens(t *testing.T) {
+	t.Parallel()
+
+	data, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, data)
+	var manifest authorizationContract
+	if err := decodeStrictValue(root["x-veer-authorization"], &manifest); err != nil {
+		t.Fatalf("decode authorization manifest: %v", err)
+	}
+
+	if manifest.ContractVersion != authorization.ContractVersion {
+		t.Fatalf("contractVersion = %q, want %q", manifest.ContractVersion, authorization.ContractVersion)
+	}
+	if manifest.MaxDecisionBytes != authorization.MaxDecisionBytes {
+		t.Fatalf("maxDecisionBytes = %d, want %d", manifest.MaxDecisionBytes, authorization.MaxDecisionBytes)
+	}
+	if manifest.ListEvaluation != authorization.ListEvaluationMode {
+		t.Fatalf("listEvaluation = %q, want %q", manifest.ListEvaluation, authorization.ListEvaluationMode)
+	}
+	if manifest.PolicyVersionPrefix != authorization.PolicyVersionPrefix ||
+		manifest.InputDigestPrefix != authorization.InputDigestPrefix {
+		t.Fatalf("digest prefixes = %q/%q, want %q/%q",
+			manifest.PolicyVersionPrefix, manifest.InputDigestPrefix,
+			authorization.PolicyVersionPrefix, authorization.InputDigestPrefix)
+	}
+	effects := authorization.Effects()
+	wantEffects := make([]string, len(effects))
+	for index, effect := range effects {
+		wantEffects[index] = effect.String()
+	}
+	if manifest.DefaultEffect != authorization.DefaultEffect.String() ||
+		!reflect.DeepEqual(manifest.Effects, wantEffects) {
+		t.Fatalf("effect vocabulary drifted: default %q, effects %#v", manifest.DefaultEffect, manifest.Effects)
+	}
+
+	actions := authorization.Actions()
+	wantActions := make([]string, len(actions))
+	for index, action := range actions {
+		wantActions[index] = action.String()
+	}
+	if !reflect.DeepEqual(manifest.Actions, wantActions) {
+		t.Fatalf("action registry drifted:\n manifest %#v\n runtime  %#v", manifest.Actions, wantActions)
+	}
+	runtimeReserved := authorization.ReservedActions()
+	wantReserved := make([]string, len(runtimeReserved))
+	for index, action := range runtimeReserved {
+		wantReserved[index] = action.String()
+	}
+	if !reflect.DeepEqual(manifest.ReservedActions, wantReserved) {
+		t.Fatalf("reserved actions drifted:\n manifest %#v\n runtime  %#v", manifest.ReservedActions, wantReserved)
+	}
+	runtimeReservedResources := authorization.ReservedResourceActions()
+	wantReservedResources := make([]authorizationResourceAction, len(runtimeReservedResources))
+	for index, action := range runtimeReservedResources {
+		wantReservedResources[index] = authorizationResourceAction{
+			Action: action.Action.String(), ResourceKind: action.ResourceKind.String(),
+		}
+	}
+	if !reflect.DeepEqual(manifest.ReservedResourceActions, wantReservedResources) {
+		t.Fatalf("reserved resource actions drifted:\n manifest %#v\n runtime  %#v",
+			manifest.ReservedResourceActions, wantReservedResources)
+	}
+
+	roles := authorization.Roles()
+	if len(manifest.Roles) != len(roles) {
+		t.Fatalf("role count = %d, want %d", len(manifest.Roles), len(roles))
+	}
+	for index, role := range roles {
+		manifestRole := manifest.Roles[index]
+		if manifestRole.Name != role.String() {
+			t.Fatalf("roles[%d].name = %q, want %q", index, manifestRole.Name, role)
+		}
+		inherited := authorization.InheritedRoles(role)
+		wantInherited := make([]string, 0, len(inherited))
+		for _, inheritedRole := range inherited {
+			if inheritedRole != role {
+				wantInherited = append(wantInherited, inheritedRole.String())
+			}
+		}
+		if !reflect.DeepEqual(manifestRole.Inherits, wantInherited) {
+			t.Fatalf("role %s inheritance = %#v, want %#v", role, manifestRole.Inherits, wantInherited)
+		}
+		runtimeGrants := authorization.RoleGrants(role)
+		wantGrants := make([]authorizationGrantContract, len(runtimeGrants))
+		for grantIndex, grant := range runtimeGrants {
+			resourceKinds := make([]string, len(grant.ResourceKinds))
+			for resourceIndex, kind := range grant.ResourceKinds {
+				resourceKinds[resourceIndex] = kind.String()
+			}
+			if !sort.StringsAreSorted(resourceKinds) {
+				t.Fatalf("runtime role %s grant resource kinds are not canonical: %#v", role, resourceKinds)
+			}
+			wantGrants[grantIndex] = authorizationGrantContract{
+				Action: grant.Action.String(), ObjectKind: grant.ObjectKind.String(), ResourceKinds: resourceKinds,
+			}
+		}
+		if !reflect.DeepEqual(manifestRole.Grants, wantGrants) {
+			t.Fatalf("role %s grants drifted:\n manifest %#v\n runtime  %#v", role, manifestRole.Grants, wantGrants)
+		}
+	}
+	scopeKinds := authorization.ScopeKinds()
+	if len(manifest.Scopes) != len(scopeKinds) {
+		t.Fatalf("scope count = %d, want %d", len(manifest.Scopes), len(scopeKinds))
+	}
+	for index, scope := range manifest.Scopes {
+		if scope.Kind != scopeKinds[index].String() {
+			t.Fatalf("scopes[%d].kind = %q, want %q", index, scope.Kind, scopeKinds[index])
+		}
+		runtimeDescendants := authorization.ScopeDescendants(scopeKinds[index])
+		wantDescendants := make([]string, len(runtimeDescendants))
+		for descendantIndex, descendant := range runtimeDescendants {
+			wantDescendants[descendantIndex] = descendant.String()
+		}
+		if !reflect.DeepEqual(scope.DescendsTo, wantDescendants) {
+			t.Fatalf("scope %s descendants = %#v, want %#v",
+				scope.Kind, scope.DescendsTo, wantDescendants)
+		}
+	}
+	objectKinds := authorization.ObjectKinds()
+	wantObjects := make([]string, len(objectKinds))
+	for index, object := range objectKinds {
+		wantObjects[index] = object.String()
+	}
+	if !reflect.DeepEqual(manifest.Objects, wantObjects) {
+		t.Fatalf("object registry drifted:\n manifest %#v\n runtime  %#v", manifest.Objects, wantObjects)
+	}
+	reasons := authorization.Reasons()
+	wantReasons := make([]string, len(reasons))
+	for index, reason := range reasons {
+		wantReasons[index] = reason.String()
+	}
+	if !reflect.DeepEqual(manifest.Reasons, wantReasons) {
+		t.Fatalf("decision reasons = %#v, want %#v", manifest.Reasons, wantReasons)
 	}
 }
 
@@ -335,6 +478,77 @@ func TestControlSchemaSemanticFixtureMatrix(t *testing.T) {
 			err := validateControlFixtureSemantic(fixture.Schema, fixture.Instance)
 			if (err == nil) != fixture.SemanticValid {
 				t.Fatalf("semantic validity = %t, want %t (error %v)", err == nil, fixture.SemanticValid, err)
+			}
+		})
+	}
+}
+
+func TestAuthorizationSchemaSemanticFixtureMatrix(t *testing.T) {
+	t.Parallel()
+	var fixtures []controlSchemaInstanceFixture
+	decodeStrictFixture(t, "testdata/authorization-schema-instances.json", &fixtures)
+	want := map[string]struct {
+		schemaValid   bool
+		semanticValid bool
+	}{
+		"canonical workspace binding":                    {true, true},
+		"canonical environment binding":                  {true, true},
+		"empty default-deny policy":                      {true, true},
+		"workspace scope carries environment":            {false, false},
+		"environment scope omits environment":            {false, false},
+		"workspace administrator environment escalation": {true, false},
+		"unknown role":                                   {false, false},
+		"unsorted binding list":                          {true, false},
+		"duplicate binding":                              {false, false},
+		"binding gains identity claims":                  {false, false},
+		"bindings omitted":                               {false, false},
+	}
+	if len(fixtures) != len(want) {
+		t.Fatalf("fixture count = %d, want exactly %d", len(fixtures), len(want))
+	}
+	seen := make(map[string]struct{}, len(fixtures))
+	for _, fixture := range fixtures {
+		fixture := fixture
+		expected, exists := want[fixture.Name]
+		if !exists {
+			t.Fatalf("unexpected fixture %q", fixture.Name)
+		}
+		if _, duplicate := seen[fixture.Name]; duplicate {
+			t.Fatalf("duplicate fixture %q", fixture.Name)
+		}
+		seen[fixture.Name] = struct{}{}
+		if fixture.Schema != "PolicySpec" || fixture.SchemaValid != expected.schemaValid ||
+			fixture.SemanticValid != expected.semanticValid {
+			t.Fatalf("fixture %q contract = (%s,%t,%t), want (PolicySpec,%t,%t)",
+				fixture.Name, fixture.Schema, fixture.SchemaValid, fixture.SemanticValid,
+				expected.schemaValid, expected.semanticValid)
+		}
+		t.Run(fixture.Name, func(t *testing.T) {
+			t.Parallel()
+			openAPIErr := validatePolicySpecValue(fixture.Instance)
+
+			encoded, err := json.Marshal(fixture.Instance)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			decoder := json.NewDecoder(bytes.NewReader(encoded))
+			decoder.DisallowUnknownFields()
+			var runtimeSpec authorization.PolicySpec
+			runtimeErr := decoder.Decode(&runtimeSpec)
+			if runtimeErr == nil {
+				runtimeErr = requireJSONEOF(decoder)
+			}
+			if runtimeErr == nil {
+				runtimeErr = authorization.ValidatePolicySpec(runtimeSpec)
+			}
+
+			if (openAPIErr == nil) != fixture.SemanticValid {
+				t.Fatalf("OpenAPI semantic validity = %t, want %t (error %v)",
+					openAPIErr == nil, fixture.SemanticValid, openAPIErr)
+			}
+			if (runtimeErr == nil) != fixture.SemanticValid {
+				t.Fatalf("runtime semantic validity = %t, want %t (error %v)",
+					runtimeErr == nil, fixture.SemanticValid, runtimeErr)
 			}
 		})
 	}
@@ -898,6 +1112,54 @@ func TestVacuumControlSchemaInstanceMatrix(t *testing.T) {
 	}
 }
 
+func TestVacuumAuthorizationSchemaInstanceMatrix(t *testing.T) {
+	vacuumPath := os.Getenv("VEER_TEST_VACUUM_BIN")
+	if vacuumPath == "" {
+		t.Skip("schema-instance matrix runs through ./hack/dev api")
+	}
+	expectedVacuumPath, err := filepath.Abs(filepath.Join("..", "..", ".tools", "bin", "vacuum"))
+	if err != nil {
+		t.Fatalf("resolve repository Vacuum path: %v", err)
+	}
+	if filepath.Clean(vacuumPath) != expectedVacuumPath {
+		t.Fatalf("Vacuum path = %q, want repository-pinned %q", vacuumPath, expectedVacuumPath)
+	}
+	info, err := os.Lstat(vacuumPath)
+	if err != nil {
+		t.Fatalf("inspect repository Vacuum: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("Vacuum must be a regular non-symlink executable: mode %s", info.Mode())
+	}
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	configPath, err := filepath.Abs("vacuum.conf.yaml")
+	if err != nil {
+		t.Fatalf("resolve Vacuum config: %v", err)
+	}
+
+	var fixtures []controlSchemaInstanceFixture
+	decodeStrictFixture(t, "testdata/authorization-schema-instances.json", &fixtures)
+	for _, fixture := range fixtures {
+		fixture := fixture
+		t.Run(fixture.Name, func(t *testing.T) {
+			output, err := runVacuumInstance(t, vacuumPath, configPath, baseline, fixture.Schema, fixture.Instance)
+			if fixture.SchemaValid {
+				if bytes.Contains(output, []byte("oas3-valid-schema-example")) ||
+					(err != nil && !bytes.Contains(output, []byte("oas3-missing-example"))) {
+					t.Fatalf("Vacuum rejected valid %s instance: %v\n%s", fixture.Schema, err, output)
+				}
+				return
+			}
+			if err == nil || !bytes.Contains(output, []byte("oas3-valid-schema-example")) {
+				t.Fatalf("Vacuum accepted invalid %s instance: %v\n%s", fixture.Schema, err, output)
+			}
+		})
+	}
+}
+
 func TestVacuumAdmissionSchemaInstanceMatrix(t *testing.T) {
 	vacuumPath := os.Getenv("VEER_TEST_VACUUM_BIN")
 	if vacuumPath == "" {
@@ -1335,6 +1597,133 @@ func TestAdmissionContractRejectsSemanticDrift(t *testing.T) {
 	}
 }
 
+func TestAuthorizationContractRejectsSemanticDrift(t *testing.T) {
+	t.Parallel()
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		message string
+	}{
+		{
+			name: "manifest removed",
+			mutate: func(root map[string]any) {
+				delete(root, "x-veer-authorization")
+			},
+			message: "x-veer-authorization is missing",
+		},
+		{
+			name: "default deny relaxes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-authorization")["defaultEffect"] = "Allow"
+			},
+			message: "x-veer-authorization contract drifted",
+		},
+		{
+			name: "list evaluation uses parent target",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-authorization")["listEvaluation"] = "parent-target"
+			},
+			message: "x-veer-authorization contract drifted",
+		},
+		{
+			name: "viewer gains mutation",
+			mutate: func(root map[string]any) {
+				roles := nestedMap(t, root, "x-veer-authorization")["roles"].([]any)
+				viewer := roles[0].(map[string]any)
+				viewer["grants"] = append(viewer["grants"].([]any), map[string]any{
+					"action": "resource.delete", "objectKind": "Resource", "resourceKinds": []any{"Workspace"},
+				})
+			},
+			message: "x-veer-authorization contract drifted",
+		},
+		{
+			name: "workspace bootstrap reservation disappears",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-authorization")["reservedResourceActions"] = []any{}
+			},
+			message: "x-veer-authorization contract drifted",
+		},
+		{
+			name: "reserved worker action becomes tenant grant",
+			mutate: func(root map[string]any) {
+				manifest := nestedMap(t, root, "x-veer-authorization")
+				reserved := manifest["reservedActions"].([]any)
+				manifest["reservedActions"] = reserved[1:]
+			},
+			message: "x-veer-authorization contract drifted",
+		},
+		{
+			name: "operation action annotation disappears",
+			mutate: func(root map[string]any) {
+				delete(nestedMap(t, root, "paths", "/api/v1alpha1/workspaces", "get"),
+					"x-veer-authorization-action")
+			},
+			message: `operationId "listWorkspaces" authorization action must be "resource.list"`,
+		},
+		{
+			name: "status operation becomes tenant resource write",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "paths", "/api/v1alpha1/workspaces/{workspaceId}/status", "put")["x-veer-authorization-action"] = "resource.replace"
+			},
+			message: `operationId "replaceWorkspaceStatus" authorization action must be "resource.status.replace"`,
+		},
+		{
+			name: "policy binding bound relaxes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "components", "schemas", "PolicySpec", "properties", "bindings")["maxItems"] =
+					json.Number("129")
+			},
+			message: "PolicySpec.bindings list contract drifted",
+		},
+		{
+			name: "workspace scope accepts environment identifier",
+			mutate: func(root map[string]any) {
+				branches := nestedMap(t, root, "components", "schemas", "PolicyScope")["oneOf"].([]any)
+				delete(branches[0].(map[string]any), "not")
+			},
+			message: "PolicyScope Workspace refinement drifted",
+		},
+		{
+			name: "policy example binding order drifts",
+			mutate: func(root map[string]any) {
+				spec := nestedMap(t, root, "components", "schemas", "Policy", "example", "spec")
+				bindings := spec["bindings"].([]any)
+				first := bindings[0].(map[string]any)
+				spec["bindings"] = []any{
+					map[string]any{
+						"memberId": "mem_01J00000000000000000000001",
+						"role":     first["role"],
+						"scope":    first["scope"],
+					},
+					first,
+				}
+			},
+			message: "outside canonical order",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			err = Validate(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.message)
+			}
+		})
+	}
+}
+
 func admissionStageForMutation(t *testing.T, root map[string]any, index int) map[string]any {
 	t.Helper()
 	stages := nestedMap(t, root, "x-veer-admission")["stages"].([]any)
@@ -1529,7 +1918,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 			mutate: func(root map[string]any) {
 				delete(nestedMap(t, root, "components", "schemas"), "ComponentList")
 			},
-			message: "expected exactly 79 schemas, got 78",
+			message: "expected exactly 81 schemas, got 80",
 		},
 		{
 			name: "schema added",
@@ -1538,7 +1927,7 @@ func TestHierarchyContractRejectsInvalidPolicyAndExamples(t *testing.T) {
 					"type": "object", "additionalProperties": false, "properties": map[string]any{},
 				}
 			},
-			message: "expected exactly 79 schemas, got 80",
+			message: "expected exactly 81 schemas, got 82",
 		},
 		{
 			name: "workspace ownership no longer required",
@@ -1698,7 +2087,7 @@ func TestControlContractRejectsSemanticDrift(t *testing.T) {
 				nestedMap(t, root, "components", "schemas", "PolicySpec", "properties")["provider"] =
 					map[string]any{"type": "string"}
 			},
-			message: "PolicySpec must remain a closed empty provider-neutral object",
+			message: "PolicySpec shape drifted",
 		},
 		{
 			name: "provider spec accepts raw field",

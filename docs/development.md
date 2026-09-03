@@ -97,7 +97,7 @@ check.
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
-| `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission schema examples, expected-failure instances, and Veer-specific HTTP, evolution, defaulting, and conversion invariants without remote references. |
+| `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify checked-in architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
 
@@ -105,6 +105,15 @@ The aggregate command emits machine-readable lines such as
 `veer-check step=test status=passed duration_seconds=1`. These give local and
 CI logs a stable step name, outcome, and duration without printing environment
 variables or credentials.
+
+Authorization contract changes must update the domain registry, the root
+`x-veer-authorization` projection, affected
+`x-veer-authorization-action` operation annotations, PolicySpec fixtures, and
+[ADR 0009](architecture/0009-deterministic-hierarchical-authorization.md) in
+one reviewed change. `go test ./api/openapi` cross-binds the OpenAPI vocabulary,
+role matrix, reservations, inheritance, and PolicySpec semantics to the runtime
+package. The OpenAPI document remains a reference contract and does not prove
+that an API route or worker invokes authorization.
 
 ## Network, disk, and CI cost safeguards
 

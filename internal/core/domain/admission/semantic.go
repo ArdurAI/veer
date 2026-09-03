@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/control"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
@@ -18,6 +19,20 @@ func semanticIntent(source sourceIntent) *Error {
 	if _, err := resource.NormalizeLabels(source.metadata.labels); err != nil {
 		return reject(StageSemantic, CodeInvalidSpec, "/metadata/labels")
 	}
+	if source.kind == hierarchy.KindPolicy {
+		set := candidateSet{}
+		collectSemanticPolicySpec(&set, source.policy)
+		if failure := set.failure(StageSemantic); failure != nil {
+			return failure
+		}
+		// Schema bounds the collection before this stage. The domain validator
+		// remains the authoritative invariant check for states not constructible
+		// from a schema-valid write.
+		if err := model.ValidatePolicySpec(source.policy); err != nil {
+			return mapPolicySemanticError(err)
+		}
+		return nil
+	}
 	if source.kind != hierarchy.KindProviderConnection {
 		return nil
 	}
@@ -28,6 +43,48 @@ func semanticIntent(source sourceIntent) *Error {
 		return reject(StageSemantic, CodeInvalidSpec, "/spec")
 	}
 	return nil
+}
+
+func collectSemanticPolicySpec(set *candidateSet, spec model.PolicySpec) {
+	if len(spec.Bindings) > authorization.MaxBindingsPerPolicy {
+		return
+	}
+	bindingsPath := "/spec/bindings"
+	for index, binding := range spec.Bindings {
+		itemPath := appendPointer(bindingsPath, integerToken(index))
+		if binding.Role == authorization.RoleWorkspaceAdministrator &&
+			binding.Scope.Kind == authorization.ScopeKindEnvironment {
+			set.add(CodeInvalidSpec, appendPointer(appendPointer(itemPath, "scope"), "kind"))
+		}
+		if index == 0 {
+			continue
+		}
+		switch comparison := authorization.CompareRoleBindings(spec.Bindings[index-1], binding); {
+		case comparison == 0:
+			set.add(CodeDuplicateItem, appendPointer(itemPath, "memberId"))
+		case comparison > 0:
+			set.add(CodeInvalidOrder, appendPointer(itemPath, "memberId"))
+		}
+	}
+}
+
+func mapPolicySemanticError(err error) *Error {
+	code := CodeInvalidSpec
+	switch {
+	case errors.Is(err, authorization.ErrInvalidBindingOrder):
+		code = CodeInvalidOrder
+	case errors.Is(err, authorization.ErrDuplicateBinding):
+		code = CodeDuplicateItem
+	}
+	path := policyBindingErrorPath(err)
+	if path == "" {
+		if errors.Is(err, authorization.ErrBindingsRequired) || errors.Is(err, authorization.ErrTooManyBindings) {
+			path = "/spec/bindings"
+		} else {
+			path = "/spec"
+		}
+	}
+	return reject(StageSemantic, code, path)
 }
 
 func semanticStatus(source sourceStatus, generation int64) *Error {

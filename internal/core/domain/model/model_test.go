@@ -4,9 +4,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/control"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
+	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
 const validCredentialID = "cred_01J0000000000000000000000"
@@ -87,7 +89,8 @@ func TestIntentClosedSumAllKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewComponentIntent() error = %v", err)
 	}
-	policy, err := NewPolicyIntent(metadata, PolicySpec{})
+	policySpec := validModelPolicySpec()
+	policy, err := NewPolicyIntent(metadata, policySpec)
 	if err != nil {
 		t.Fatalf("NewPolicyIntent() error = %v", err)
 	}
@@ -143,6 +146,24 @@ func TestIntentClosedSumAllKinds(t *testing.T) {
 	if invalidMetadata != nil {
 		t.Fatalf("NewWorkspaceIntent(invalid metadata) = %#v, want nil", invalidMetadata)
 	}
+
+	policySpec.Bindings[0].Role = authorization.RoleOperator
+	if policy.Spec().Bindings[0].Role != authorization.RoleViewer {
+		t.Fatal("NewPolicyIntent retained the caller's binding slice")
+	}
+	returnedPolicy := policy.Spec()
+	returnedPolicy.Bindings[0].Role = authorization.RoleDeveloper
+	if policy.Spec().Bindings[0].Role != authorization.RoleViewer {
+		t.Fatal("PolicyIntent.Spec exposed the retained binding slice")
+	}
+}
+
+func validModelPolicySpec() PolicySpec {
+	return PolicySpec{Bindings: []authorization.RoleBinding{{
+		MemberID: resource.ID("mem_01J00000000000000000000000"),
+		Role:     authorization.RoleViewer,
+		Scope:    authorization.Scope{Kind: authorization.ScopeKindWorkspace},
+	}}}
 }
 
 func TestIntentTypedNilOperationsArePanicFree(t *testing.T) {

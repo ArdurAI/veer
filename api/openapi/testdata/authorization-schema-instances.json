@@ -1,0 +1,189 @@
+[
+  {
+    "name": "canonical workspace binding",
+    "schema": "PolicySpec",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Viewer",
+          "scope": {
+            "kind": "Workspace"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "canonical environment binding",
+    "schema": "PolicySpec",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Operator",
+          "scope": {
+            "kind": "Environment",
+            "environmentId": "env_01J00000000000000000000000"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty default-deny policy",
+    "schema": "PolicySpec",
+    "schemaValid": true,
+    "semanticValid": true,
+    "instance": {
+      "bindings": []
+    }
+  },
+  {
+    "name": "workspace scope carries environment",
+    "schema": "PolicySpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Viewer",
+          "scope": {
+            "kind": "Workspace",
+            "environmentId": "env_01J00000000000000000000000"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "environment scope omits environment",
+    "schema": "PolicySpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Operator",
+          "scope": {
+            "kind": "Environment"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "workspace administrator environment escalation",
+    "schema": "PolicySpec",
+    "schemaValid": true,
+    "semanticValid": false,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "WorkspaceAdministrator",
+          "scope": {
+            "kind": "Environment",
+            "environmentId": "env_01J00000000000000000000000"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "unknown role",
+    "schema": "PolicySpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Owner",
+          "scope": {
+            "kind": "Workspace"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "unsorted binding list",
+    "schema": "PolicySpec",
+    "schemaValid": true,
+    "semanticValid": false,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000002",
+          "role": "Viewer",
+          "scope": {
+            "kind": "Workspace"
+          }
+        },
+        {
+          "memberId": "mem_01J00000000000000000000001",
+          "role": "Viewer",
+          "scope": {
+            "kind": "Workspace"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "duplicate binding",
+    "schema": "PolicySpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Viewer",
+          "scope": {
+            "kind": "Workspace"
+          }
+        },
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Viewer",
+          "scope": {
+            "kind": "Workspace"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "binding gains identity claims",
+    "schema": "PolicySpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {
+      "bindings": [
+        {
+          "memberId": "mem_01J00000000000000000000000",
+          "role": "Viewer",
+          "scope": {
+            "kind": "Workspace"
+          },
+          "subject": "must-not-be-accepted"
+        }
+      ]
+    }
+  },
+  {
+    "name": "bindings omitted",
+    "schema": "PolicySpec",
+    "schemaValid": false,
+    "semanticValid": false,
+    "instance": {}
+  }
+]

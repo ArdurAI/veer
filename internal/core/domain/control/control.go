@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
@@ -57,9 +58,8 @@ var (
 	ErrInvalidControlPlacement         = errors.New("invalid control resource placement")
 )
 
-// PolicySpec is deliberately closed and empty until issue #23 adopts policy
-// language and authorization semantics.
-type PolicySpec struct{}
+// PolicySpec is the provider-independent authorization policy contract.
+type PolicySpec = authorization.PolicySpec
 
 // PolicyStatus is the provider-free observed state of a Policy resource.
 type PolicyStatus struct {
@@ -190,6 +190,23 @@ func ValidatePolicyStatus(status PolicyStatus, resourceGeneration int64) error {
 		return fmt.Errorf("%w: %w", ErrInvalidPolicyStatus, err)
 	}
 	return nil
+}
+
+// ValidatePolicySpec preserves the authorization package's bounded,
+// canonical policy contract at the control-resource boundary.
+func ValidatePolicySpec(spec PolicySpec) error {
+	return authorization.ValidatePolicySpec(spec)
+}
+
+// ClonePolicySpec returns an ownership-independent policy value.
+func ClonePolicySpec(spec PolicySpec) PolicySpec {
+	return authorization.ClonePolicySpec(spec)
+}
+
+// EqualPolicySpec compares policy meaning while preserving required
+// collection presence.
+func EqualPolicySpec(left, right PolicySpec) bool {
+	return authorization.EqualPolicySpec(left, right)
 }
 
 // ValidateProviderConnectionSpec enforces the closed provider and credential
@@ -347,6 +364,9 @@ func NewPolicyResource(
 	var zero resource.Resource[PolicySpec, PolicyStatus]
 	if placement.Kind() != hierarchy.KindPolicy {
 		return zero, ErrInvalidControlPlacement
+	}
+	if err := ValidatePolicySpec(input.Spec); err != nil {
+		return zero, err
 	}
 	if err := ValidatePolicyStatus(input.Status, 1); err != nil {
 		return zero, err

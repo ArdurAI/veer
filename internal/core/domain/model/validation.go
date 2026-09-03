@@ -41,6 +41,23 @@ func ValidatePolicyStatus(status PolicyStatus, resourceGeneration int64) error {
 	return control.ValidatePolicyStatus(status, resourceGeneration)
 }
 
+// ValidatePolicySpec preserves the authorization package's bounded,
+// canonical policy contract through the version-independent hub.
+func ValidatePolicySpec(spec PolicySpec) error {
+	return control.ValidatePolicySpec(spec)
+}
+
+// ClonePolicySpec returns an ownership-independent policy value.
+func ClonePolicySpec(spec PolicySpec) PolicySpec {
+	return control.ClonePolicySpec(spec)
+}
+
+// EqualPolicySpec compares policy meaning while preserving required
+// collection presence.
+func EqualPolicySpec(left, right PolicySpec) bool {
+	return control.EqualPolicySpec(left, right)
+}
+
 // ValidateProviderConnectionSpec preserves the closed credential-reference
 // boundary owned by the control package.
 func ValidateProviderConnectionSpec(spec ProviderConnectionSpec) error {

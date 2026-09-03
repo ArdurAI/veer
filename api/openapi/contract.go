@@ -24,7 +24,7 @@ const (
 	maxContractBytes             = 1 << 20
 	maxJSONDepth                 = 64
 	maxJSONNodes                 = 50000
-	expectedSchemaCount          = 79
+	expectedSchemaCount          = 81
 	minimumDeprecationNoticeDays = 90
 	canonicalDecimalPattern      = `^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$`
 	providerTokenPattern         = `^[a-z][a-z0-9.-]*$`
@@ -205,6 +205,7 @@ type resourceSpecShape uint8
 const (
 	resourceSpecWorkspace resourceSpecShape = iota
 	resourceSpecEmpty
+	resourceSpecPolicy
 	resourceSpecProviderConnection
 )
 
@@ -229,7 +230,7 @@ func (contract resourceSchemaContract) schema(suffix string) string {
 
 var resourceSchemaContracts = []resourceSchemaContract{
 	{kind: "Workspace", metadataSchema: "RootResourceMetadata", specShape: resourceSpecWorkspace},
-	{kind: "Policy", parentKind: "Workspace", metadataSchema: "ChildResourceMetadata", specShape: resourceSpecEmpty},
+	{kind: "Policy", parentKind: "Workspace", metadataSchema: "ChildResourceMetadata", specShape: resourceSpecPolicy},
 	{kind: "Environment", parentKind: "Workspace", metadataSchema: "ChildResourceMetadata", specShape: resourceSpecEmpty},
 	{
 		kind: "ProviderConnection", parentKind: "Environment", metadataSchema: "ChildResourceMetadata",
@@ -308,6 +309,60 @@ type conditionWire struct {
 	Message            string `json:"message"`
 	ObservedGeneration int64  `json:"observedGeneration"`
 	LastTransitionAt   string `json:"lastTransitionAt"`
+}
+
+type policySpecWire struct {
+	Bindings []policyBindingWire `json:"bindings"`
+}
+
+type policyBindingWire struct {
+	MemberID string          `json:"memberId"`
+	Role     string          `json:"role"`
+	Scope    policyScopeWire `json:"scope"`
+}
+
+type policyScopeWire struct {
+	Kind          string  `json:"kind"`
+	EnvironmentID *string `json:"environmentId,omitempty"`
+}
+
+type authorizationContract struct {
+	ContractVersion         string                        `json:"contractVersion"`
+	DefaultEffect           string                        `json:"defaultEffect"`
+	PolicyVersionPrefix     string                        `json:"policyVersionPrefix"`
+	InputDigestPrefix       string                        `json:"inputDigestPrefix"`
+	MaxDecisionBytes        int                           `json:"maxDecisionBytes"`
+	ListEvaluation          string                        `json:"listEvaluation"`
+	Actions                 []string                      `json:"actions"`
+	Objects                 []string                      `json:"objects"`
+	Scopes                  []authorizationScopeContract  `json:"scopes"`
+	Roles                   []authorizationRoleContract   `json:"roles"`
+	ReservedActions         []string                      `json:"reservedActions"`
+	ReservedResourceActions []authorizationResourceAction `json:"reservedResourceActions"`
+	Effects                 []string                      `json:"effects"`
+	Reasons                 []string                      `json:"reasons"`
+}
+
+type authorizationScopeContract struct {
+	Kind       string   `json:"kind"`
+	DescendsTo []string `json:"descendsTo"`
+}
+
+type authorizationRoleContract struct {
+	Name     string                       `json:"name"`
+	Inherits []string                     `json:"inherits"`
+	Grants   []authorizationGrantContract `json:"grants"`
+}
+
+type authorizationGrantContract struct {
+	Action        string   `json:"action"`
+	ObjectKind    string   `json:"objectKind"`
+	ResourceKinds []string `json:"resourceKinds"`
+}
+
+type authorizationResourceAction struct {
+	Action       string `json:"action"`
+	ResourceKind string `json:"resourceKind"`
 }
 
 var operationContracts = map[string]operationContract{
@@ -502,6 +557,7 @@ func Validate(data []byte) error {
 		{name: "operation transitions", fn: validateOperationTransitions},
 		{name: "condition transitions", fn: validateConditionTransitions},
 		{name: "operations", fn: validateOperations},
+		{name: "authorization", fn: validateAuthorization},
 		{name: "components", fn: validateComponents},
 		{name: "examples", fn: validateExamples},
 	}
@@ -701,6 +757,10 @@ func isReviewedOpenObjectRefinement(path string, schema map[string]any) bool {
 	if isReviewedRootParentExclusion(path, schema) {
 		return true
 	}
+	if path == "$/components/schemas/PolicyScope/oneOf/0/not" {
+		return schema["type"] == "object" && schema["additionalProperties"] == true &&
+			stringSetEquals(schema["required"], []string{"environmentId"})
+	}
 	return path == "$/components/schemas/CostEstimate/oneOf/1/not" &&
 		schema["type"] == "object" && schema["additionalProperties"] == true &&
 		stringSetEquals(schema["required"], []string{"amount"})
@@ -724,6 +784,7 @@ func isReviewedControlRefinement(path string) bool {
 	for _, prefix := range []string{
 		"$/components/schemas/QuotaCheck/oneOf/",
 		"$/components/schemas/CostEstimate/oneOf/",
+		"$/components/schemas/PolicyScope/oneOf/",
 	} {
 		if strings.HasPrefix(path, prefix) && !strings.Contains(strings.TrimPrefix(path, prefix), "/") {
 			return true
@@ -738,8 +799,14 @@ func isReviewedFreeFormMap(path string, schema map[string]any) bool {
 
 func isReviewedExtension(path, name string) bool {
 	switch name {
-	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-admission", "x-veer-operation-transitions", "x-veer-condition-transitions":
+	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-admission", "x-veer-authorization", "x-veer-operation-transitions", "x-veer-condition-transitions":
 		return path == "$"
+	case "x-veer-authorization-action":
+		return strings.HasPrefix(path, "$/paths/") &&
+			(strings.HasSuffix(path, "/get") ||
+				strings.HasSuffix(path, "/post") ||
+				strings.HasSuffix(path, "/put") ||
+				strings.HasSuffix(path, "/delete"))
 	case "x-veer-write-class":
 		return strings.HasPrefix(path, "$/paths/") &&
 			(strings.HasSuffix(path, "/post") ||
@@ -1041,7 +1108,8 @@ func validateAdmission(root map[string]any) error {
 		{
 			Name: "reference",
 			Codes: []string{
-				"invalid-placement", "parent-not-found", "parent-kind-mismatch", "workspace-mismatch",
+				"invalid-placement", "parent-not-found", "parent-kind-mismatch", "reference-not-found",
+				"reference-kind-mismatch", "workspace-mismatch",
 			},
 			DefaultResponse: validationFailure,
 		},
@@ -1202,6 +1270,163 @@ func validateAdmissionFieldSets(raw any) error {
 		}
 	}
 	return nil
+}
+
+func validateAuthorization(root map[string]any) error {
+	raw, exists := root["x-veer-authorization"]
+	if !exists {
+		return errors.New("x-veer-authorization is missing")
+	}
+	var got authorizationContract
+	if err := decodeStrictValue(raw, &got); err != nil {
+		return fmt.Errorf("x-veer-authorization shape: %w", err)
+	}
+	if !reflect.DeepEqual(got, authorizationManifestContract()) {
+		return errors.New("x-veer-authorization contract drifted")
+	}
+
+	paths, err := mapField(root, "paths")
+	if err != nil {
+		return err
+	}
+	wantActions := map[string]string{
+		"listWorkspaces":         "resource.list",
+		"createWorkspace":        "resource.create",
+		"getWorkspace":           "resource.get",
+		"replaceWorkspace":       "resource.replace",
+		"deleteWorkspace":        "resource.delete",
+		"replaceWorkspaceStatus": "resource.status.replace",
+		"getOperation":           "operation.get",
+	}
+	seen := make(map[string]struct{}, len(wantActions))
+	for route, rawItem := range paths {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			return fmt.Errorf("path %q is not an object", route)
+		}
+		for method, rawOperation := range item {
+			if pathItemMetadata[method] || strings.HasPrefix(method, "x-") {
+				continue
+			}
+			operation, ok := rawOperation.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%s %s is not an operation object", strings.ToUpper(method), route)
+			}
+			operationID, ok := operation["operationId"].(string)
+			if !ok || operationID == "" {
+				return fmt.Errorf("%s %s omits operationId", strings.ToUpper(method), route)
+			}
+			wantAction, reviewed := wantActions[operationID]
+			if !reviewed {
+				return fmt.Errorf("operationId %q has no authorization annotation contract", operationID)
+			}
+			if operation["x-veer-authorization-action"] != wantAction {
+				return fmt.Errorf("operationId %q authorization action must be %q", operationID, wantAction)
+			}
+			seen[operationID] = struct{}{}
+		}
+	}
+	if len(seen) != len(wantActions) {
+		return errors.New("authorization operation annotation set drifted")
+	}
+	return nil
+}
+
+func authorizationManifestContract() authorizationContract {
+	allResourceKinds := []string{"Application", "Component", "Environment", "ProviderConnection", "Workspace"}
+	return authorizationContract{
+		ContractVersion:     "veer.authorization.v1alpha1",
+		DefaultEffect:       "Deny",
+		PolicyVersionPrefix: "azv1_",
+		InputDigestPrefix:   "azi1_",
+		MaxDecisionBytes:    1024,
+		ListEvaluation:      "per-retained-row",
+		Actions: []string{
+			"resource.list", "resource.get", "resource.create", "resource.replace", "resource.delete",
+			"resource.status.replace", "plan.list", "plan.get", "plan.preview", "operation.list",
+			"operation.get", "operation.cancel", "operation.retry", "operation.quarantine", "membership.list",
+			"membership.get", "membership.create", "membership.replace", "membership.delete", "audit.list",
+			"audit.export", "approval.approve", "approval.reject", "approval.override", "work.publish",
+			"work.consume", "work.redrive", "reconcile.plan", "reconcile.execute", "operation.transition",
+			"credential.resolve", "provider.discover", "provider.apply", "provider.observe", "provider.delete",
+			"audit.append",
+		},
+		Objects: []string{"Resource", "Operation", "Plan", "Membership", "Audit"},
+		Scopes: []authorizationScopeContract{
+			{Kind: "Workspace", DescendsTo: []string{"Workspace", "Environment"}},
+			{Kind: "Environment", DescendsTo: []string{"Environment"}},
+		},
+		Roles: []authorizationRoleContract{
+			{
+				Name: "Viewer", Inherits: []string{},
+				Grants: []authorizationGrantContract{
+					{Action: "resource.list", ObjectKind: "Resource", ResourceKinds: allResourceKinds},
+					{Action: "resource.get", ObjectKind: "Resource", ResourceKinds: allResourceKinds},
+					{Action: "plan.list", ObjectKind: "Plan", ResourceKinds: allResourceKinds},
+					{Action: "plan.get", ObjectKind: "Plan", ResourceKinds: allResourceKinds},
+					{Action: "operation.list", ObjectKind: "Operation", ResourceKinds: allResourceKinds},
+					{Action: "operation.get", ObjectKind: "Operation", ResourceKinds: allResourceKinds},
+					{Action: "audit.list", ObjectKind: "Audit", ResourceKinds: allResourceKinds},
+				},
+			},
+			{
+				Name: "Developer", Inherits: []string{"Viewer"},
+				Grants: []authorizationGrantContract{
+					{Action: "resource.create", ObjectKind: "Resource", ResourceKinds: []string{"Application", "Component"}},
+					{Action: "resource.replace", ObjectKind: "Resource", ResourceKinds: []string{"Application", "Component"}},
+					{Action: "resource.delete", ObjectKind: "Resource", ResourceKinds: []string{"Application", "Component"}},
+					{Action: "plan.preview", ObjectKind: "Plan", ResourceKinds: []string{"Application", "Component"}},
+					{Action: "operation.cancel", ObjectKind: "Operation", ResourceKinds: []string{"Application", "Component"}},
+				},
+			},
+			{
+				Name: "Operator", Inherits: []string{"Viewer"},
+				Grants: []authorizationGrantContract{
+					{Action: "resource.create", ObjectKind: "Resource", ResourceKinds: []string{"Environment", "ProviderConnection"}},
+					{Action: "resource.replace", ObjectKind: "Resource", ResourceKinds: []string{"Environment", "ProviderConnection"}},
+					{Action: "resource.delete", ObjectKind: "Resource", ResourceKinds: []string{"Environment", "ProviderConnection"}},
+					{Action: "plan.preview", ObjectKind: "Plan", ResourceKinds: []string{"Environment", "ProviderConnection"}},
+					{Action: "operation.cancel", ObjectKind: "Operation", ResourceKinds: []string{"Application", "Component", "Environment", "ProviderConnection"}},
+					{Action: "operation.retry", ObjectKind: "Operation", ResourceKinds: []string{"Application", "Component", "Environment", "ProviderConnection"}},
+				},
+			},
+			{
+				Name: "WorkspaceAdministrator", Inherits: []string{"Viewer"},
+				Grants: []authorizationGrantContract{
+					{Action: "resource.list", ObjectKind: "Resource", ResourceKinds: []string{"Policy"}},
+					{Action: "resource.get", ObjectKind: "Resource", ResourceKinds: []string{"Policy"}},
+					{Action: "resource.create", ObjectKind: "Resource", ResourceKinds: []string{"Policy"}},
+					{Action: "resource.replace", ObjectKind: "Resource", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "resource.delete", ObjectKind: "Resource", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "plan.list", ObjectKind: "Plan", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "plan.get", ObjectKind: "Plan", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "plan.preview", ObjectKind: "Plan", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "operation.list", ObjectKind: "Operation", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "operation.get", ObjectKind: "Operation", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "operation.cancel", ObjectKind: "Operation", ResourceKinds: []string{"Policy", "Workspace"}},
+					{Action: "membership.list", ObjectKind: "Membership", ResourceKinds: []string{}},
+					{Action: "membership.get", ObjectKind: "Membership", ResourceKinds: []string{}},
+					{Action: "membership.create", ObjectKind: "Membership", ResourceKinds: []string{}},
+					{Action: "membership.replace", ObjectKind: "Membership", ResourceKinds: []string{}},
+					{Action: "membership.delete", ObjectKind: "Membership", ResourceKinds: []string{}},
+				},
+			},
+		},
+		ReservedActions: []string{
+			"resource.status.replace", "operation.quarantine", "audit.export", "approval.approve", "approval.reject",
+			"approval.override", "work.publish", "work.consume", "work.redrive", "reconcile.plan", "reconcile.execute",
+			"operation.transition", "credential.resolve", "provider.discover", "provider.apply", "provider.observe",
+			"provider.delete", "audit.append",
+		},
+		ReservedResourceActions: []authorizationResourceAction{
+			{Action: "resource.create", ResourceKind: "Workspace"},
+		},
+		Effects: []string{"Allow", "Deny"},
+		Reasons: []string{
+			"CrossWorkspace", "ReservedAction", "NoMembership", "NoRoleBinding",
+			"ScopeNotGranted", "ActionNotGranted", "RoleGranted",
+		},
+	}
 }
 
 func validateOperationTransitions(root map[string]any) error {
@@ -2467,6 +2692,8 @@ func validateTopLevelSchemaKeywords(schemas map[string]any) error {
 		{name: "ProviderCapability", extras: []string{"example"}},
 		{name: "QuotaCheck", extras: []string{"example", "oneOf", "x-veer-quota-comparison"}},
 		{name: "CostEstimate", extras: []string{"example", "oneOf"}},
+		{name: "PolicyBinding"},
+		{name: "PolicyScope", extras: []string{"oneOf"}},
 	} {
 		schema, err := mapField(schemas, contract.name)
 		if err != nil {
@@ -2556,7 +2783,7 @@ func validateSchemas(schemas map[string]any) error {
 		"OpaqueId", "Operation", "Problem", "RequestId", "ResourceMetadata", "StatusReceipt", "StrongETag",
 		"Timestamp", "ProviderCapability", "QuotaCheck", "Workspace", "WorkspaceCreate", "WorkspaceList", "WorkspaceReplace",
 		"WorkspaceSpec", "WorkspaceSpecWrite", "WorkspaceStatus", "WorkspaceStatusWrite", "WritableMetadata",
-		"RootResourceMetadata", "ChildResourceMetadata",
+		"RootResourceMetadata", "ChildResourceMetadata", "PolicyBinding", "PolicyScope",
 	}
 	for _, contract := range resourceSchemaContracts[1:] {
 		for _, suffix := range []string{"", "Create", "List", "Replace", "Spec", "Status", "StatusWrite"} {
@@ -3494,6 +3721,10 @@ func validateResourceSchemaFamily(schemas map[string]any, contract resourceSchem
 		if _, exists := spec["required"]; exists {
 			return fmt.Errorf("%s must not declare required properties", contract.schema("Spec"))
 		}
+	case resourceSpecPolicy:
+		if err := validatePolicySpecSchema(schemas, spec, properties); err != nil {
+			return err
+		}
 	case resourceSpecProviderConnection:
 		if err := validateProviderConnectionSpecSchema(schemas, spec, properties); err != nil {
 			return err
@@ -3561,6 +3792,119 @@ func validateResourceStatusSchema(schemas map[string]any, contract resourceSchem
 	}
 	if err := requireReference(conditions, "items", "#/components/schemas/Condition"); err != nil {
 		return fmt.Errorf("%s.conditions: %w", name, err)
+	}
+	return nil
+}
+
+func validatePolicySpecSchema(schemas, spec, properties map[string]any) error {
+	if spec["type"] != "object" || spec["additionalProperties"] != false ||
+		!stringSetEquals(spec["required"], []string{"bindings"}) || len(properties) != 1 {
+		return errors.New("PolicySpec shape drifted")
+	}
+	bindings, err := mapField(properties, "bindings")
+	if err != nil {
+		return err
+	}
+	if !mapKeySetEquals(bindings, []string{"type", "maxItems", "uniqueItems", "items"}) ||
+		bindings["type"] != "array" ||
+		!numberEquals(bindings["maxItems"], "128") || bindings["uniqueItems"] != true {
+		return errors.New("PolicySpec.bindings list contract drifted")
+	}
+	if err := requireReference(bindings, "items", "#/components/schemas/PolicyBinding"); err != nil {
+		return fmt.Errorf("PolicySpec.bindings: %w", err)
+	}
+
+	binding, err := mapField(schemas, "PolicyBinding")
+	if err != nil {
+		return err
+	}
+	bindingProperties, err := mapField(binding, "properties")
+	if err != nil {
+		return err
+	}
+	if binding["type"] != "object" || binding["additionalProperties"] != false ||
+		!stringSetEquals(binding["required"], []string{"memberId", "role", "scope"}) ||
+		len(bindingProperties) != 3 {
+		return errors.New("PolicyBinding shape drifted")
+	}
+	if err := requireReference(bindingProperties, "memberId", "#/components/schemas/OpaqueId"); err != nil {
+		return fmt.Errorf("PolicyBinding: %w", err)
+	}
+	role, err := mapField(bindingProperties, "role")
+	if err != nil {
+		return err
+	}
+	if !mapKeySetEquals(role, []string{"type", "enum"}) || role["type"] != "string" ||
+		!stringSetEquals(role["enum"], []string{"Viewer", "Developer", "Operator", "WorkspaceAdministrator"}) {
+		return errors.New("PolicyBinding.role contract drifted")
+	}
+	if err := requireReference(bindingProperties, "scope", "#/components/schemas/PolicyScope"); err != nil {
+		return fmt.Errorf("PolicyBinding: %w", err)
+	}
+
+	scope, err := mapField(schemas, "PolicyScope")
+	if err != nil {
+		return err
+	}
+	scopeProperties, err := mapField(scope, "properties")
+	if err != nil {
+		return err
+	}
+	if scope["type"] != "object" || scope["additionalProperties"] != false ||
+		!stringSetEquals(scope["required"], []string{"kind"}) || len(scopeProperties) != 2 {
+		return errors.New("PolicyScope shape drifted")
+	}
+	kind, err := mapField(scopeProperties, "kind")
+	if err != nil {
+		return err
+	}
+	if !mapKeySetEquals(kind, []string{"type", "enum"}) || kind["type"] != "string" ||
+		!stringSetEquals(kind["enum"], []string{"Workspace", "Environment"}) {
+		return errors.New("PolicyScope.kind contract drifted")
+	}
+	if err := requireReference(scopeProperties, "environmentId", "#/components/schemas/OpaqueId"); err != nil {
+		return fmt.Errorf("PolicyScope: %w", err)
+	}
+	return validatePolicyScopeRefinement(scope["oneOf"])
+}
+
+func validatePolicyScopeRefinement(raw any) error {
+	branches, ok := raw.([]any)
+	if !ok || len(branches) != 2 {
+		return errors.New("PolicyScope must contain exactly two tagged oneOf branches")
+	}
+	workspace, ok := branches[0].(map[string]any)
+	if !ok || !mapKeySetEquals(workspace, []string{"properties", "not"}) {
+		return errors.New("PolicyScope Workspace refinement drifted")
+	}
+	workspaceProperties, err := mapField(workspace, "properties")
+	if err != nil || !mapKeySetEquals(workspaceProperties, []string{"kind"}) {
+		return errors.New("PolicyScope Workspace tag drifted")
+	}
+	workspaceKind, err := mapField(workspaceProperties, "kind")
+	if err != nil || !mapKeySetEquals(workspaceKind, []string{"const"}) || workspaceKind["const"] != "Workspace" {
+		return errors.New("PolicyScope Workspace tag drifted")
+	}
+	workspaceNot, err := mapField(workspace, "not")
+	if err != nil || !mapKeySetEquals(workspaceNot, []string{"type", "additionalProperties", "required"}) ||
+		workspaceNot["type"] != "object" || workspaceNot["additionalProperties"] != true ||
+		!stringSetEquals(workspaceNot["required"], []string{"environmentId"}) {
+		return errors.New("PolicyScope Workspace environment exclusion drifted")
+	}
+
+	environment, ok := branches[1].(map[string]any)
+	if !ok || !mapKeySetEquals(environment, []string{"required", "properties"}) ||
+		!stringSetEquals(environment["required"], []string{"environmentId"}) {
+		return errors.New("PolicyScope Environment refinement drifted")
+	}
+	environmentProperties, err := mapField(environment, "properties")
+	if err != nil || !mapKeySetEquals(environmentProperties, []string{"kind"}) {
+		return errors.New("PolicyScope Environment tag drifted")
+	}
+	environmentKind, err := mapField(environmentProperties, "kind")
+	if err != nil || !mapKeySetEquals(environmentKind, []string{"const"}) ||
+		environmentKind["const"] != "Environment" {
+		return errors.New("PolicyScope Environment tag drifted")
 	}
 	return nil
 }
@@ -3989,6 +4333,75 @@ func requiredBranchSetEquals(raw any, want [][]string) bool {
 		}
 	}
 	return true
+}
+
+func validatePolicySpecValue(raw any) error {
+	var value policySpecWire
+	if err := decodeStrictValue(raw, &value); err != nil {
+		return fmt.Errorf("PolicySpec strict decode: %w", err)
+	}
+	if value.Bindings == nil || len(value.Bindings) > 128 {
+		return errors.New("PolicySpec.bindings must be present and contain at most 128 entries")
+	}
+	var previous policyBindingWire
+	for index, binding := range value.Bindings {
+		if !opaqueIDValuePattern.MatchString(binding.MemberID) {
+			return fmt.Errorf("PolicySpec.bindings[%d].memberId is not an opaque ID", index)
+		}
+		switch binding.Role {
+		case "Viewer", "Developer", "Operator", "WorkspaceAdministrator":
+		default:
+			return fmt.Errorf("PolicySpec.bindings[%d].role is invalid", index)
+		}
+		switch binding.Scope.Kind {
+		case "Workspace":
+			if binding.Scope.EnvironmentID != nil {
+				return fmt.Errorf("PolicySpec.bindings[%d] Workspace scope carries environmentId", index)
+			}
+		case "Environment":
+			if binding.Scope.EnvironmentID == nil ||
+				!opaqueIDValuePattern.MatchString(*binding.Scope.EnvironmentID) {
+				return fmt.Errorf("PolicySpec.bindings[%d] Environment scope requires an opaque environmentId", index)
+			}
+			if binding.Role == "WorkspaceAdministrator" {
+				return fmt.Errorf("PolicySpec.bindings[%d] WorkspaceAdministrator requires Workspace scope", index)
+			}
+		default:
+			return fmt.Errorf("PolicySpec.bindings[%d].scope.kind is invalid", index)
+		}
+		if index > 0 {
+			comparison := comparePolicyBindings(previous, binding)
+			if comparison == 0 {
+				return fmt.Errorf("PolicySpec.bindings[%d] duplicates the previous canonical binding", index)
+			}
+			if comparison > 0 {
+				return fmt.Errorf("PolicySpec.bindings[%d] is outside canonical order", index)
+			}
+		}
+		previous = binding
+	}
+	return nil
+}
+
+func comparePolicyBindings(left, right policyBindingWire) int {
+	for _, values := range [][2]string{
+		{left.MemberID, right.MemberID},
+		{left.Scope.Kind, right.Scope.Kind},
+		{policyEnvironmentID(left.Scope), policyEnvironmentID(right.Scope)},
+		{left.Role, right.Role},
+	} {
+		if comparison := strings.Compare(values[0], values[1]); comparison != 0 {
+			return comparison
+		}
+	}
+	return 0
+}
+
+func policyEnvironmentID(scope policyScopeWire) string {
+	if scope.EnvironmentID == nil {
+		return ""
+	}
+	return *scope.EnvironmentID
 }
 
 func validateCredentialReferenceValue(raw any) error {
@@ -4533,6 +4946,10 @@ func validateResourceExamples(schemas map[string]any) error {
 		case resourceSpecWorkspace:
 			if len(spec) != 1 || spec["suspendReconciliation"] != false {
 				return errors.New("workspace example spec drifted")
+			}
+		case resourceSpecPolicy:
+			if err := validatePolicySpecValue(spec); err != nil {
+				return fmt.Errorf("policy example spec: %w", err)
 			}
 		case resourceSpecProviderConnection:
 			if err := validateProviderConnectionSpecValue(spec); err != nil {
