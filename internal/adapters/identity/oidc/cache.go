@@ -264,6 +264,12 @@ func (cache *keyCache) resolveAfterSignatureFailure(
 		}
 		return cachedVerificationKey{}, true, errKeySourceUnavailable
 	}
+	if now.Before(cache.nextProactiveRefreshAllowed) {
+		attemptedAt := cache.nextProactiveRefreshAllowed.Add(-cache.anchor.cache.RefreshCooldown)
+		cache.recordCooldown(refreshReactive, attemptedAt)
+		cache.mu.Unlock()
+		return cachedVerificationKey{}, false, nil
+	}
 	if previous.refreshAttempted {
 		cache.recordCooldown(refreshReactive, previous.refreshAttemptedAt)
 		cache.mu.Unlock()

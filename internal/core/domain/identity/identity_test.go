@@ -1,6 +1,8 @@
 package identity
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -501,6 +503,22 @@ func TestIdentityDiagnosticsAndSerializationNeverExposeClaims(t *testing.T) {
 				t.Fatalf("json.Marshal(%s) = %s, want error", name, encoded)
 			}
 			assertNoIdentityCanary(t, string(encoded))
+			assertNoIdentityCanary(t, err.Error())
+		})
+	}
+
+	for name, value := range map[string]any{
+		"principal input":         input,
+		"principal input pointer": &input,
+		"nested principal input":  struct{ Input PrincipalInput }{Input: input},
+	} {
+		t.Run("gob "+name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := gob.NewEncoder(&output).Encode(value)
+			if !errors.Is(err, ErrSerializationForbidden) {
+				t.Fatalf("gob.Encode(%s) error = %v, want %v", name, err, ErrSerializationForbidden)
+			}
+			assertNoIdentityCanary(t, output.String())
 			assertNoIdentityCanary(t, err.Error())
 		})
 	}

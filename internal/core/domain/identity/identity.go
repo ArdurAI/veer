@@ -292,6 +292,11 @@ func (PrincipalInput) MarshalText() ([]byte, error) {
 	return nil, ErrSerializationForbidden
 }
 
+// GobEncode rejects generic binary persistence of construction-time claims.
+func (PrincipalInput) GobEncode() ([]byte, error) {
+	return nil, ErrSerializationForbidden
+}
+
 // Principal is an immutable normalized authenticated actor. Its fields remain
 // private and its accessors return values or defensive copies.
 type Principal struct {

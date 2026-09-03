@@ -162,6 +162,13 @@ func TestJWKSFailedProactiveRefreshThrottlesReactiveRetry(t *testing.T) {
 
 	clock.Advance(anchor.Cache.Freshness - anchor.Cache.RefreshAhead)
 	fixture.setResponse(http.StatusServiceUnavailable, []byte(`{"error":"unavailable"}`))
+	if _, err := authenticate(t, verifier, trustedToken); err != nil {
+		t.Fatalf("cached valid token after failed proactive refresh: %v", err)
+	}
+	if got := fixture.hits.Load(); got != 2 {
+		t.Fatalf("failed proactive refresh caused %d fetches, want 2", got)
+	}
+
 	badToken := signClaims(t, untrustedKey, jose.ES256, "stable-outage-kid", "at+jwt", claims)
 	for range 8 {
 		_, err := authenticate(t, verifier, badToken)
@@ -169,6 +176,34 @@ func TestJWKSFailedProactiveRefreshThrottlesReactiveRetry(t *testing.T) {
 	}
 	if got := fixture.hits.Load(); got != 2 {
 		t.Fatalf("failed proactive plus bad-signature retries caused %d fetches, want 2", got)
+	}
+}
+
+func TestJWKSSuccessfulProactiveRefreshDoesNotThrottleRotation(t *testing.T) {
+	fixture := newKeyServer(t)
+	clock := newFakeClock(testNow)
+	firstKey := generateECDSAKey(t)
+	rotatedKey := generateECDSAKey(t)
+	fixture.setKeys(t, publicJWK(firstKey, "proactive-rotation-kid", jose.ES256))
+	anchor := testTrustAnchor(fixture, identity.KindHuman)
+	verifier := newTestVerifier(t, fixture, anchor, clock)
+	claims := cacheClaims(anchor, clock.Now())
+	firstToken := signClaims(t, firstKey, jose.ES256, "proactive-rotation-kid", "at+jwt", claims)
+	if _, err := authenticate(t, verifier, firstToken); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+
+	clock.Advance(anchor.Cache.Freshness - anchor.Cache.RefreshAhead)
+	if _, err := authenticate(t, verifier, firstToken); err != nil {
+		t.Fatalf("successful proactive refresh: %v", err)
+	}
+	fixture.setKeys(t, publicJWK(rotatedKey, "proactive-rotation-kid", jose.ES256))
+	rotatedToken := signClaims(t, rotatedKey, jose.ES256, "proactive-rotation-kid", "at+jwt", claims)
+	if _, err := authenticate(t, verifier, rotatedToken); err != nil {
+		t.Fatalf("same-kid rotation after successful proactive refresh: %v", err)
+	}
+	if got := fixture.hits.Load(); got != 3 {
+		t.Fatalf("successful proactive refresh plus rotation caused %d fetches, want 3", got)
 	}
 }
 
