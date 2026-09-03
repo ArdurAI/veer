@@ -18,6 +18,8 @@ func FuzzExtractBearer(f *testing.F) {
 	f.Add("Bearer invalid token", "", "", "", false)
 	f.Add("", "access_token="+bearerCanary, "access_token="+bearerCanary, "", false)
 	f.Add("Bearer "+bearerCanary, "", "", "access_token=other", true)
+	f.Add("", "", "", "access_token ="+bearerCanary, false)
+	f.Add("Bearer "+bearerCanary, "", "", "theme=dark; access_token\t="+bearerCanary, false)
 	f.Add("Bearer "+bearerCanary, "page=1", "access_token="+bearerCanary, "", false)
 	f.Add("Bearer "+bearerCanary, "page=1", "trace=2", "", false)
 
@@ -41,6 +43,8 @@ func FuzzExtractBearer(f *testing.F) {
 		if cookie != "" {
 			request.Header.Add("Cookie", cookie)
 		}
+		_, standardCookieError := request.Cookie(accessTokenParameter)
+		standardCookieCarrier := standardCookieError == nil
 		queryCarrier, queryMismatch := inspectQueryViews(request)
 		cookieCarrier := hasAccessTokenCookie(request.Header)
 
@@ -55,6 +59,16 @@ func FuzzExtractBearer(f *testing.F) {
 			for name := range request.Header {
 				if asciiEqualFold(name, "Cookie") {
 					t.Fatal("rejected cookie state was retained")
+				}
+			}
+		}
+		if standardCookieCarrier {
+			if !errors.Is(err, ports.ErrAuthenticationInvalid) || present || credential.Valid() {
+				t.Fatal("cookie recognized by net/http did not fail closed")
+			}
+			for name := range request.Header {
+				if asciiEqualFold(name, "Cookie") {
+					t.Fatal("cookie recognized by net/http was retained")
 				}
 			}
 		}

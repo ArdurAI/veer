@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -49,6 +51,46 @@ func TestPropertyValidBearerEnvelopeRoundTrips(t *testing.T) {
 	if err := quick.Check(property, &quick.Config{
 		MaxCount: 1_000,
 		Rand:     rand.New(rand.NewSource(22)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPropertyCookieNameWhitespaceFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	whitespace := []string{"", " ", "\t", " \t", "\t "}
+	property := func(leadingIndex, trailingIndex uint8, authorize bool) bool {
+		cookie := "theme=dark;" + whitespace[int(leadingIndex)%len(whitespace)] +
+			accessTokenParameter + whitespace[int(trailingIndex)%len(whitespace)] +
+			"=" + bearerCanary
+		request := &http.Request{
+			Header:     header("Cookie", cookie),
+			URL:        &url.URL{Path: "/v1/resources"},
+			RequestURI: "/v1/resources",
+		}
+		if authorize {
+			request.Header.Set("Authorization", "Bearer "+bearerCanary)
+		}
+		if _, err := request.Cookie(accessTokenParameter); err != nil {
+			return false
+		}
+
+		credential, present, err := ExtractBearer(request)
+		if !errors.Is(err, ports.ErrAuthenticationInvalid) || present || credential.Valid() {
+			return false
+		}
+		for name := range request.Header {
+			if asciiEqualFold(name, "Authorization") || asciiEqualFold(name, "Cookie") {
+				return false
+			}
+		}
+		return !strings.Contains(fmt.Sprintf("%v %+v %#v", request.Header, request.Header, request.Header), bearerCanary)
+	}
+
+	if err := quick.Check(property, &quick.Config{
+		MaxCount: 500,
+		Rand:     rand.New(rand.NewSource(24)),
 	}); err != nil {
 		t.Fatal(err)
 	}

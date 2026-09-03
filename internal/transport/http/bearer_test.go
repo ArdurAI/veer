@@ -67,6 +67,9 @@ func TestExtractBearer(t *testing.T) {
 		{name: "later query carrier", header: http.Header{}, rawQuery: "page=1&access_token=" + bearerCanary, wantInvalid: true},
 		{name: "semicolon query carrier", header: http.Header{}, rawQuery: "page=1;access_token=" + bearerCanary, wantInvalid: true},
 		{name: "cookie carrier", header: header("Cookie", "access_token="+bearerCanary), wantInvalid: true},
+		{name: "bare cookie carrier", header: header("Cookie", "access_token"), wantInvalid: true},
+		{name: "cookie carrier with space before equals", header: header("Cookie", "access_token ="+bearerCanary), wantInvalid: true},
+		{name: "cookie carrier with tab before equals", header: header("Cookie", "access_token\t="+bearerCanary), wantInvalid: true},
 		{name: "later cookie carrier", header: header("Cookie", "theme=dark; access_token="+bearerCanary), wantInvalid: true},
 		{name: "empty cookie carrier", header: header("Cookie", "access_token="), wantInvalid: true},
 		{name: "unrelated query", header: http.Header{}, rawQuery: "page=1&access-token=no", wantPresent: false},
@@ -82,6 +85,14 @@ func TestExtractBearer(t *testing.T) {
 			header: http.Header{
 				"Authorization": {"Bearer " + bearerCanary},
 				"Cookie":        {"access_token=other"},
+			},
+			wantInvalid: true,
+		},
+		{
+			name: "header and whitespace cookie carrier",
+			header: http.Header{
+				"Authorization": {"Bearer " + bearerCanary},
+				"Cookie":        {"theme=dark; access_token \t =other"},
 			},
 			wantInvalid: true,
 		},
@@ -310,6 +321,31 @@ func TestRejectedCarrierRequestRedactionCanary(t *testing.T) {
 			wantCookieRemoved: true,
 		},
 		{
+			name: "cookie name whitespace",
+			request: func() *http.Request {
+				return &http.Request{
+					Header: http.Header{
+						"Authorization": {"Bearer " + bearerCanary},
+						"Cookie":        {"theme=dark; \taccess_token \t =" + bearerCanary},
+					},
+					URL:        &url.URL{Path: "/v1/resources"},
+					RequestURI: "/v1/resources",
+				}
+			},
+			wantCookieRemoved: true,
+		},
+		{
+			name: "cookie name whitespace without authorization",
+			request: func() *http.Request {
+				return &http.Request{
+					Header:     header("Cookie", "theme=dark; access_token \t ="+bearerCanary),
+					URL:        &url.URL{Path: "/v1/resources"},
+					RequestURI: "/v1/resources",
+				}
+			},
+			wantCookieRemoved: true,
+		},
+		{
 			name: "query and cookie",
 			request: func() *http.Request {
 				rawQuery := "%61ccess%5Ftoken=" + bearerCanary + "&page=1"
@@ -474,6 +510,35 @@ func TestUnrelatedQueryAndCookieStateIsPreserved(t *testing.T) {
 			}
 			if request.Header.Get("Cookie") != "theme=dark" {
 				t.Fatal("unrelated cookie state was not preserved")
+			}
+		})
+	}
+}
+
+func TestCookieNameWhitespaceDoesNotBroadenExactMatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		"Access_token =" + bearerCanary,
+		"access-token\t=" + bearerCanary,
+		"access_tokenx \t=" + bearerCanary,
+	}
+	for _, cookie := range tests {
+		cookie := cookie
+		t.Run(cookie[:strings.IndexByte(cookie, '=')], func(t *testing.T) {
+			t.Parallel()
+			request := &http.Request{
+				Header:     header("Cookie", cookie),
+				URL:        &url.URL{Path: "/v1/resources"},
+				RequestURI: "/v1/resources",
+			}
+
+			credential, present, err := ExtractBearer(request)
+			if err != nil || present || credential.Valid() {
+				t.Fatal("unrelated cookie was treated as an access_token carrier")
+			}
+			if request.Header.Get("Cookie") != cookie {
+				t.Fatal("unrelated cookie was not preserved")
 			}
 		})
 	}

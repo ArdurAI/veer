@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -324,6 +325,12 @@ func (cache *keyCache) refresh(
 		cache.generation++
 		cache.freshUntil = now.Add(cache.anchor.cache.Freshness)
 		cache.refreshAt = cache.freshUntil.Add(-cache.anchor.cache.RefreshAhead)
+		// A usable replacement starts a new freshness epoch. Failure gates from
+		// the superseded set must not block required or proactive refresh of the
+		// newly installed set; a reactive attempt still receives its own cooldown
+		// below so attacker-selected key IDs remain throttled.
+		cache.nextRequiredRefreshAllowed = time.Time{}
+		cache.nextProactiveRefreshAllowed = time.Time{}
 	}
 	cache.lastAttemptAt = now
 	if fetchErr != nil {
@@ -455,6 +462,7 @@ func (cache *keyCache) fetch(ctx context.Context) (map[keyReference]jose.JSONWeb
 }
 
 type rawVerificationJWK struct {
+	rsaModulus  []byte
 	rsaExponent int
 }
 
@@ -489,11 +497,15 @@ func inspectVerificationJWK(encodedKey json.RawMessage) (rawVerificationJWK, boo
 			return rawVerificationJWK{}, false
 		}
 	case "RSA":
+		modulus, ok := canonicalRSAModulus(members)
+		if !ok {
+			return rawVerificationJWK{}, false
+		}
 		exponent, ok := canonicalRSAExponent(members)
 		if !ok {
 			return rawVerificationJWK{}, false
 		}
-		return rawVerificationJWK{rsaExponent: exponent}, true
+		return rawVerificationJWK{rsaModulus: modulus, rsaExponent: exponent}, true
 	}
 	return rawVerificationJWK{}, true
 }
@@ -543,6 +555,18 @@ func canonicalBase64URLSize(encoded string, expectedBytes int) bool {
 	return ok && len(decoded) == expectedBytes
 }
 
+func canonicalRSAModulus(members map[string]json.RawMessage) ([]byte, bool) {
+	encoded, ok := requiredJSONString(members, "n")
+	if !ok {
+		return nil, false
+	}
+	decoded, ok := decodeCanonicalSegment(encoded, maxRSAKeyBits/8)
+	if !ok || decoded[0] == 0 {
+		return nil, false
+	}
+	return decoded, true
+}
+
 func canonicalRSAExponent(members map[string]json.RawMessage) (int, bool) {
 	encoded, ok := requiredJSONString(members, "e")
 	if !ok {
@@ -570,9 +594,10 @@ func (cache *keyCache) boundAlgorithm(
 	if !key.Valid() || !key.IsPublic() || !validOpaqueValue(key.KeyID, maxKeyIDBytes) {
 		return "", false
 	}
-	if rawKey.rsaExponent != 0 {
+	if rawKey.rsaExponent != 0 || len(rawKey.rsaModulus) != 0 {
 		rsaKey, ok := key.Key.(*rsa.PublicKey)
-		if !ok || rsaKey.E != rawKey.rsaExponent {
+		if !ok || rsaKey.E != rawKey.rsaExponent ||
+			rsaKey.N == nil || !bytes.Equal(rsaKey.N.Bytes(), rawKey.rsaModulus) {
 			return "", false
 		}
 	}

@@ -3,6 +3,7 @@ package httptransport
 
 import (
 	"net/http"
+	"net/textproto"
 	"strings"
 
 	"github.com/ArdurAI/veer/internal/core/ports"
@@ -235,9 +236,13 @@ func hasAccessTokenCookie(header http.Header) bool {
 					cookie = value[:end]
 					value = value[end+1:]
 				}
-				cookie = strings.Trim(cookie, " \t")
-				if equals := strings.IndexByte(cookie, '='); equals >= 0 &&
-					cookie[:equals] == accessTokenParameter {
+				cookie = textproto.TrimString(cookie)
+				name, _, _ := strings.Cut(cookie, "=")
+				// net/http's cookie reader applies the same ASCII-space
+				// normalization to a cookie name before matching it. Mirror
+				// that boundary so alternate spelling cannot evade removal and
+				// later reappear as an access_token cookie downstream.
+				if textproto.TrimString(name) == accessTokenParameter {
 					return true
 				}
 			}
