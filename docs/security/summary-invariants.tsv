@@ -1,5 +1,5 @@
 id	text
-1	Deny access unless an explicit policy allows it.
+1	Default-deny access unless an explicit policy or the closed exact self-membership rule allows it.
 2	Authenticate people and workloads with short-lived credentials.
 3	Keep provider credentials outside API resources, plans, logs, and events.
 4	Bind every provider operation to one workspace and environment.

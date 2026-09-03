@@ -42,7 +42,8 @@ Workspace
 - An **Application** groups components that ship and operate together.
 - A **Component** declares a workload or managed-service dependency.
 - A **Policy** is a Workspace-owned control resource whose authorization
-  language is defined separately.
+  desired state contains bounded role bindings to opaque member IDs and exact
+  Workspace or Environment scopes.
 - A **ProviderConnection** is an Environment-owned, reference-only boundary
   for provider authority, capabilities, and quota observations.
 
@@ -71,6 +72,11 @@ service boundaries.
 header-only bearer extraction, explicit provider-neutral OIDC trust anchors,
 Human and Workload principal modeling, bounded JWT/JWKS validation, safe
 authentication outcomes, and token/claim redaction. It adds no route or server.
+[ADR 0009](0009-deterministic-hierarchical-authorization.md) fixes the closed
+action and role registries, star-only Viewer inheritance, canonical Policy
+bindings, sealed Workspace/Environment targets, default-deny evaluation, and
+bounded decision representation. Its OpenAPI projection is a pure reference
+contract; no API route or worker enforcement is implemented by that document.
 
 ## Reconciliation contract
 
@@ -110,8 +116,18 @@ not imply that asynchronous provider work has already completed.
   claim.
 - Closed token-free invalid/unavailable outcomes, no anonymous principal, and
   no generic credential or personal-claim serialization.
-- Workspace- and environment-scoped authorization.
-- Policy decisions captured with actor, action, resource, inputs, and outcome.
+- Closed Viewer, Developer, Operator, and WorkspaceAdministrator roles with
+  explicit direct grants and Viewer-only inheritance.
+- Workspace grants descend into their Environments; Environment grants remain
+  inside the resolved Environment. Every cross-Workspace target denies.
+- Canonical decisions retain only contract/policy/input versions, effect, and
+  reason. Raw principal claims and target identifiers are not serialized in a
+  decision.
+- Tenant roles cannot grant worker, controller, provider-adapter, approval,
+  export, or redrive actions. Workspace creation/bootstrap remains default
+  denied until a platform provisioning decision exists.
+- The current authorization package and OpenAPI manifest are reference
+  contracts; production API and worker wiring remains deferred.
 - Short-lived provider credentials wherever the provider supports them.
 
 ### Desired-state store

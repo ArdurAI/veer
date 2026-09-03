@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 )
@@ -138,10 +139,84 @@ func collectIntentSpecSchema(set *candidateSet, kind hierarchy.Kind, value any, 
 				set.add(CodeInvalidType, appendPointer(path, "suspendReconciliation"))
 			}
 		}
+	case hierarchy.KindPolicy:
+		collectPolicySpecSchema(set, value, path)
 	case hierarchy.KindProviderConnection:
 		collectProviderSpecSchema(set, value, path)
 	default:
 		collectObject(set, value, path, nil, []string{})
+	}
+}
+
+func collectPolicySpecSchema(set *candidateSet, value any, path string) {
+	object := collectObject(set, value, path, []string{"bindings"}, []string{"bindings"})
+	if object == nil {
+		return
+	}
+	bindingsValue, exists := object["bindings"]
+	if !exists || bindingsValue == nil {
+		return
+	}
+	bindingsPath := appendPointer(path, "bindings")
+	bindings, ok := bindingsValue.([]any)
+	if !ok {
+		set.add(CodeInvalidType, bindingsPath)
+		return
+	}
+	if len(bindings) > authorization.MaxBindingsPerPolicy {
+		set.add(CodeInvalidValue, bindingsPath)
+	}
+	for index, item := range bindings {
+		itemPath := appendPointer(bindingsPath, strconv.Itoa(index))
+		binding := collectObject(set, item, itemPath,
+			[]string{"memberId", "role", "scope"},
+			[]string{"memberId", "role", "scope"})
+		if binding == nil {
+			continue
+		}
+		collectPatternString(set, binding, "memberId", itemPath, opaqueIDPattern, 128)
+		if role, valid := collectString(set, binding, "role", itemPath); valid {
+			if _, err := authorization.ParseRole(role); err != nil {
+				set.add(CodeInvalidValue, appendPointer(itemPath, "role"))
+			}
+		}
+		scopeValue, exists := binding["scope"]
+		if !exists || scopeValue == nil {
+			continue
+		}
+		collectPolicyScopeSchema(set, scopeValue, appendPointer(itemPath, "scope"))
+	}
+}
+
+func collectPolicyScopeSchema(set *candidateSet, value any, path string) {
+	object := collectObject(set, value, path, []string{"kind"}, []string{"kind", "environmentId"})
+	if object == nil {
+		return
+	}
+	kindValue, kindValid := collectString(set, object, "kind", path)
+	kind, kindErr := authorization.ParseScopeKind(kindValue)
+	if kindValid && kindErr != nil {
+		set.add(CodeInvalidValue, appendPointer(path, "kind"))
+	}
+	environmentValue, environmentPresent := object["environmentId"]
+	if environmentPresent {
+		if environmentValue == nil {
+			set.add(CodeInvalidType, appendPointer(path, "environmentId"))
+		} else {
+			collectPatternString(set, object, "environmentId", path, opaqueIDPattern, 128)
+		}
+	}
+	if !kindValid || kindErr != nil {
+		return
+	}
+	if kind == authorization.ScopeKindWorkspace {
+		if environmentPresent {
+			set.add(CodeInvalidValue, appendPointer(path, "environmentId"))
+		}
+		return
+	}
+	if !environmentPresent {
+		set.add(CodeMissingField, appendPointer(path, "environmentId"))
 	}
 }
 

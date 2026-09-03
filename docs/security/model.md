@@ -8,7 +8,7 @@ be attributable, authorized, bounded, and auditable.
 
 ## Security invariants
 
-1. Deny access unless an explicit policy allows it.
+1. Default-deny access unless an explicit policy or the closed exact self-membership rule allows it.
 2. Authenticate people and workloads with short-lived credentials.
 3. Keep provider credentials outside API resources, plans, logs, and events.
 4. Bind every provider operation to one workspace and environment.
@@ -38,7 +38,7 @@ Authorization evaluates the actor, action, resource hierarchy, current policy,
 and relevant request attributes. Provider adapters receive a scoped execution
 context rather than the caller's credential.
 
-Initial roles should remain intentionally small:
+The accepted reference contract uses four intentionally small roles:
 
 - **Viewer:** read resources, plans, status, and permitted audit events.
 - **Developer:** manage applications and components within assigned
@@ -48,8 +48,27 @@ Initial roles should remain intentionally small:
 - **Workspace administrator:** manage membership and policy within one
   workspace.
 
-Platform administration is separate from workspace administration and must use
-strong authentication plus dedicated audit controls.
+Developer, Operator, and Workspace administrator each inherit Viewer only;
+they do not inherit one another. Policy bindings contain opaque member IDs and
+exact Workspace or Environment scopes. Workspace grants descend into that
+Workspace's Environments, while Environment grants do not cross their resolved
+Environment. Stable hierarchy IDs, rather than display names or identity
+claims, select the target.
+
+The default effect is `Deny`. Cross-Workspace targets, missing membership,
+missing role bindings, insufficient scope, and ungranted actions all deny with
+closed reasons. Controller, worker, provider-adapter, approval, redrive, audit
+export, and credential-broker actions are reserved from tenant roles.
+Workspace creation/bootstrap is also reserved; platform provisioning remains a
+separate governance decision. Workspace administrators never become platform
+administrators implicitly.
+
+A canonical decision contains only its contract version, policy version, input
+digest, effect, and reason. The exact contract and complete action matrix are in
+[ADR 0009](../architecture/0009-deterministic-hierarchical-authorization.md).
+The domain evaluator and OpenAPI projection are reference contracts. Until API
+and worker integration is implemented and tested, they are not evidence of
+runtime request or provider-effect enforcement.
 
 ## Secrets and provider credentials
 

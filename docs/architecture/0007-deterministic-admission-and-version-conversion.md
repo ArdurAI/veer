@@ -115,7 +115,7 @@ The exact stage code vocabulary is:
 | `schema` | `request-too-large`, `invalid-json`, `json-too-deep`, `too-many-json-nodes`, `duplicate-field`, `unknown-field`, `missing-field`, `invalid-type`, `invalid-value`, `unsupported-version`, `unsupported-kind` |
 | `semantic` | `invalid-spec`, `invalid-status`, `invalid-order`, `duplicate-item`, `future-observation` |
 | `immutable` | `immutable-field` |
-| `reference` | `invalid-placement`, `parent-not-found`, `parent-kind-mismatch`, `workspace-mismatch` |
+| `reference` | `invalid-placement`, `parent-not-found`, `parent-kind-mismatch`, `reference-not-found`, `reference-kind-mismatch`, `workspace-mismatch` |
 | `default` | `default-failed` |
 | `conversion` | `conversion-failed` |
 

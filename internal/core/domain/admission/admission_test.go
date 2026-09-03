@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
+	"github.com/ArdurAI/veer/internal/core/domain/identity"
 	"github.com/ArdurAI/veer/internal/core/domain/model"
 	modelv1 "github.com/ArdurAI/veer/internal/core/domain/model/v1alpha1"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
@@ -20,6 +22,7 @@ import (
 const (
 	testWorkspaceID   resource.ID = "wsp_01J00000000000000000000000"
 	testWorkspaceBID  resource.ID = "wsp_01J11111111111111111111111"
+	testMemberID      resource.ID = "mem_01J00000000000000000000000"
 	testPolicyID      resource.ID = "pol_01J00000000000000000000000"
 	testEnvironmentID resource.ID = "env_01J00000000000000000000000"
 	testProviderID    resource.ID = "pvc_01J00000000000000000000000"
@@ -60,7 +63,7 @@ func TestAdmissionPositiveMatrix(t *testing.T) {
 		})
 		t.Run(kind.String()+"Replace", func(t *testing.T) {
 			t.Parallel()
-			intent, err := AdmitReplace(intentJSON(kind, false), records[kind], snapshot)
+			intent, err := AdmitReplace(intentJSON(kind, false), records[kind], replaceContext(snapshot))
 			if err != nil {
 				t.Fatalf("AdmitReplace() error = %v", err)
 			}
@@ -112,6 +115,332 @@ func TestWorkspaceOmissionEqualsExplicitFalse(t *testing.T) {
 	}
 	if !explicitTrue.Intent().(*model.WorkspaceIntent).Spec().SuspendReconciliation {
 		t.Fatal("explicit Workspace value true was overwritten by defaulting")
+	}
+}
+
+func TestPolicyAdmissionSchemaAndSemanticBoundaries(t *testing.T) {
+	t.Parallel()
+
+	validBinding := `{"memberId":"mem_01J00000000000000000000000","role":"Viewer","scope":{"kind":"Workspace"}}`
+	tests := []struct {
+		name string
+		spec string
+		code Code
+		path string
+	}{
+		{name: "bindings required", spec: `{}`, code: CodeMissingField, path: "/spec/bindings"},
+		{name: "role closed", spec: `{"bindings":[{"memberId":"mem_01J00000000000000000000000","role":"Owner","scope":{"kind":"Workspace"}}]}`, code: CodeInvalidValue, path: "/spec/bindings/0/role"},
+		{name: "environment ID required", spec: `{"bindings":[{"memberId":"mem_01J00000000000000000000000","role":"Viewer","scope":{"kind":"Environment"}}]}`, code: CodeMissingField, path: "/spec/bindings/0/scope/environmentId"},
+		{name: "workspace environment forbidden", spec: `{"bindings":[{"memberId":"mem_01J00000000000000000000000","role":"Viewer","scope":{"kind":"Workspace","environmentId":"env_01J00000000000000000000000"}}]}`, code: CodeInvalidValue, path: "/spec/bindings/0/scope/environmentId"},
+		{name: "workspace environment type", spec: `{"bindings":[{"memberId":"mem_01J00000000000000000000000","role":"Viewer","scope":{"kind":"Workspace","environmentId":123}}]}`, code: CodeInvalidType, path: "/spec/bindings/0/scope/environmentId"},
+		{name: "invalid kind with environment type", spec: `{"bindings":[{"memberId":"mem_01J00000000000000000000000","role":"Viewer","scope":{"kind":"Unknown","environmentId":123}}]}`, code: CodeInvalidType, path: "/spec/bindings/0/scope/environmentId"},
+		{name: "invalid kind with malformed environment", spec: `{"bindings":[{"memberId":"mem_01J00000000000000000000000","role":"Viewer","scope":{"kind":"Unknown","environmentId":"bad"}}]}`, code: CodeInvalidValue, path: "/spec/bindings/0/scope/environmentId"},
+		{name: "duplicate binding", spec: `{"bindings":[` + validBinding + `,` + validBinding + `]}`, code: CodeDuplicateItem, path: "/spec/bindings/1/memberId"},
+		{name: "binding order", spec: `{"bindings":[{"memberId":"mem_01J11111111111111111111111","role":"Viewer","scope":{"kind":"Workspace"}},` + validBinding + `]}`, code: CodeInvalidOrder, path: "/spec/bindings/1/memberId"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := AdmitCreate(policyIntentJSON(test.spec), CreateContext{})
+			stage := StageSchema
+			if test.code == CodeDuplicateItem || test.code == CodeInvalidOrder {
+				stage = StageSemantic
+			}
+			assertFailure(t, err, stage, test.code, test.path)
+		})
+	}
+}
+
+func TestPolicySemanticLexicalBindingSelection(t *testing.T) {
+	t.Parallel()
+
+	invalidEnvironmentScope := func(binding *authorization.RoleBinding) {
+		environmentID := testEnvironmentID
+		binding.Role = authorization.RoleWorkspaceAdministrator
+		binding.Scope = authorization.Scope{
+			Kind:          authorization.ScopeKindEnvironment,
+			EnvironmentID: &environmentID,
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func([]authorization.RoleBinding)
+		code   Code
+		path   string
+	}{
+		{
+			name: "incompatible scopes at indices two and ten",
+			mutate: func(bindings []authorization.RoleBinding) {
+				invalidEnvironmentScope(&bindings[2])
+				invalidEnvironmentScope(&bindings[10])
+			},
+			code: CodeInvalidSpec,
+			path: "/spec/bindings/10/scope/kind",
+		},
+		{
+			name: "early incompatible scope and later duplicate",
+			mutate: func(bindings []authorization.RoleBinding) {
+				invalidEnvironmentScope(&bindings[2])
+				bindings[10] = bindings[9]
+			},
+			code: CodeDuplicateItem,
+			path: "/spec/bindings/10/memberId",
+		},
+		{
+			name: "early duplicate and later incompatible scope",
+			mutate: func(bindings []authorization.RoleBinding) {
+				bindings[2] = bindings[1]
+				invalidEnvironmentScope(&bindings[10])
+			},
+			code: CodeInvalidSpec,
+			path: "/spec/bindings/10/scope/kind",
+		},
+		{
+			name: "invalid order at indices two and ten",
+			mutate: func(bindings []authorization.RoleBinding) {
+				bindings[2] = bindings[0]
+				bindings[10] = bindings[8]
+			},
+			code: CodeInvalidOrder,
+			path: "/spec/bindings/10/memberId",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			bindings := canonicalPolicyBindings(12)
+			test.mutate(bindings)
+			_, err := AdmitCreate(policyIntentWithBindings(t, bindings), CreateContext{})
+			assertFailure(t, err, StageSemantic, test.code, test.path)
+		})
+	}
+}
+
+func TestPolicyAdmissionReferenceContexts(t *testing.T) {
+	t.Parallel()
+
+	snapshot, records := admissionFixture(t, testWorkspaceID)
+	human := mustMember(testMemberID, testWorkspaceID, identity.KindHuman, "human-subject")
+	humanDirectory := mustMemberDirectory(testWorkspaceID, []authorization.MemberRecord{human})
+	workspaceSpec := fmt.Sprintf(`{"bindings":[{"memberId":%q,"role":"Viewer","scope":{"kind":"Workspace"}}]}`, testMemberID)
+	environmentSpec := fmt.Sprintf(`{"bindings":[{"memberId":%q,"role":"Developer","scope":{"kind":"Environment","environmentId":%q}}]}`, testMemberID, testEnvironmentID)
+
+	create := createContext(hierarchy.KindPolicy, snapshot)
+	create.Members = humanDirectory
+	result, err := AdmitCreate(policyIntentJSON(environmentSpec), create)
+	if err != nil {
+		t.Fatalf("AdmitCreate(valid Environment policy) error = %v", err)
+	}
+	policy := result.Intent().(*model.PolicyIntent)
+	if got := policy.Spec(); len(got.Bindings) != 1 || got.Bindings[0].Scope.EnvironmentID == nil ||
+		*got.Bindings[0].Scope.EnvironmentID != testEnvironmentID {
+		t.Fatalf("admitted Policy spec = %#v", got)
+	}
+
+	replaced, err := AdmitReplace(
+		policyIntentJSON(workspaceSpec),
+		records[hierarchy.KindPolicy],
+		ReplaceContext{Snapshot: snapshot, Members: humanDirectory},
+	)
+	if err != nil || len(replaced.(*model.PolicyIntent).Spec().Bindings) != 1 {
+		t.Fatalf("AdmitReplace(valid Workspace policy) = %T, %v", replaced, err)
+	}
+
+	missingSnapshot := create
+	missingSnapshot.Snapshot = hierarchy.Snapshot{}
+	_, err = AdmitCreate(policyIntentJSON(workspaceSpec), missingSnapshot)
+	assertFailure(t, err, StageReference, CodeInvalidPlacement, "")
+
+	missingMember := create
+	missingMember.Members = mustMemberDirectory(testWorkspaceID, nil)
+	_, err = AdmitCreate(policyIntentJSON(workspaceSpec), missingMember)
+	assertFailure(t, err, StageReference, CodeReferenceNotFound, "/spec/bindings/0/memberId")
+
+	missingEnvironmentSpec := fmt.Sprintf(`{"bindings":[{"memberId":%q,"role":"Developer","scope":{"kind":"Environment","environmentId":"env_01J99999999999999999999999"}}]}`, testMemberID)
+	_, err = AdmitCreate(policyIntentJSON(missingEnvironmentSpec), create)
+	assertFailure(t, err, StageReference, CodeReferenceNotFound, "/spec/bindings/0/scope/environmentId")
+
+	wrongKindSpec := fmt.Sprintf(`{"bindings":[{"memberId":%q,"role":"Developer","scope":{"kind":"Environment","environmentId":%q}}]}`, testMemberID, testApplicationID)
+	_, err = AdmitCreate(policyIntentJSON(wrongKindSpec), create)
+	assertFailure(t, err, StageReference, CodeReferenceKindMismatch, "/spec/bindings/0/scope/environmentId")
+
+	workload := mustMember(testMemberID, testWorkspaceID, identity.KindWorkload, "workload-subject")
+	workloadContext := create
+	workloadContext.Members = mustMemberDirectory(testWorkspaceID, []authorization.MemberRecord{workload})
+	administratorSpec := fmt.Sprintf(`{"bindings":[{"memberId":%q,"role":"WorkspaceAdministrator","scope":{"kind":"Workspace"}}]}`, testMemberID)
+	_, err = AdmitCreate(policyIntentJSON(administratorSpec), workloadContext)
+	assertFailure(t, err, StageReference, CodeReferenceKindMismatch, "/spec/bindings/0/role")
+
+	foreignDirectory := mustMemberDirectory(testWorkspaceBID, nil)
+	foreignContext := create
+	foreignContext.Members = foreignDirectory
+	_, err = AdmitCreate(policyIntentJSON(`{"bindings":[]}`), foreignContext)
+	assertFailure(t, err, StageReference, CodeWorkspaceMismatch, "")
+
+	foreignSnapshot, _ := admissionFixture(t, testWorkspaceBID)
+	foreignSnapshotContext := createContext(hierarchy.KindPolicy, foreignSnapshot)
+	foreignSnapshotContext.Members = humanDirectory
+	_, err = AdmitCreate(policyIntentJSON(`{"bindings":[]}`), foreignSnapshotContext)
+	assertFailure(t, err, StageReference, CodeWorkspaceMismatch, "")
+
+	duplicateID := createContext(hierarchy.KindPolicy, snapshot)
+	duplicateID.ID = testPolicyID
+	_, err = AdmitCreate(policyIntentJSON(`{"bindings":[]}`), duplicateID)
+	assertFailure(t, err, StageReference, CodeInvalidPlacement, "")
+}
+
+func TestPolicyReferenceLexicalBindingSelection(t *testing.T) {
+	t.Parallel()
+
+	snapshot, _ := admissionFixture(t, testWorkspaceID)
+	missingEnvironmentID := resource.ID("env_01J99999999999999999999999")
+	tests := []struct {
+		name               string
+		missingMemberIndex int
+		missingEnvIndex    int
+		path               string
+	}{
+		{
+			name:               "member missing at two and environment missing at ten",
+			missingMemberIndex: 2,
+			missingEnvIndex:    10,
+			path:               "/spec/bindings/10/scope/environmentId",
+		},
+		{
+			name:               "environment missing at two and member missing at ten",
+			missingMemberIndex: 10,
+			missingEnvIndex:    2,
+			path:               "/spec/bindings/10/memberId",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			bindings := canonicalPolicyBindings(12)
+			environmentID := missingEnvironmentID
+			bindings[test.missingEnvIndex].Role = authorization.RoleDeveloper
+			bindings[test.missingEnvIndex].Scope = authorization.Scope{
+				Kind:          authorization.ScopeKindEnvironment,
+				EnvironmentID: &environmentID,
+			}
+			members := make([]authorization.MemberRecord, 0, len(bindings)-1)
+			for index, binding := range bindings {
+				if index == test.missingMemberIndex {
+					continue
+				}
+				members = append(members, mustMember(
+					binding.MemberID,
+					testWorkspaceID,
+					identity.KindHuman,
+					fmt.Sprintf("policy-subject-%02d", index),
+				))
+			}
+			context := createContext(hierarchy.KindPolicy, snapshot)
+			context.Members = mustMemberDirectory(testWorkspaceID, members)
+			_, err := AdmitCreate(policyIntentWithBindings(t, bindings), context)
+			assertFailure(t, err, StageReference, CodeReferenceNotFound, test.path)
+		})
+	}
+}
+
+func TestPolicyReferenceCandidateCodeTieBreak(t *testing.T) {
+	t.Parallel()
+
+	// Valid directories and snapshots make two distinct failures on the same
+	// reference field unconstructible. Exercise the shared selector directly
+	// to freeze the code tie-break independently of candidate discovery order.
+	const path = "/spec/bindings/10/memberId"
+	orders := [][]Code{
+		{CodeReferenceNotFound, CodeReferenceKindMismatch},
+		{CodeReferenceKindMismatch, CodeReferenceNotFound},
+	}
+	for _, order := range orders {
+		set := candidateSet{}
+		for _, code := range order {
+			set.add(code, path)
+		}
+		assertFailure(t, set.failure(StageReference), StageReference, CodeReferenceKindMismatch, path)
+	}
+}
+
+func TestCreateRejectsDeletedParentFromCurrentSnapshot(t *testing.T) {
+	t.Parallel()
+
+	_, records := admissionFixture(t, testWorkspaceID)
+	current, err := hierarchy.NewSnapshot(testWorkspaceID, []hierarchy.Record{
+		records[hierarchy.KindWorkspace],
+		records[hierarchy.KindPolicy],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := testEnvironmentID
+	context := CreateContext{
+		ID:       createID(hierarchy.KindApplication),
+		ParentID: &parentID,
+		Snapshot: current,
+	}
+	_, err = AdmitCreate(intentJSON(hierarchy.KindApplication, false), context)
+	assertFailure(t, err, StageReference, CodeParentNotFound, "")
+	if context.ParentID == nil || *context.ParentID != testEnvironmentID || context.Snapshot.Len() != 2 {
+		t.Fatal("rejected create mutated its reference context")
+	}
+}
+
+func TestPolicyAdmissionDoesNotRetainBindingAliases(t *testing.T) {
+	t.Parallel()
+
+	snapshot, _ := admissionFixture(t, testWorkspaceID)
+	human := mustMember(testMemberID, testWorkspaceID, identity.KindHuman, "human-subject")
+	context := createContext(hierarchy.KindPolicy, snapshot)
+	context.Members = mustMemberDirectory(testWorkspaceID, []authorization.MemberRecord{human})
+	raw := policyIntentJSON(fmt.Sprintf(`{"bindings":[{"memberId":%q,"role":"Viewer","scope":{"kind":"Workspace"}}]}`, testMemberID))
+	before := bytes.Clone(raw)
+	result, err := AdmitCreate(raw, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, before) {
+		t.Fatal("Policy admission mutated raw input")
+	}
+	first := result.Intent().(*model.PolicyIntent).Spec()
+	first.Bindings[0].Role = authorization.RoleOperator
+	if got := result.Intent().(*model.PolicyIntent).Spec().Bindings[0].Role; got != authorization.RoleViewer {
+		t.Fatalf("CreateResult retained a Policy binding alias: %q", got)
+	}
+	if _, err := context.Members.Lookup(testMemberID); err != nil {
+		t.Fatalf("Policy admission mutated member directory: %v", err)
+	}
+
+	knownMemberBefore, err := context.Members.Lookup(testMemberID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyRecordBefore, err := snapshot.Lookup(testPolicyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingID := resource.ID("mem_01J99999999999999999999999")
+	rejectedRaw := policyIntentJSON(fmt.Sprintf(`{"bindings":[{"memberId":%q,"role":"Viewer","scope":{"kind":"Workspace"}}]}`, missingID))
+	rejectedBefore := bytes.Clone(rejectedRaw)
+	_, err = AdmitCreate(rejectedRaw, context)
+	assertFailure(t, err, StageReference, CodeReferenceNotFound, "/spec/bindings/0/memberId")
+	if !bytes.Equal(rejectedRaw, rejectedBefore) {
+		t.Fatal("rejected Policy admission mutated raw input")
+	}
+	knownMemberAfter, err := context.Members.Lookup(testMemberID)
+	if err != nil || knownMemberAfter.ID() != knownMemberBefore.ID() ||
+		knownMemberAfter.WorkspaceID() != knownMemberBefore.WorkspaceID() ||
+		knownMemberAfter.Kind() != knownMemberBefore.Kind() ||
+		!identity.EqualLogicalIdentity(knownMemberAfter.LogicalIdentity(), knownMemberBefore.LogicalIdentity()) {
+		t.Fatal("rejected Policy admission mutated member directory")
+	}
+	policyRecordAfter, err := snapshot.Lookup(testPolicyID)
+	if err != nil || !reflect.DeepEqual(policyRecordAfter, policyRecordBefore) {
+		t.Fatal("rejected Policy admission mutated hierarchy snapshot")
 	}
 }
 
@@ -176,7 +505,7 @@ func TestAdmissionDoesNotMutateInputsOrRetainedOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	intent, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], snapshot)
+	intent, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], replaceContext(snapshot))
 	if err != nil {
 		t.Fatalf("AdmitReplace() error = %v", err)
 	}
@@ -224,7 +553,7 @@ func TestRejectedWritesDoNotMutateInputsCurrentOrSnapshot(t *testing.T) {
 			name: "schema",
 			raw:  []byte(`{"apiVersion":"v1alpha1","kind":"Environment","metadata":{"displayName":"x","unknown":true},"spec":{}}`),
 			run: func(raw []byte) error {
-				_, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], snapshot)
+				_, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], replaceContext(snapshot))
 				return err
 			},
 			want: StageSchema,
@@ -242,7 +571,7 @@ func TestRejectedWritesDoNotMutateInputsCurrentOrSnapshot(t *testing.T) {
 			name: "immutable",
 			raw:  intentJSON(hierarchy.KindWorkspace, false),
 			run: func(raw []byte) error {
-				_, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], snapshot)
+				_, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], replaceContext(snapshot))
 				return err
 			},
 			want: StageImmutable,
@@ -251,7 +580,7 @@ func TestRejectedWritesDoNotMutateInputsCurrentOrSnapshot(t *testing.T) {
 			name: "reference",
 			raw:  intentJSON(hierarchy.KindEnvironment, false),
 			run: func(raw []byte) error {
-				_, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], hierarchy.Snapshot{})
+				_, err := AdmitReplace(raw, records[hierarchy.KindEnvironment], ReplaceContext{})
 				return err
 			},
 			want: StageReference,
@@ -346,7 +675,7 @@ func TestCrossWorkspaceCurrentMismatch(t *testing.T) {
 	if records[hierarchy.KindEnvironment].ID() != foreignRecord.ID() {
 		t.Fatal("fixture does not exercise same-ID transition")
 	}
-	_, err = AdmitReplace(intentJSON(hierarchy.KindEnvironment, false), foreignRecord, snapshot)
+	_, err = AdmitReplace(intentJSON(hierarchy.KindEnvironment, false), foreignRecord, replaceContext(snapshot))
 	assertFailure(t, err, StageReference, CodeWorkspaceMismatch, "")
 }
 
@@ -389,7 +718,7 @@ func TestStageAndLexicographicErrorPrecedence(t *testing.T) {
 		{
 			name: "immutable beats reference",
 			run: func() error {
-				_, err := AdmitReplace(intentJSON(hierarchy.KindWorkspace, false), records[hierarchy.KindEnvironment], hierarchy.Snapshot{})
+				_, err := AdmitReplace(intentJSON(hierarchy.KindWorkspace, false), records[hierarchy.KindEnvironment], ReplaceContext{})
 				return err
 			},
 			wantStage: StageImmutable, wantCode: CodeImmutableField, wantPath: "/kind",
@@ -397,7 +726,7 @@ func TestStageAndLexicographicErrorPrecedence(t *testing.T) {
 		{
 			name: "reference exact snapshot",
 			run: func() error {
-				_, err := AdmitReplace(intentJSON(hierarchy.KindEnvironment, false), records[hierarchy.KindEnvironment], hierarchy.Snapshot{})
+				_, err := AdmitReplace(intentJSON(hierarchy.KindEnvironment, false), records[hierarchy.KindEnvironment], ReplaceContext{})
 				return err
 			},
 			wantStage: StageReference, wantCode: CodeInvalidPlacement, wantPath: "",
@@ -406,7 +735,9 @@ func TestStageAndLexicographicErrorPrecedence(t *testing.T) {
 			name: "create parent missing",
 			run: func() error {
 				missing := resource.ID("missing_01J000000000000000000")
-				_, err := AdmitCreate(intentJSON(hierarchy.KindEnvironment, false), CreateContext{ID: createID(hierarchy.KindEnvironment), ParentID: &missing, Snapshot: snapshot})
+				_, err := AdmitCreate(intentJSON(hierarchy.KindEnvironment, false), CreateContext{
+					ID: createID(hierarchy.KindEnvironment), ParentID: &missing, Snapshot: snapshot,
+				})
 				return err
 			},
 			wantStage: StageReference, wantCode: CodeParentNotFound, wantPath: "",
@@ -415,7 +746,9 @@ func TestStageAndLexicographicErrorPrecedence(t *testing.T) {
 			name: "create parent kind",
 			run: func() error {
 				parent := testEnvironmentID
-				_, err := AdmitCreate(intentJSON(hierarchy.KindComponent, false), CreateContext{ID: createID(hierarchy.KindComponent), ParentID: &parent, Snapshot: snapshot})
+				_, err := AdmitCreate(intentJSON(hierarchy.KindComponent, false), CreateContext{
+					ID: createID(hierarchy.KindComponent), ParentID: &parent, Snapshot: snapshot,
+				})
 				return err
 			},
 			wantStage: StageReference, wantCode: CodeParentKindMismatch, wantPath: "",
@@ -484,7 +817,35 @@ func intentJSON(kind hierarchy.Kind, explicitTrue bool) []byte {
 	if kind == hierarchy.KindProviderConnection {
 		spec = `{"provider":"aws","credentialRef":{"referenceId":"cred_01J0000000000000000000000","version":"v1"}}`
 	}
+	if kind == hierarchy.KindPolicy {
+		spec = `{"bindings":[]}`
+	}
 	return []byte(fmt.Sprintf(`{"apiVersion":"v1alpha1","kind":%q,"metadata":{"displayName":"example","labels":{"team":"platform"}},"spec":%s}`, kind, spec))
+}
+
+func policyIntentJSON(spec string) []byte {
+	return []byte(fmt.Sprintf(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"example","labels":{"team":"platform"}},"spec":%s}`, spec))
+}
+
+func policyIntentWithBindings(t *testing.T, bindings []authorization.RoleBinding) []byte {
+	t.Helper()
+	spec, err := json.Marshal(authorization.PolicySpec{Bindings: bindings})
+	if err != nil {
+		t.Fatalf("json.Marshal(PolicySpec) error = %v", err)
+	}
+	return policyIntentJSON(string(spec))
+}
+
+func canonicalPolicyBindings(count int) []authorization.RoleBinding {
+	bindings := make([]authorization.RoleBinding, count)
+	for index := range bindings {
+		bindings[index] = authorization.RoleBinding{
+			MemberID: resource.ID(fmt.Sprintf("mem_%027d", index)),
+			Role:     authorization.RoleViewer,
+			Scope:    authorization.Scope{Kind: authorization.ScopeKindWorkspace},
+		}
+	}
+	return bindings
 }
 
 func statusJSON(kind hierarchy.Kind) []byte {
@@ -511,7 +872,7 @@ func createContext(kind hierarchy.Kind, snapshot hierarchy.Snapshot) CreateConte
 	var parent resource.ID
 	switch kind {
 	case hierarchy.KindPolicy, hierarchy.KindEnvironment:
-		parent = testWorkspaceID
+		parent = snapshot.WorkspaceID()
 	case hierarchy.KindProviderConnection, hierarchy.KindApplication:
 		parent = testEnvironmentID
 	case hierarchy.KindComponent:
@@ -520,7 +881,40 @@ func createContext(kind hierarchy.Kind, snapshot hierarchy.Snapshot) CreateConte
 	if parent != "" {
 		context.ParentID = &parent
 	}
+	if kind == hierarchy.KindPolicy {
+		context.Members = mustMemberDirectory(snapshot.WorkspaceID(), nil)
+	}
 	return context
+}
+
+func replaceContext(snapshot hierarchy.Snapshot) ReplaceContext {
+	context := ReplaceContext{Snapshot: snapshot}
+	if snapshot.Len() > 0 {
+		context.Members = mustMemberDirectory(snapshot.WorkspaceID(), nil)
+	}
+	return context
+}
+
+func mustMemberDirectory(workspaceID resource.ID, members []authorization.MemberRecord) authorization.MemberDirectory {
+	directory, err := authorization.NewMemberDirectory(workspaceID, members)
+	if err != nil {
+		panic(err)
+	}
+	return directory
+}
+
+func mustMember(id, workspaceID resource.ID, kind identity.Kind, subject string) authorization.MemberRecord {
+	logical, err := identity.NewLogicalIdentity("https://issuer.example", subject)
+	if err != nil {
+		panic(err)
+	}
+	member, err := authorization.NewMemberRecord(authorization.MemberInput{
+		ID: id, WorkspaceID: workspaceID, Kind: kind, LogicalIdentity: logical,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return member
 }
 
 func createID(kind hierarchy.Kind) resource.ID {

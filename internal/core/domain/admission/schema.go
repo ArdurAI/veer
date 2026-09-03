@@ -7,9 +7,11 @@ import (
 	"strconv"
 	"unicode/utf8"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/model"
+	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
 var (
@@ -37,6 +39,7 @@ type sourceIntent struct {
 	kind       hierarchy.Kind
 	metadata   sourceMetadata
 	workspace  sourceWorkspaceSpec
+	policy     model.PolicySpec
 	provider   model.ProviderConnectionSpec
 }
 
@@ -91,6 +94,8 @@ func schemaIntent(document rawDocument) (sourceIntent, *Error) {
 	switch kind {
 	case hierarchy.KindWorkspace:
 		result.workspace, failure = schemaWorkspaceSpec(specValue, "/spec")
+	case hierarchy.KindPolicy:
+		result.policy, failure = schemaPolicySpec(specValue, "/spec")
 	case hierarchy.KindProviderConnection:
 		result.provider, failure = schemaProviderSpec(specValue, "/spec")
 	default:
@@ -209,6 +214,106 @@ func schemaWorkspaceSpec(value any, path string) (sourceWorkspaceSpec, *Error) {
 		return sourceWorkspaceSpec{}, reject(StageSchema, CodeInvalidType, appendPointer(path, "suspendReconciliation"))
 	}
 	return sourceWorkspaceSpec{suspendReconciliation: &flag}, nil
+}
+
+func schemaPolicySpec(value any, path string) (model.PolicySpec, *Error) {
+	object, failure := schemaObject(value, path)
+	if failure != nil {
+		return model.PolicySpec{}, failure
+	}
+	if failure := rejectUnknown(object, path, "bindings"); failure != nil {
+		return model.PolicySpec{}, failure
+	}
+	bindingsValue, failure := required(object, "bindings", path)
+	if failure != nil {
+		return model.PolicySpec{}, failure
+	}
+	values, ok := bindingsValue.([]any)
+	if !ok {
+		return model.PolicySpec{}, reject(StageSchema, CodeInvalidType, appendPointer(path, "bindings"))
+	}
+	if len(values) > authorization.MaxBindingsPerPolicy {
+		return model.PolicySpec{}, reject(StageSchema, CodeInvalidValue, appendPointer(path, "bindings"))
+	}
+
+	bindings := make([]authorization.RoleBinding, len(values))
+	for index, item := range values {
+		itemPath := appendPointer(appendPointer(path, "bindings"), strconv.Itoa(index))
+		binding, failure := schemaPolicyBinding(item, itemPath)
+		if failure != nil {
+			return model.PolicySpec{}, failure
+		}
+		bindings[index] = binding
+	}
+	return model.PolicySpec{Bindings: bindings}, nil
+}
+
+func schemaPolicyBinding(value any, path string) (authorization.RoleBinding, *Error) {
+	object, failure := schemaObject(value, path)
+	if failure != nil {
+		return authorization.RoleBinding{}, failure
+	}
+	if failure := rejectUnknown(object, path, "memberId", "role", "scope"); failure != nil {
+		return authorization.RoleBinding{}, failure
+	}
+	memberID, failure := requiredPatternString(object, "memberId", path, opaqueIDPattern, 128)
+	if failure != nil {
+		return authorization.RoleBinding{}, failure
+	}
+	roleValue, failure := requiredString(object, "role", path)
+	if failure != nil {
+		return authorization.RoleBinding{}, failure
+	}
+	role, err := authorization.ParseRole(roleValue)
+	if err != nil {
+		return authorization.RoleBinding{}, reject(StageSchema, CodeInvalidValue, appendPointer(path, "role"))
+	}
+	scopeValue, failure := required(object, "scope", path)
+	if failure != nil {
+		return authorization.RoleBinding{}, failure
+	}
+	scope, failure := schemaPolicyScope(scopeValue, appendPointer(path, "scope"))
+	if failure != nil {
+		return authorization.RoleBinding{}, failure
+	}
+	return authorization.RoleBinding{MemberID: resource.ID(memberID), Role: role, Scope: scope}, nil
+}
+
+func schemaPolicyScope(value any, path string) (authorization.Scope, *Error) {
+	object, failure := schemaObject(value, path)
+	if failure != nil {
+		return authorization.Scope{}, failure
+	}
+	if failure := rejectUnknown(object, path, "kind", "environmentId"); failure != nil {
+		return authorization.Scope{}, failure
+	}
+	kindValue, failure := requiredString(object, "kind", path)
+	if failure != nil {
+		return authorization.Scope{}, failure
+	}
+	kind, err := authorization.ParseScopeKind(kindValue)
+	if err != nil {
+		return authorization.Scope{}, reject(StageSchema, CodeInvalidValue, appendPointer(path, "kind"))
+	}
+	environmentValue, environmentPresent := object["environmentId"]
+	if kind == authorization.ScopeKindWorkspace {
+		if environmentPresent {
+			if _, ok := environmentValue.(string); !ok {
+				return authorization.Scope{}, reject(StageSchema, CodeInvalidType, appendPointer(path, "environmentId"))
+			}
+			return authorization.Scope{}, reject(StageSchema, CodeInvalidValue, appendPointer(path, "environmentId"))
+		}
+		return authorization.Scope{Kind: kind}, nil
+	}
+	if !environmentPresent {
+		return authorization.Scope{}, reject(StageSchema, CodeMissingField, appendPointer(path, "environmentId"))
+	}
+	environmentID, failure := requiredPatternString(object, "environmentId", path, opaqueIDPattern, 128)
+	if failure != nil {
+		return authorization.Scope{}, failure
+	}
+	parsedEnvironmentID := resource.ID(environmentID)
+	return authorization.Scope{Kind: kind, EnvironmentID: &parsedEnvironmentID}, nil
 }
 
 func schemaEmptySpec(value any, path string) *Error {

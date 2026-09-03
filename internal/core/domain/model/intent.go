@@ -90,7 +90,10 @@ func NewComponentIntent(metadata WriteMetadata, spec ComponentSpec) (*ComponentI
 // NewPolicyIntent validates and takes ownership-safe copies of Policy desired
 // state.
 func NewPolicyIntent(metadata WriteMetadata, spec PolicySpec) (*PolicyIntent, error) {
-	result := &PolicyIntent{value: intentValue[PolicySpec]{metadata: CloneWriteMetadata(metadata), spec: spec}}
+	result := &PolicyIntent{value: intentValue[PolicySpec]{
+		metadata: CloneWriteMetadata(metadata),
+		spec:     ClonePolicySpec(spec),
+	}}
 	if err := ValidateIntent(result); err != nil {
 		return nil, err
 	}
@@ -187,7 +190,7 @@ func (intent *PolicyIntent) Spec() PolicySpec {
 	if intent == nil {
 		return PolicySpec{}
 	}
-	return intent.value.spec
+	return ClonePolicySpec(intent.value.spec)
 }
 func (intent *ProviderConnectionIntent) Spec() ProviderConnectionSpec {
 	if intent == nil {
@@ -230,7 +233,13 @@ func ValidateIntent(intent Intent) error {
 		if value == nil {
 			return ErrInvalidIntent
 		}
-		return validateIntentMetadata(value.value.metadata)
+		if err := validateIntentMetadata(value.value.metadata); err != nil {
+			return err
+		}
+		if err := ValidatePolicySpec(value.value.spec); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidIntent, err)
+		}
+		return nil
 	case *ProviderConnectionIntent:
 		if value == nil {
 			return ErrInvalidIntent
@@ -291,7 +300,7 @@ func CloneIntent(intent Intent) Intent {
 		}
 		return &PolicyIntent{value: intentValue[PolicySpec]{
 			metadata: CloneWriteMetadata(value.value.metadata),
-			spec:     value.value.spec,
+			spec:     ClonePolicySpec(value.value.spec),
 		}}
 	case *ProviderConnectionIntent:
 		if value == nil {
@@ -330,7 +339,9 @@ func EqualIntent(left, right Intent) bool {
 		return ok && leftValue != nil && rightValue != nil && EqualWriteMetadata(leftValue.value.metadata, rightValue.value.metadata)
 	case *PolicyIntent:
 		rightValue, ok := right.(*PolicyIntent)
-		return ok && leftValue != nil && rightValue != nil && EqualWriteMetadata(leftValue.value.metadata, rightValue.value.metadata)
+		return ok && leftValue != nil && rightValue != nil &&
+			EqualWriteMetadata(leftValue.value.metadata, rightValue.value.metadata) &&
+			EqualPolicySpec(leftValue.value.spec, rightValue.value.spec)
 	case *ProviderConnectionIntent:
 		rightValue, ok := right.(*ProviderConnectionIntent)
 		return ok && leftValue != nil && rightValue != nil &&

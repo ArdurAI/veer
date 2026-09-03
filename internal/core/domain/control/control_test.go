@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/condition"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
@@ -220,6 +221,48 @@ func TestPolicyStatusValidation(t *testing.T) {
 	}
 }
 
+func TestPolicySpecValidationCloneAndEquality(t *testing.T) {
+	t.Parallel()
+
+	original := validPolicySpec()
+	if err := ValidatePolicySpec(original); err != nil {
+		t.Fatalf("ValidatePolicySpec(valid) error = %v", err)
+	}
+	clone := ClonePolicySpec(original)
+	if !EqualPolicySpec(original, clone) {
+		t.Fatal("ClonePolicySpec changed the policy value")
+	}
+	clone.Bindings[0].Role = authorization.RoleOperator
+	if EqualPolicySpec(original, clone) || original.Bindings[0].Role != authorization.RoleViewer {
+		t.Fatal("ClonePolicySpec retained a binding slice alias")
+	}
+	if err := ValidatePolicySpec(PolicySpec{}); !errors.Is(err, authorization.ErrBindingsRequired) {
+		t.Fatalf("ValidatePolicySpec(nil bindings) error = %v", err)
+	}
+	empty := PolicySpec{Bindings: []authorization.RoleBinding{}}
+	if err := ValidatePolicySpec(empty); err != nil {
+		t.Fatalf("ValidatePolicySpec(explicit empty bindings) error = %v", err)
+	}
+	if EqualPolicySpec(PolicySpec{}, empty) {
+		t.Fatal("nil and explicitly empty Policy bindings compared equal")
+	}
+
+	environmentID := controlEnvironmentID
+	environmentScoped := PolicySpec{Bindings: []authorization.RoleBinding{{
+		MemberID: resource.ID("mem_01J00000000000000000000000"),
+		Role:     authorization.RoleDeveloper,
+		Scope: authorization.Scope{
+			Kind:          authorization.ScopeKindEnvironment,
+			EnvironmentID: &environmentID,
+		},
+	}}}
+	environmentClone := ClonePolicySpec(environmentScoped)
+	*environmentClone.Bindings[0].Scope.EnvironmentID = resource.ID("env_01J11111111111111111111111")
+	if *environmentScoped.Bindings[0].Scope.EnvironmentID != controlEnvironmentID {
+		t.Fatal("ClonePolicySpec retained an Environment ID pointer alias")
+	}
+}
+
 func TestProviderConnectionStatusOrderingBoundsAndClone(t *testing.T) {
 	t.Parallel()
 
@@ -325,7 +368,10 @@ func TestControlResourceGoldensAndSecretRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalCanonical(policy) error = %v", err)
 	}
-	policyWithRule := bytes.Replace(policyData, []byte(`"spec":{}`), []byte(`"spec":{"allow":"*"}`), 1)
+	policyWithRule := bytes.Replace(policyData, []byte(`"spec":{"bindings":`), []byte(`"spec":{"allow":"*","bindings":`), 1)
+	if bytes.Equal(policyWithRule, policyData) {
+		t.Fatal("test failed to add an unknown policy field")
+	}
 	if _, err := resource.UnmarshalCanonical[PolicySpec, PolicyStatus](policyWithRule); err == nil {
 		t.Fatal("UnmarshalCanonical(unadopted policy language) unexpectedly succeeded")
 	}
@@ -340,7 +386,7 @@ func TestControlPlacementKinds(t *testing.T) {
 	}
 	_, err = NewPolicyResource(rootPlacement, hierarchy.CreateInput[PolicySpec, PolicyStatus]{
 		DisplayName: "policy", ResourceVersion: "rv_policy", CreatedAt: controlFixtureTime,
-		Spec: PolicySpec{}, Status: PolicyStatus{Conditions: []condition.Condition{}},
+		Spec: validPolicySpec(), Status: PolicyStatus{Conditions: []condition.Condition{}},
 	})
 	if !errors.Is(err, ErrInvalidControlPlacement) {
 		t.Fatalf("NewPolicyResource(workspace placement) error = %v", err)
@@ -396,7 +442,7 @@ func newControlResources(
 		Labels:          map[string]string{"team": "platform"},
 		ResourceVersion: "rv_01J00000000000000000000010",
 		CreatedAt:       controlFixtureTime.Add(time.Minute),
-		Spec:            PolicySpec{},
+		Spec:            validPolicySpec(),
 		Status:          PolicyStatus{ObservedGeneration: 0, Conditions: []condition.Condition{}},
 	})
 	if err != nil {
@@ -493,6 +539,14 @@ func validProviderConnectionSpec() ProviderConnectionSpec {
 			Version:     "ver_01J00000000000000000000000",
 		},
 	}
+}
+
+func validPolicySpec() PolicySpec {
+	return PolicySpec{Bindings: []authorization.RoleBinding{{
+		MemberID: resource.ID("mem_01J00000000000000000000000"),
+		Role:     authorization.RoleViewer,
+		Scope:    authorization.Scope{Kind: authorization.ScopeKindWorkspace},
+	}}}
 }
 
 func validProviderConnectionStatus() ProviderConnectionStatus {

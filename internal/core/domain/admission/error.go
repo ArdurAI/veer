@@ -44,10 +44,12 @@ const (
 
 	CodeImmutableField Code = "immutable-field"
 
-	CodeInvalidPlacement   Code = "invalid-placement"
-	CodeParentNotFound     Code = "parent-not-found"
-	CodeParentKindMismatch Code = "parent-kind-mismatch"
-	CodeWorkspaceMismatch  Code = "workspace-mismatch"
+	CodeInvalidPlacement      Code = "invalid-placement"
+	CodeParentNotFound        Code = "parent-not-found"
+	CodeParentKindMismatch    Code = "parent-kind-mismatch"
+	CodeReferenceNotFound     Code = "reference-not-found"
+	CodeReferenceKindMismatch Code = "reference-kind-mismatch"
+	CodeWorkspaceMismatch     Code = "workspace-mismatch"
 
 	CodeDefaultFailed    Code = "default-failed"
 	CodeConversionFailed Code = "conversion-failed"

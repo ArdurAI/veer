@@ -363,6 +363,8 @@
           "invalid-placement",
           "parent-not-found",
           "parent-kind-mismatch",
+          "reference-not-found",
+          "reference-kind-mismatch",
           "workspace-mismatch"
         ],
         "defaultResponse": {
@@ -459,6 +461,424 @@
       "unsupportedKindCode": "unsupported-kind"
     }
   },
+  "x-veer-authorization": {
+    "contractVersion": "veer.authorization.v1alpha1",
+    "defaultEffect": "Deny",
+    "policyVersionPrefix": "azv1_",
+    "inputDigestPrefix": "azi1_",
+    "maxDecisionBytes": 1024,
+    "listEvaluation": "per-retained-row",
+    "actions": [
+      "resource.list",
+      "resource.get",
+      "resource.create",
+      "resource.replace",
+      "resource.delete",
+      "resource.status.replace",
+      "plan.list",
+      "plan.get",
+      "plan.preview",
+      "operation.list",
+      "operation.get",
+      "operation.cancel",
+      "operation.retry",
+      "operation.quarantine",
+      "membership.list",
+      "membership.get",
+      "membership.create",
+      "membership.replace",
+      "membership.delete",
+      "audit.list",
+      "audit.export",
+      "approval.approve",
+      "approval.reject",
+      "approval.override",
+      "work.publish",
+      "work.consume",
+      "work.redrive",
+      "reconcile.plan",
+      "reconcile.execute",
+      "operation.transition",
+      "credential.resolve",
+      "provider.discover",
+      "provider.apply",
+      "provider.observe",
+      "provider.delete",
+      "audit.append"
+    ],
+    "objects": [
+      "Resource",
+      "Operation",
+      "Plan",
+      "Membership",
+      "Audit"
+    ],
+    "scopes": [
+      {
+        "kind": "Workspace",
+        "descendsTo": [
+          "Workspace",
+          "Environment"
+        ]
+      },
+      {
+        "kind": "Environment",
+        "descendsTo": [
+          "Environment"
+        ]
+      }
+    ],
+    "roles": [
+      {
+        "name": "Viewer",
+        "inherits": [],
+        "grants": [
+          {
+            "action": "resource.list",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "resource.get",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "plan.list",
+            "objectKind": "Plan",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "plan.get",
+            "objectKind": "Plan",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "operation.list",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "operation.get",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "audit.list",
+            "objectKind": "Audit",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection",
+              "Workspace"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Developer",
+        "inherits": [
+          "Viewer"
+        ],
+        "grants": [
+          {
+            "action": "resource.create",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Application",
+              "Component"
+            ]
+          },
+          {
+            "action": "resource.replace",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Application",
+              "Component"
+            ]
+          },
+          {
+            "action": "resource.delete",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Application",
+              "Component"
+            ]
+          },
+          {
+            "action": "plan.preview",
+            "objectKind": "Plan",
+            "resourceKinds": [
+              "Application",
+              "Component"
+            ]
+          },
+          {
+            "action": "operation.cancel",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Application",
+              "Component"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Operator",
+        "inherits": [
+          "Viewer"
+        ],
+        "grants": [
+          {
+            "action": "resource.create",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Environment",
+              "ProviderConnection"
+            ]
+          },
+          {
+            "action": "resource.replace",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Environment",
+              "ProviderConnection"
+            ]
+          },
+          {
+            "action": "resource.delete",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Environment",
+              "ProviderConnection"
+            ]
+          },
+          {
+            "action": "plan.preview",
+            "objectKind": "Plan",
+            "resourceKinds": [
+              "Environment",
+              "ProviderConnection"
+            ]
+          },
+          {
+            "action": "operation.cancel",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection"
+            ]
+          },
+          {
+            "action": "operation.retry",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Application",
+              "Component",
+              "Environment",
+              "ProviderConnection"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "WorkspaceAdministrator",
+        "inherits": [
+          "Viewer"
+        ],
+        "grants": [
+          {
+            "action": "resource.list",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Policy"
+            ]
+          },
+          {
+            "action": "resource.get",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Policy"
+            ]
+          },
+          {
+            "action": "resource.create",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Policy"
+            ]
+          },
+          {
+            "action": "resource.replace",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "resource.delete",
+            "objectKind": "Resource",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "plan.list",
+            "objectKind": "Plan",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "plan.get",
+            "objectKind": "Plan",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "plan.preview",
+            "objectKind": "Plan",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "operation.list",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "operation.get",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "operation.cancel",
+            "objectKind": "Operation",
+            "resourceKinds": [
+              "Policy",
+              "Workspace"
+            ]
+          },
+          {
+            "action": "membership.list",
+            "objectKind": "Membership",
+            "resourceKinds": []
+          },
+          {
+            "action": "membership.get",
+            "objectKind": "Membership",
+            "resourceKinds": []
+          },
+          {
+            "action": "membership.create",
+            "objectKind": "Membership",
+            "resourceKinds": []
+          },
+          {
+            "action": "membership.replace",
+            "objectKind": "Membership",
+            "resourceKinds": []
+          },
+          {
+            "action": "membership.delete",
+            "objectKind": "Membership",
+            "resourceKinds": []
+          }
+        ]
+      }
+    ],
+    "reservedActions": [
+      "resource.status.replace",
+      "operation.quarantine",
+      "audit.export",
+      "approval.approve",
+      "approval.reject",
+      "approval.override",
+      "work.publish",
+      "work.consume",
+      "work.redrive",
+      "reconcile.plan",
+      "reconcile.execute",
+      "operation.transition",
+      "credential.resolve",
+      "provider.discover",
+      "provider.apply",
+      "provider.observe",
+      "provider.delete",
+      "audit.append"
+    ],
+    "reservedResourceActions": [
+      {
+        "action": "resource.create",
+        "resourceKind": "Workspace"
+      }
+    ],
+    "effects": [
+      "Allow",
+      "Deny"
+    ],
+    "reasons": [
+      "CrossWorkspace",
+      "ReservedAction",
+      "NoMembership",
+      "NoRoleBinding",
+      "ScopeNotGranted",
+      "ActionNotGranted",
+      "RoleGranted"
+    ]
+  },
   "paths": {
     "/api/v1alpha1/workspaces": {
       "parameters": [
@@ -473,6 +893,7 @@
         "summary": "List workspaces",
         "description": "Returns a deterministically ordered keyset page. Tokens are opaque, authenticated, scoped, and short lived; a sequence of pages is not a snapshot.",
         "operationId": "listWorkspaces",
+        "x-veer-authorization-action": "resource.list",
         "parameters": [
           {
             "$ref": "#/components/parameters/PageSize"
@@ -512,6 +933,7 @@
         "summary": "Create a workspace",
         "description": "Atomically accepts desired state, generation 1, the idempotency result, required audit data, integrity metadata, and outbox work. The response does not claim provider convergence.",
         "operationId": "createWorkspace",
+        "x-veer-authorization-action": "resource.create",
         "x-veer-write-class": "spec",
         "x-veer-response-generation-constant": {
           "responseBodyPointer": "/generation",
@@ -596,6 +1018,7 @@
         "summary": "Get a workspace",
         "description": "Returns one workspace with a strong ETag derived from its opaque resource version.",
         "operationId": "getWorkspace",
+        "x-veer-authorization-action": "resource.get",
         "x-veer-path-response-id-binding": {
           "pathParameter": "workspaceId",
           "bodyPointer": "/metadata/id"
@@ -634,6 +1057,7 @@
         "summary": "Replace workspace intent",
         "description": "Requires the current strong ETag. A semantic spec change advances generation once; metadata-only and replay writes do not.",
         "operationId": "replaceWorkspace",
+        "x-veer-authorization-action": "resource.replace",
         "x-veer-write-class": "spec",
         "x-veer-path-response-id-binding": {
           "pathParameter": "workspaceId",
@@ -720,6 +1144,7 @@
         "summary": "Delete a workspace",
         "description": "Accepts a generation-fenced deletion intent. The asynchronous operation owns finalization and provider cleanup evidence.",
         "operationId": "deleteWorkspace",
+        "x-veer-authorization-action": "resource.delete",
         "x-veer-write-class": "delete",
         "x-veer-path-response-id-binding": {
           "pathParameter": "workspaceId",
@@ -786,6 +1211,7 @@
         "summary": "Replace workspace status",
         "description": "Controller-only status write. It advances resourceVersion but never generation and cannot modify desired spec or metadata.",
         "operationId": "replaceWorkspaceStatus",
+        "x-veer-authorization-action": "resource.status.replace",
         "x-veer-write-class": "status",
         "x-veer-path-response-id-binding": {
           "pathParameter": "workspaceId",
@@ -895,6 +1321,7 @@
         "summary": "Get an operation",
         "description": "Returns the durable state of an accepted asynchronous operation without exposing provider response bodies.",
         "operationId": "getOperation",
+        "x-veer-authorization-action": "operation.get",
         "x-veer-path-response-id-binding": {
           "pathParameter": "operationId",
           "bodyPointer": "/id"
@@ -2786,7 +3213,17 @@
             "createdAt": "2026-09-03T01:01:00.000Z",
             "updatedAt": "2026-09-03T01:01:00.000Z"
           },
-          "spec": {},
+          "spec": {
+            "bindings": [
+              {
+                "memberId": "mem_01J00000000000000000000000",
+                "role": "Viewer",
+                "scope": {
+                  "kind": "Workspace"
+                }
+              }
+            ]
+          },
           "status": {
             "observedGeneration": 0,
             "conditions": []
@@ -2828,9 +3265,94 @@
       },
       "PolicySpec": {
         "type": "object",
-        "description": "Closed provider-neutral desired state for a Policy in v1alpha1.",
+        "description": "Closed provider-neutral desired state containing a bounded, canonical authorization binding set.",
         "additionalProperties": false,
-        "properties": {}
+        "required": [
+          "bindings"
+        ],
+        "properties": {
+          "bindings": {
+            "type": "array",
+            "maxItems": 128,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/PolicyBinding"
+            }
+          }
+        }
+      },
+      "PolicyBinding": {
+        "type": "object",
+        "description": "One role grant for an opaque Workspace member at one exact Workspace or Environment scope.",
+        "additionalProperties": false,
+        "required": [
+          "memberId",
+          "role",
+          "scope"
+        ],
+        "properties": {
+          "memberId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "Viewer",
+              "Developer",
+              "Operator",
+              "WorkspaceAdministrator"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/PolicyScope"
+          }
+        }
+      },
+      "PolicyScope": {
+        "type": "object",
+        "description": "A Workspace scope, or an Environment scope identified by an opaque environment ID.",
+        "additionalProperties": false,
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Workspace",
+              "Environment"
+            ]
+          },
+          "environmentId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "Workspace"
+              }
+            },
+            "not": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "environmentId"
+              ]
+            }
+          },
+          {
+            "required": [
+              "environmentId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "Environment"
+              }
+            }
+          }
+        ]
       },
       "PolicyStatus": {
         "type": "object",
