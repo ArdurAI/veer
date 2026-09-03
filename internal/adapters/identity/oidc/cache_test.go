@@ -966,6 +966,255 @@ func TestJWKSOKPXMustBeCanonicalEd25519PublicKey(t *testing.T) {
 	}
 }
 
+func TestCanonicalECPublicKeyRequiresExactCanonicalCoordinates(t *testing.T) {
+	tests := []struct {
+		name            string
+		curve           elliptic.Curve
+		curveName       string
+		algorithm       jose.SignatureAlgorithm
+		coordinateBytes int
+	}{
+		{name: "P-256", curve: elliptic.P256(), curveName: "P-256", algorithm: jose.ES256, coordinateBytes: p256CoordinateBytes},
+		{name: "P-384", curve: elliptic.P384(), curveName: "P-384", algorithm: jose.ES384, coordinateBytes: p384CoordinateBytes},
+		{name: "P-521", curve: elliptic.P521(), curveName: "P-521", algorithm: jose.ES512, coordinateBytes: p521CoordinateBytes},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			key := generateECDSAKeyForCurve(t, test.curve)
+			members := rawJWKMembers(t, publicJWK(key, "ec-key", test.algorithm))
+			xEncoded := rawJSONStringMember(t, members, "x")
+			yEncoded := rawJSONStringMember(t, members, "y")
+			x, err := base64.RawURLEncoding.DecodeString(xEncoded)
+			if err != nil {
+				t.Fatalf("decode generated x: %v", err)
+			}
+			y, err := base64.RawURLEncoding.DecodeString(yEncoded)
+			if err != nil {
+				t.Fatalf("decode generated y: %v", err)
+			}
+
+			type mutationCase struct {
+				name   string
+				mutate func(map[string]json.RawMessage)
+			}
+			mutations := []mutationCase{
+				{name: "missing curve", mutate: func(value map[string]json.RawMessage) { delete(value, "crv") }},
+				{name: "null curve", mutate: func(value map[string]json.RawMessage) { value["crv"] = json.RawMessage(`null`) }},
+				{name: "non-string curve", mutate: func(value map[string]json.RawMessage) { value["crv"] = json.RawMessage(`1`) }},
+				{name: "empty curve", mutate: func(value map[string]json.RawMessage) { value["crv"] = json.RawMessage(`""`) }},
+				{name: "unsupported curve", mutate: func(value map[string]json.RawMessage) { value["crv"] = json.RawMessage(`"P-255"`) }},
+				{name: "missing x", mutate: func(value map[string]json.RawMessage) { delete(value, "x") }},
+				{name: "null x", mutate: func(value map[string]json.RawMessage) { value["x"] = json.RawMessage(`null`) }},
+				{name: "non-string x", mutate: func(value map[string]json.RawMessage) { value["x"] = json.RawMessage(`1`) }},
+				{name: "empty x", mutate: func(value map[string]json.RawMessage) { value["x"] = json.RawMessage(`""`) }},
+				{name: "padded x", mutate: func(value map[string]json.RawMessage) {
+					value["x"] = json.RawMessage(strconv.Quote(xEncoded + "="))
+				}},
+				{name: "short x", mutate: func(value map[string]json.RawMessage) {
+					value["x"] = json.RawMessage(strconv.Quote(base64.RawURLEncoding.EncodeToString(x[:len(x)-1])))
+				}},
+				{name: "long x", mutate: func(value map[string]json.RawMessage) {
+					long := append(append([]byte(nil), x...), 0)
+					value["x"] = json.RawMessage(strconv.Quote(base64.RawURLEncoding.EncodeToString(long)))
+				}},
+				{name: "missing y", mutate: func(value map[string]json.RawMessage) { delete(value, "y") }},
+				{name: "null y", mutate: func(value map[string]json.RawMessage) { value["y"] = json.RawMessage(`null`) }},
+				{name: "non-string y", mutate: func(value map[string]json.RawMessage) { value["y"] = json.RawMessage(`1`) }},
+				{name: "empty y", mutate: func(value map[string]json.RawMessage) { value["y"] = json.RawMessage(`""`) }},
+				{name: "padded y", mutate: func(value map[string]json.RawMessage) {
+					value["y"] = json.RawMessage(strconv.Quote(yEncoded + "="))
+				}},
+				{name: "short y", mutate: func(value map[string]json.RawMessage) {
+					value["y"] = json.RawMessage(strconv.Quote(base64.RawURLEncoding.EncodeToString(y[:len(y)-1])))
+				}},
+				{name: "long y", mutate: func(value map[string]json.RawMessage) {
+					long := append(append([]byte(nil), y...), 0)
+					value["y"] = json.RawMessage(strconv.Quote(base64.RawURLEncoding.EncodeToString(long)))
+				}},
+			}
+			// A same-bytes trailing-bit alias exists only when the fixed width is
+			// not divisible by three. P-384 and P-521 still exercise padding and
+			// exact-length rejection above.
+			if test.coordinateBytes%3 != 0 {
+				mutations = append(mutations,
+					mutationCase{name: "non-canonical x", mutate: func(value map[string]json.RawMessage) {
+						value["x"] = json.RawMessage(strconv.Quote(nonCanonicalBase64URL(t, xEncoded)))
+					}},
+					mutationCase{name: "non-canonical y", mutate: func(value map[string]json.RawMessage) {
+						value["y"] = json.RawMessage(strconv.Quote(nonCanonicalBase64URL(t, yEncoded)))
+					}},
+				)
+			}
+
+			curve, gotX, gotY, ok := canonicalECPublicKey(members)
+			if !ok || curve != test.curveName || !bytes.Equal(gotX, x) || !bytes.Equal(gotY, y) {
+				t.Fatalf("canonicalECPublicKey(valid) = %q, %x, %x, %t", curve, gotX, gotY, ok)
+			}
+			for _, mutation := range mutations {
+				t.Run(mutation.name, func(t *testing.T) {
+					mutated := cloneRawJWKMembers(members)
+					mutation.mutate(mutated)
+					if curve, x, y, ok := canonicalECPublicKey(mutated); ok || curve != "" || x != nil || y != nil {
+						t.Fatalf("canonicalECPublicKey() = %q, %x, %x, %t, want empty false", curve, x, y, ok)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestJWKSECCanonicalCoordinatesSupportAllAlgorithmsAndLeadingZero(t *testing.T) {
+	tests := []struct {
+		name            string
+		curve           elliptic.Curve
+		algorithm       jose.SignatureAlgorithm
+		coordinateBytes int
+	}{
+		{name: "ES256", curve: elliptic.P256(), algorithm: jose.ES256, coordinateBytes: p256CoordinateBytes},
+		{name: "ES384", curve: elliptic.P384(), algorithm: jose.ES384, coordinateBytes: p384CoordinateBytes},
+		{name: "ES512", curve: elliptic.P521(), algorithm: jose.ES512, coordinateBytes: p521CoordinateBytes},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			key := generateECDSAKeyWithLeadingZeroCoordinate(t, test.curve, test.coordinateBytes)
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			fixture.setKeys(t, publicJWK(key, "leading-zero-key", test.algorithm))
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{test.algorithm}
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			token := signClaims(
+				t,
+				key,
+				test.algorithm,
+				"leading-zero-key",
+				"at+jwt",
+				cacheClaims(anchor, clock.Now()),
+			)
+			if _, err := authenticate(t, verifier, token); err != nil {
+				t.Fatalf("Authenticate: %v", err)
+			}
+		})
+	}
+}
+
+func TestJWKSRejectsNonCanonicalECCoordinateAliases(t *testing.T) {
+	key := generateECDSAKeyForCurve(t, elliptic.P256())
+	jwk := publicJWK(key, "aliased-ec-key", jose.ES256)
+	members := rawJWKMembers(t, jwk)
+	xEncoded := rawJSONStringMember(t, members, "x")
+	yEncoded := rawJSONStringMember(t, members, "y")
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "x", mutate: func(value map[string]any) { value["x"] = nonCanonicalBase64URL(t, xEncoded) }},
+		{name: "y", mutate: func(value map[string]any) { value["y"] = nonCanonicalBase64URL(t, yEncoded) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name+" only unusable key", func(t *testing.T) {
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			fixture.setResponse(http.StatusOK, rawJWKS(t, rewriteJWK(t, jwk, test.mutate)))
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.ES256}
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			token := signClaims(t, key, jose.ES256, "aliased-ec-key", "at+jwt", cacheClaims(anchor, clock.Now()))
+			_, err := authenticate(t, verifier, token)
+			requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+		})
+
+		t.Run(test.name+" unusable key does not poison usable set", func(t *testing.T) {
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			fixture.setResponse(
+				http.StatusOK,
+				rawJWKS(t, rewriteJWK(t, jwk, test.mutate), rewriteJWK(t, jwk, func(map[string]any) {})),
+			)
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.ES256}
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			token := signClaims(t, key, jose.ES256, "aliased-ec-key", "at+jwt", cacheClaims(anchor, clock.Now()))
+			if _, err := authenticate(t, verifier, token); err != nil {
+				t.Fatalf("Authenticate: %v", err)
+			}
+		})
+	}
+}
+
+func TestBoundAlgorithmRequiresRawECDSAKeyMatch(t *testing.T) {
+	fixture := newKeyServer(t)
+	anchor := testTrustAnchor(fixture, identity.KindHuman)
+	anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.ES256, jose.ES384}
+	verifier := newTestVerifier(t, fixture, anchor, newFakeClock(testNow))
+	key := generateECDSAKeyWithLeadingZeroCoordinate(t, elliptic.P256(), p256CoordinateBytes)
+	jwk := publicJWK(key, "raw-binding-key", jose.ES256)
+	rawKey, ok := inspectVerificationJWK(rewriteJWK(t, jwk, func(map[string]any) {}))
+	if !ok {
+		t.Fatal("inspectVerificationJWK rejected canonical EC key")
+	}
+	if rawKey.ecX[0] != 0 && rawKey.ecY[0] != 0 {
+		t.Fatal("test key does not contain a leading-zero fixed-width coordinate")
+	}
+	if algorithm, ok := verifier.cache.boundAlgorithm(jwk, rawKey); !ok || algorithm != jose.ES256 {
+		t.Fatalf("boundAlgorithm(matching key) = %q, %t, want ES256, true", algorithm, ok)
+	}
+
+	tests := []struct {
+		name string
+		key  jose.JSONWebKey
+		raw  func() rawVerificationJWK
+	}{
+		{
+			name: "different point",
+			key:  publicJWK(generateECDSAKeyForCurve(t, elliptic.P256()), "raw-binding-key", jose.ES256),
+			raw:  func() rawVerificationJWK { return cloneRawVerificationJWK(rawKey) },
+		},
+		{
+			name: "different curve",
+			key:  publicJWK(generateECDSAKeyForCurve(t, elliptic.P384()), "raw-binding-key", jose.ES384),
+			raw:  func() rawVerificationJWK { return cloneRawVerificationJWK(rawKey) },
+		},
+		{
+			name: "altered raw x",
+			key:  jwk,
+			raw: func() rawVerificationJWK {
+				value := cloneRawVerificationJWK(rawKey)
+				value.ecX[0] ^= 1
+				return value
+			},
+		},
+		{
+			name: "altered raw y",
+			key:  jwk,
+			raw: func() rawVerificationJWK {
+				value := cloneRawVerificationJWK(rawKey)
+				value.ecY[0] ^= 1
+				return value
+			},
+		},
+		{
+			name: "raw curve mismatch",
+			key:  jwk,
+			raw: func() rawVerificationJWK {
+				value := cloneRawVerificationJWK(rawKey)
+				value.ecCurve = "P-384"
+				return value
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if algorithm, ok := verifier.cache.boundAlgorithm(test.key, test.raw()); ok || algorithm != "" {
+				t.Fatalf("boundAlgorithm() = %q, %t, want empty false", algorithm, ok)
+			}
+		})
+	}
+	if rawECDSAKeyMatches(rawKey, nil) {
+		t.Fatal("rawECDSAKeyMatches accepted nil typed key")
+	}
+}
+
 func TestJWKSRSAPublicExponentMustBeCanonicalAndRepresentable(t *testing.T) {
 	key := generateRSAKey(t)
 	exponentBytes := big.NewInt(int64(key.E)).Bytes()
@@ -1338,6 +1587,86 @@ func rawJWKS(t *testing.T, keys ...json.RawMessage) []byte {
 		t.Fatalf("marshal raw JWKS: %v", err)
 	}
 	return body
+}
+
+func generateECDSAKeyForCurve(t *testing.T, curve elliptic.Curve) *ecdsa.PrivateKey {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(curve, rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ECDSA key: %v", err)
+	}
+	return key
+}
+
+func generateECDSAKeyWithLeadingZeroCoordinate(
+	t *testing.T,
+	curve elliptic.Curve,
+	coordinateBytes int,
+) *ecdsa.PrivateKey {
+	t.Helper()
+	for candidate := int64(1); candidate <= 1<<16; candidate++ {
+		scalar := make([]byte, coordinateBytes)
+		big.NewInt(candidate).FillBytes(scalar)
+		key, err := ecdsa.ParseRawPrivateKey(curve, scalar)
+		if err != nil {
+			continue
+		}
+		encoded, err := key.PublicKey.Bytes()
+		if err != nil || len(encoded) != 1+2*coordinateBytes || encoded[0] != 4 {
+			continue
+		}
+		if encoded[1] == 0 || encoded[1+coordinateBytes] == 0 {
+			return key
+		}
+	}
+	t.Fatal("could not construct an EC key with a leading-zero fixed-width coordinate")
+	return nil
+}
+
+func rawJWKMembers(t *testing.T, key jose.JSONWebKey) map[string]json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(key)
+	if err != nil {
+		t.Fatalf("marshal JWK: %v", err)
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &members); err != nil {
+		t.Fatalf("unmarshal raw JWK members: %v", err)
+	}
+	return members
+}
+
+func rawJSONStringMember(
+	t *testing.T,
+	members map[string]json.RawMessage,
+	name string,
+) string {
+	t.Helper()
+	raw, present := members[name]
+	if !present {
+		t.Fatalf("generated JWK is missing %q", name)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+		t.Fatalf("generated JWK %q is not a non-empty string", name)
+	}
+	return value
+}
+
+func cloneRawJWKMembers(input map[string]json.RawMessage) map[string]json.RawMessage {
+	result := make(map[string]json.RawMessage, len(input))
+	for name, value := range input {
+		result[name] = bytes.Clone(value)
+	}
+	return result
+}
+
+func cloneRawVerificationJWK(input rawVerificationJWK) rawVerificationJWK {
+	result := input
+	result.ecX = bytes.Clone(input.ecX)
+	result.ecY = bytes.Clone(input.ecY)
+	result.rsaModulus = bytes.Clone(input.rsaModulus)
+	return result
 }
 
 func requireEventually(t *testing.T, timeout time.Duration, condition func() bool) {

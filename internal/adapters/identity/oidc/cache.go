@@ -23,9 +23,12 @@ import (
 )
 
 const (
-	maxKeyIDBytes = 256
-	minRSAKeyBits = 2_048
-	maxRSAKeyBits = 8_192
+	maxKeyIDBytes       = 256
+	minRSAKeyBits       = 2_048
+	maxRSAKeyBits       = 8_192
+	p256CoordinateBytes = 32
+	p384CoordinateBytes = 48
+	p521CoordinateBytes = 66
 )
 
 var (
@@ -462,6 +465,9 @@ func (cache *keyCache) fetch(ctx context.Context) (map[keyReference]jose.JSONWeb
 }
 
 type rawVerificationJWK struct {
+	ecCurve     string
+	ecX         []byte
+	ecY         []byte
 	rsaModulus  []byte
 	rsaExponent int
 }
@@ -487,6 +493,12 @@ func inspectVerificationJWK(encodedKey json.RawMessage) (rawVerificationJWK, boo
 		return rawVerificationJWK{}, false
 	}
 	switch keyType {
+	case "EC":
+		curve, x, y, ok := canonicalECPublicKey(members)
+		if !ok {
+			return rawVerificationJWK{}, false
+		}
+		return rawVerificationJWK{ecCurve: curve, ecX: x, ecY: y}, true
 	case "OKP":
 		curve, ok := requiredJSONString(members, "crv")
 		if !ok || curve != "Ed25519" {
@@ -555,6 +567,44 @@ func canonicalBase64URLSize(encoded string, expectedBytes int) bool {
 	return ok && len(decoded) == expectedBytes
 }
 
+func canonicalECPublicKey(
+	members map[string]json.RawMessage,
+) (string, []byte, []byte, bool) {
+	curve, ok := requiredJSONString(members, "crv")
+	if !ok {
+		return "", nil, nil, false
+	}
+	_, coordinateBytes, ok := supportedECDSACurve(curve)
+	if !ok {
+		return "", nil, nil, false
+	}
+	x, ok := canonicalECField(members, "x", coordinateBytes)
+	if !ok {
+		return "", nil, nil, false
+	}
+	y, ok := canonicalECField(members, "y", coordinateBytes)
+	if !ok {
+		return "", nil, nil, false
+	}
+	return curve, x, y, true
+}
+
+func canonicalECField(
+	members map[string]json.RawMessage,
+	name string,
+	expectedBytes int,
+) ([]byte, bool) {
+	encoded, ok := requiredJSONString(members, name)
+	if !ok {
+		return nil, false
+	}
+	decoded, ok := decodeCanonicalSegment(encoded, expectedBytes)
+	if !ok || len(decoded) != expectedBytes {
+		return nil, false
+	}
+	return decoded, true
+}
+
 func canonicalRSAModulus(members map[string]json.RawMessage) ([]byte, bool) {
 	encoded, ok := requiredJSONString(members, "n")
 	if !ok {
@@ -594,6 +644,12 @@ func (cache *keyCache) boundAlgorithm(
 	if !key.Valid() || !key.IsPublic() || !validOpaqueValue(key.KeyID, maxKeyIDBytes) {
 		return "", false
 	}
+	if rawKey.ecCurve != "" {
+		ecKey, ok := key.Key.(*ecdsa.PublicKey)
+		if !ok || !rawECDSAKeyMatches(rawKey, ecKey) {
+			return "", false
+		}
+	}
 	if rawKey.rsaExponent != 0 || len(rawKey.rsaModulus) != 0 {
 		rsaKey, ok := key.Key.(*rsa.PublicKey)
 		if !ok || rsaKey.E != rawKey.rsaExponent ||
@@ -623,6 +679,33 @@ func (cache *keyCache) boundAlgorithm(
 		selected = candidate
 	}
 	return selected, selected != ""
+}
+
+func rawECDSAKeyMatches(rawKey rawVerificationJWK, typed *ecdsa.PublicKey) bool {
+	curve, coordinateBytes, ok := supportedECDSACurve(rawKey.ecCurve)
+	if !ok || typed == nil || typed.Curve != curve ||
+		len(rawKey.ecX) != coordinateBytes || len(rawKey.ecY) != coordinateBytes {
+		return false
+	}
+	encoded, err := typed.Bytes()
+	if err != nil || len(encoded) != 1+2*coordinateBytes || encoded[0] != 4 {
+		return false
+	}
+	return bytes.Equal(encoded[1:1+coordinateBytes], rawKey.ecX) &&
+		bytes.Equal(encoded[1+coordinateBytes:], rawKey.ecY)
+}
+
+func supportedECDSACurve(name string) (elliptic.Curve, int, bool) {
+	switch name {
+	case "P-256":
+		return elliptic.P256(), p256CoordinateBytes, true
+	case "P-384":
+		return elliptic.P384(), p384CoordinateBytes, true
+	case "P-521":
+		return elliptic.P521(), p521CoordinateBytes, true
+	default:
+		return nil, 0, false
+	}
 }
 
 func keySupportsAlgorithm(key any, algorithm jose.SignatureAlgorithm) bool {

@@ -50,15 +50,51 @@ independently with exact percent-decoded name semantics and without copying
 values. A credential in either view, or disagreement between an available URL
 view and the view in a nonempty `RequestURI`, is invalid. An empty `RequestURI`
 is an unavailable second view rather than a disagreement. On query rejection,
-both complete query views are cleared. On cookie rejection, every case variant
-of the `Cookie` header is removed, so the rejected credential cannot survive in
-ordinary downstream request or access-log formatting. This intentionally
-discards the whole offending container, including unrelated values, rather than
-reconstructing attacker-sized data. Whenever neither a forbidden query/cookie
-carrier nor query-view disagreement is present, unrelated query parameters and
-cookies remain untouched; rejecting `Authorization` alone, including a
-malformed or duplicate field, does not discard them. Request bodies are never
-inspected for bearer credentials.
+both complete query views are cleared. Any already-materialized `Form` and
+`PostForm` maps are cleared in place and replaced with non-nil empty maps. This
+also clears aliases through the request and prevents a later `ParseForm` call
+from reparsing the rejected query or consuming the body. On cookie rejection,
+every case variant of the `Cookie` header is removed, so the rejected credential
+cannot survive in ordinary downstream request or access-log formatting. This
+intentionally discards the whole offending container, including unrelated
+values, rather than reconstructing attacker-sized data.
+
+An `Authorization` or `Cookie` trailer declaration is invalid whether it is
+present as a case-insensitive token in a raw `Trailer` header or as a declared
+key in `Request.Trailer`. Credential-capable declarations and any already
+materialized values are removed before extraction returns, and that rejection
+remains sticky across repeated extraction. Independently of declarations, a
+body other than nil or `http.NoBody` is guarded when the request uses HTTP/1
+chunked transfer coding or carries any raw `Trailer` header or nonempty
+`Request.Trailer` map. Go's HTTP/2 server copies only predeclared terminal keys
+into the handler request, so the metadata rule covers its materialization path
+without wrapping every HTTP/2 body. The guard does not itself reject an
+otherwise valid or absent credential. A wrapper preserves every `Read` and
+`Close` result, and after each terminal `Read` (any non-nil error, including
+`n > 0, io.EOF`) or `Close` it removes credential trailer values that Go may
+materialize, including undeclared terminal fields accepted by Go's HTTP/1
+chunked reader. Successful nonterminal reads do not rescan header maps.
+Observing such a field latches the guard into an invalid state: it cannot
+retract the extraction result that preceded body consumption, but every later
+extraction is invalid. Unrelated trailer fields remain available. A body
+outside the guard predicate retains its original object and behavior; a guarded
+body is wrapped even when its declarations are absent or unrelated.
+
+Whenever neither a forbidden query/cookie carrier, credential-capable trailer,
+nor query-view disagreement is present, unrelated query parameters, cookies,
+parsed forms, and trailer metadata remain untouched; rejecting `Authorization`
+alone, including a malformed or duplicate field, does not discard them. Body
+identity changes only for the trailer-capable guard described above. Request
+bodies and multipart forms are never inspected for bearer credentials.
+
+`ExtractBearer` must run on the original inbound `*http.Request` before any
+`Clone`, `WithContext`, or retained body/request alias. Go's internal body reader
+owns the original request pointer and can therefore populate its trailer map;
+wrapping a pre-existing clone cannot scrub that hidden original surface without
+reflection or unsafe coupling to `net/http`. This ordering is an HTTP adapter
+obligation for issue #21. The in-place form clearing guarantee above applies to
+the maps owned by the request passed at that supported boundary; it does not
+claim to find copies retained before extraction.
 
 A request with no accepted carrier returns an explicit absent result and no
 principal. It does not call the authentication port, and the domain has no
