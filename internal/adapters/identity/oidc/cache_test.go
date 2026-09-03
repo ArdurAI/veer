@@ -7,7 +7,9 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math/big"
@@ -102,6 +104,45 @@ func TestJWKSSameKeyIDRotationRefreshesAfterSignatureFailure(t *testing.T) {
 	}
 	if got := fixture.hits.Load(); got != 2 {
 		t.Fatalf("bad-signature burst caused %d fetches, want 2 total", got)
+	}
+}
+
+func TestJWKSBadSignatureDoesNotRefetchJustResolvedGeneration(t *testing.T) {
+	tests := []struct {
+		name        string
+		warmCache   bool
+		wantFetches int64
+	}{
+		{name: "cold required refresh", wantFetches: 1},
+		{name: "proactive refresh", warmCache: true, wantFetches: 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			trustedKey := generateECDSAKey(t)
+			untrustedKey := generateECDSAKey(t)
+			fixture.setKeys(t, publicJWK(trustedKey, "stable-kid", jose.ES256))
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			claims := cacheClaims(anchor, clock.Now())
+
+			if test.warmCache {
+				trustedToken := signClaims(t, trustedKey, jose.ES256, "stable-kid", "at+jwt", claims)
+				if _, err := authenticate(t, verifier, trustedToken); err != nil {
+					t.Fatalf("warm cache: %v", err)
+				}
+				clock.Advance(anchor.Cache.Freshness - anchor.Cache.RefreshAhead)
+			}
+
+			badToken := signClaims(t, untrustedKey, jose.ES256, "stable-kid", "at+jwt", claims)
+			_, err := authenticate(t, verifier, badToken)
+			requireAuthenticationError(t, err, ports.ErrAuthenticationInvalid)
+			if got := fixture.hits.Load(); got != test.wantFetches {
+				t.Fatalf("JWKS fetches = %d, want %d", got, test.wantFetches)
+			}
+		})
 	}
 }
 
@@ -556,6 +597,40 @@ func TestJWKSContextCancellationAndInternalTimeout(t *testing.T) {
 	})
 }
 
+func TestJWKSAdmissionContextErrorPreservesCallerCancellation(t *testing.T) {
+	live := t.Context()
+	callerCanceled, cancelCaller := context.WithCancel(live)
+	cancelCaller()
+	boundedCanceled, cancelBounded := context.WithCancel(live)
+	cancelBounded()
+
+	tests := []struct {
+		name    string
+		parent  context.Context
+		bounded context.Context
+		want    error
+	}{
+		{name: "live", parent: live, bounded: live},
+		{name: "caller canceled", parent: callerCanceled, bounded: live, want: context.Canceled},
+		{name: "internal deadline", parent: live, bounded: boundedCanceled, want: errKeySourceUnavailable},
+		{name: "caller wins", parent: callerCanceled, bounded: boundedCanceled, want: context.Canceled},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := jwksAdmissionContextError(test.parent, test.bounded)
+			if test.want == nil {
+				if err != nil {
+					t.Fatalf("jwksAdmissionContextError() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("jwksAdmissionContextError() = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func TestJWKSCallerCancellationCannotBypassRefreshCooldown(t *testing.T) {
 	t.Run("cold cache", func(t *testing.T) {
 		fixture := newKeyServer(t)
@@ -966,6 +1041,111 @@ func TestJWKSOKPXMustBeCanonicalEd25519PublicKey(t *testing.T) {
 	}
 }
 
+func TestJWKSEd25519IdentityPointIsRejectedBeforeVerification(t *testing.T) {
+	fixture := newKeyServer(t)
+	clock := newFakeClock(testNow)
+	identityKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	identityKey[0] = 1
+	fixture.setKeys(t, jose.JSONWebKey{
+		Key:       identityKey,
+		KeyID:     "small-order-key",
+		Algorithm: string(jose.EdDSA),
+		Use:       "sig",
+	})
+	anchor := testTrustAnchor(fixture, identity.KindHuman)
+	anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.EdDSA}
+	verifier := newTestVerifier(t, fixture, anchor, clock)
+
+	header := base64.RawURLEncoding.EncodeToString(
+		[]byte(`{"alg":"EdDSA","kid":"small-order-key","typ":"at+jwt"}`),
+	)
+	payloadJSON, err := json.Marshal(cacheClaims(anchor, clock.Now()))
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	signingInput := header + "." + payload
+	forgedSignature := make([]byte, ed25519.SignatureSize)
+	forgedSignature[0] = 0x58
+	for index := 1; index < ed25519.PublicKeySize; index++ {
+		forgedSignature[index] = 0x66
+	}
+	forgedSignature[ed25519.PublicKeySize] = 1
+	if !ed25519.Verify(identityKey, []byte(signingInput), forgedSignature) {
+		t.Fatal("Go verifier no longer accepts the constructive small-order signature")
+	}
+	token := signingInput + "." + base64.RawURLEncoding.EncodeToString(forgedSignature)
+
+	_, err = authenticate(t, verifier, token)
+	requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+}
+
+func TestEd25519AdmissionRejectsEveryAcceptedLowOrderEncoding(t *testing.T) {
+	lowOrderEncodings := []string{
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"0000000000000000000000000000000000000000000000000000000000000080",
+		"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"0100000000000000000000000000000000000000000000000000000000000000",
+		"0100000000000000000000000000000000000000000000000000000000000080",
+		"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+		"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+		"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+		"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+		"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	}
+	for _, encoded := range lowOrderEncodings {
+		encoded := encoded
+		t.Run(encoded[:8], func(t *testing.T) {
+			decoded, err := hex.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("decode low-order key: %v", err)
+			}
+			if validEd25519VerificationKey(ed25519.PublicKey(decoded)) {
+				t.Fatal("accepted low-order Ed25519 public key")
+			}
+		})
+	}
+
+	validKey := generateEd25519Key(t).Public().(ed25519.PublicKey)
+	if !validEd25519VerificationKey(validKey) {
+		t.Fatal("rejected generated Ed25519 public key")
+	}
+}
+
+func TestBoundAlgorithmRequiresRawEd25519KeyMatch(t *testing.T) {
+	fixture := newKeyServer(t)
+	anchor := testTrustAnchor(fixture, identity.KindHuman)
+	anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.EdDSA}
+	verifier := newTestVerifier(t, fixture, anchor, newFakeClock(testNow))
+	key := generateEd25519Key(t)
+	jwk := publicJWK(key, "raw-ed25519-binding-key", jose.EdDSA)
+	encoded, err := json.Marshal(jwk)
+	if err != nil {
+		t.Fatalf("marshal JWK: %v", err)
+	}
+	rawKey, ok := inspectVerificationJWK(encoded)
+	if !ok {
+		t.Fatal("inspectVerificationJWK rejected canonical Ed25519 key")
+	}
+	if algorithm, ok := verifier.cache.boundAlgorithm(jwk, rawKey); !ok || algorithm != jose.EdDSA {
+		t.Fatalf("boundAlgorithm(matching key) = %q, %t, want EdDSA, true", algorithm, ok)
+	}
+
+	different := publicJWK(generateEd25519Key(t), "raw-ed25519-binding-key", jose.EdDSA)
+	if algorithm, ok := verifier.cache.boundAlgorithm(different, rawKey); ok || algorithm != "" {
+		t.Fatalf("boundAlgorithm(different typed key) = %q, %t, want empty false", algorithm, ok)
+	}
+	altered := cloneRawVerificationJWK(rawKey)
+	altered.ed25519Key[0] ^= 1
+	if algorithm, ok := verifier.cache.boundAlgorithm(jwk, altered); ok || algorithm != "" {
+		t.Fatalf("boundAlgorithm(altered raw key) = %q, %t, want empty false", algorithm, ok)
+	}
+}
+
 func TestCanonicalECPublicKeyRequiresExactCanonicalCoordinates(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -1339,6 +1519,176 @@ func TestJWKSRSAModulusMustBeCanonicalMinimalBase64URLUInt(t *testing.T) {
 	}
 }
 
+func TestJWKSRejectsPrimeRSAModulusWithoutPoisoningValidSibling(t *testing.T) {
+	prime := rfc3526Group14Prime(t)
+	primeKey := jose.JSONWebKey{
+		Key:       &rsa.PublicKey{N: prime, E: 65537},
+		KeyID:     "prime-key",
+		Algorithm: string(jose.RS256),
+		Use:       "sig",
+	}
+	validKey := generateRSAKey(t)
+
+	t.Run("only unusable key", func(t *testing.T) {
+		fixture := newKeyServer(t)
+		clock := newFakeClock(testNow)
+		fixture.setKeys(t, primeKey)
+		anchor := testTrustAnchor(fixture, identity.KindHuman)
+		anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.RS256}
+		verifier := newTestVerifier(t, fixture, anchor, clock)
+		token := signClaims(t, validKey, jose.RS256, "prime-key", "at+jwt", cacheClaims(anchor, clock.Now()))
+
+		_, err := authenticate(t, verifier, token)
+		requireAuthenticationError(t, err, ports.ErrAuthenticationUnavailable)
+	})
+
+	t.Run("unusable key with valid sibling", func(t *testing.T) {
+		fixture := newKeyServer(t)
+		clock := newFakeClock(testNow)
+		fixture.setKeys(t, primeKey, publicJWK(validKey, "valid-key", jose.RS256))
+		anchor := testTrustAnchor(fixture, identity.KindHuman)
+		anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.RS256}
+		verifier := newTestVerifier(t, fixture, anchor, clock)
+		token := signClaims(t, validKey, jose.RS256, "valid-key", "at+jwt", cacheClaims(anchor, clock.Now()))
+
+		if _, err := authenticate(t, verifier, token); err != nil {
+			t.Fatalf("Authenticate: %v", err)
+		}
+	})
+}
+
+func rfc3526Group14Prime(t *testing.T) *big.Int {
+	t.Helper()
+	prime, ok := new(big.Int).SetString(
+		"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E08"+
+			"8A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD"+
+			"3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625"+
+			"E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5"+
+			"AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48"+
+			"361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F35620855"+
+			"2BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905"+
+			"E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C5"+
+			"2C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5"+
+			"A8AACAA68FFFFFFFFFFFFFFFF",
+		16,
+	)
+	if !ok || prime.BitLen() != minRSAKeyBits || !prime.ProbablyPrime(0) {
+		t.Fatal("fixed RSA admission fixture is not a 2048-bit probable prime")
+	}
+	return prime
+}
+
+func TestRSAVerificationKeyRejectsTriviallyInvalidModuli(t *testing.T) {
+	validKey := generateRSAKey(t)
+	even := new(big.Int).Lsh(big.NewInt(1), minRSAKeyBits-1)
+	even.Add(even, big.NewInt(2))
+	smallFactor := new(big.Int).Lsh(big.NewInt(1), minRSAKeyBits-2)
+	smallFactor.Add(smallFactor, big.NewInt(1))
+	smallFactor.Mul(smallFactor, big.NewInt(3))
+
+	squareRoot := new(big.Int).Lsh(big.NewInt(1), minRSAKeyBits/2)
+	squareRoot.Sub(squareRoot, big.NewInt(159))
+	for {
+		clean := true
+		for _, divisor := range rsaSmallPrimeDivisors {
+			if new(big.Int).Mod(squareRoot, big.NewInt(divisor)).Sign() == 0 {
+				clean = false
+				break
+			}
+		}
+		if clean && new(big.Int).Mod(squareRoot, big.NewInt(int64(validKey.E))).Sign() != 0 {
+			break
+		}
+		squareRoot.Sub(squareRoot, big.NewInt(2))
+	}
+	square := new(big.Int).Mul(squareRoot, squareRoot)
+
+	exponentCofactor := new(big.Int).Lsh(big.NewInt(1), minRSAKeyBits-17)
+	exponentCofactor.Add(exponentCofactor, big.NewInt(1))
+	exponentFactor := new(big.Int).Mul(big.NewInt(int64(validKey.E)), exponentCofactor)
+
+	tests := []struct {
+		name    string
+		modulus *big.Int
+		valid   bool
+	}{
+		{name: "generated semiprime", modulus: validKey.N, valid: true},
+		{name: "even", modulus: even},
+		{name: "small factor", modulus: smallFactor},
+		{name: "public exponent factor", modulus: exponentFactor},
+		{name: "perfect square", modulus: square},
+		{name: "prime", modulus: rfc3526Group14Prime(t)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			key := &rsa.PublicKey{N: test.modulus, E: validKey.E}
+			if got := validRSAVerificationKey(key, nil); got != test.valid {
+				t.Fatalf("validRSAVerificationKey() = %t, want %t", got, test.valid)
+			}
+		})
+	}
+
+	sharedExponentFactor := new(big.Int).Mul(new(big.Int).Set(validKey.N), big.NewInt(59))
+	if validRSAVerificationKey(&rsa.PublicKey{N: sharedExponentFactor, E: 59 * 61}, nil) {
+		t.Fatal("accepted RSA modulus sharing a proper factor with its public exponent")
+	}
+}
+
+func TestJWKSAdmissionBudgetBoundsRSAValidationWork(t *testing.T) {
+	tests := []struct {
+		name      string
+		bitLength int
+		accepted  int
+	}{
+		{name: "2048-bit", bitLength: 2048, accepted: 256},
+		{name: "4096-bit", bitLength: 4096, accepted: 32},
+		{name: "8192-bit", bitLength: 8192, accepted: 4},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var budget jwksAdmissionBudget
+			for index := 0; index < test.accepted; index++ {
+				if !budget.reserveRSA(test.bitLength) {
+					t.Fatalf("reservation %d unexpectedly exceeded budget", index+1)
+				}
+			}
+			if budget.reserveRSA(test.bitLength) {
+				t.Fatal("reservation above the cubic-bit budget succeeded")
+			}
+			if !budget.exceeded {
+				t.Fatal("budget did not retain exceeded state")
+			}
+		})
+	}
+}
+
+func TestRSAAdmissionBudgetIgnoresAlgorithmIncompatibleKey(t *testing.T) {
+	fixture := newKeyServer(t)
+	clock := newFakeClock(testNow)
+	verifier := newTestVerifier(t, fixture, testTrustAnchor(fixture, identity.KindHuman), clock)
+	key := jose.JSONWebKey{
+		Key:       &rsa.PublicKey{N: rfc3526Group14Prime(t), E: 65537},
+		KeyID:     "irrelevant-prime",
+		Algorithm: string(jose.ES256),
+		Use:       "sig",
+	}
+	encoded, err := json.Marshal(key)
+	if err != nil {
+		t.Fatalf("marshal JWK: %v", err)
+	}
+	rawKey, ok := inspectVerificationJWK(encoded)
+	if !ok {
+		t.Fatal("inspectVerificationJWK rejected structurally valid RSA key")
+	}
+	var budget jwksAdmissionBudget
+	if algorithm, usable := verifier.cache.boundAlgorithmWithBudget(key, rawKey, &budget); usable || algorithm != "" {
+		t.Fatalf("boundAlgorithmWithBudget() = %q, %t, want empty false", algorithm, usable)
+	}
+	if budget.rsaValidationWork != 0 || budget.exceeded {
+		t.Fatalf("irrelevant key consumed RSA budget: %+v", budget)
+	}
+}
+
 func TestCanonicalRSAModulusRejectsNonMinimalAndNonCanonicalValues(t *testing.T) {
 	modulus := []byte{0x80, 0x01}
 	canonical := base64.RawURLEncoding.EncodeToString(modulus)
@@ -1665,6 +2015,7 @@ func cloneRawVerificationJWK(input rawVerificationJWK) rawVerificationJWK {
 	result := input
 	result.ecX = bytes.Clone(input.ecX)
 	result.ecY = bytes.Clone(input.ecY)
+	result.ed25519Key = bytes.Clone(input.ed25519Key)
 	result.rsaModulus = bytes.Clone(input.rsaModulus)
 	return result
 }

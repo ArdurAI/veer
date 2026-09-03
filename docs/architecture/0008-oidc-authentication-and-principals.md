@@ -193,9 +193,17 @@ contains one to eight unique bounded operations including exact `verify`. An
 explicit JWK `alg` must be both anchor-allowed and compatible with the key; an
 omitted `alg` is accepted only when exactly one configured algorithm is
 compatible. RSA moduli are 2,048 through 8,192 bits with an odd public exponent
-of at least three. EC keys bind P-256 to ES256, P-384 to ES384, and P-521 to
-ES512; Ed25519 binds only to EdDSA. A duplicate resolved `(kid, algorithm)`
-rejects the complete set rather than selecting an order-dependent winner.
+of at least three. They must be odd, share no checked small factor or factor
+with the public exponent, not be a perfect square, and be classified composite
+by the fixed probable-prime oracle. RSA admission charges the cube of each
+candidate modulus bit length against a per-response ceiling of four 8,192-bit
+equivalents; exceeding the ceiling rejects the complete set before it can
+replace the cache. EC keys bind P-256 to ES256, P-384 to ES384, and P-521 to
+ES512. Ed25519 keys use a canonical on-curve encoding, reject the complete
+eight-point small-order set, and bind only to EdDSA. Raw key material is bound
+to the decoded verification key before use. A duplicate resolved
+`(kid, algorithm)` rejects the complete set rather than selecting an
+order-dependent winner.
 
 Freshness is explicit and never exceeds 24 hours. Refresh-ahead is positive
 and shorter than freshness; refresh cooldown is positive and at most one hour;
@@ -354,8 +362,10 @@ canaries, property and fuzz tests, principal canonicalization and alias tests,
 Human/Workload negative matrices, multi-anchor overlap and exact-dispatch tests,
 unknown/ambiguous zero-network checks, negative compact-JWT and claim corpora,
 runtime-generated signed tokens, bounded JWKS fetch, redirect, rotation,
-cooldown, and concurrency tests, and invalid-versus-unavailable classification
-checks.
+cooldown, and concurrency tests, canonical raw-to-typed EC, Ed25519, and RSA key
+binding, exhaustive accepted low-order Ed25519 encodings, prime and cheaply
+invalid RSA moduli, RSA work-budget boundaries, and
+invalid-versus-unavailable classification checks.
 
 ```sh
 go test ./internal/core/domain/identity ./internal/core/ports \

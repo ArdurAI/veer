@@ -7,9 +7,11 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -23,12 +25,28 @@ import (
 )
 
 const (
-	maxKeyIDBytes       = 256
-	minRSAKeyBits       = 2_048
-	maxRSAKeyBits       = 8_192
-	p256CoordinateBytes = 32
-	p384CoordinateBytes = 48
-	p521CoordinateBytes = 66
+	maxKeyIDBytes        = 256
+	minRSAKeyBits        = 2_048
+	maxRSAKeyBits        = 8_192
+	maxRSAValidationWork = int64(4) * maxRSAKeyBits * maxRSAKeyBits * maxRSAKeyBits
+	p256CoordinateBytes  = 32
+	p384CoordinateBytes  = 48
+	p521CoordinateBytes  = 66
+)
+
+var (
+	ed25519FieldPrime, ed25519CurveD = ed25519FieldParameters()
+	ed25519SmallOrderEncodings       = map[string]struct{}{
+		"0000000000000000000000000000000000000000000000000000000000000000": {},
+		"0000000000000000000000000000000000000000000000000000000000000080": {},
+		"0100000000000000000000000000000000000000000000000000000000000000": {},
+		"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05": {},
+		"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85": {},
+		"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a": {},
+		"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa": {},
+		"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f": {},
+	}
+	rsaSmallPrimeDivisors = [...]int64{3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53}
 )
 
 var (
@@ -66,8 +84,9 @@ type keyReference struct {
 }
 
 type cachedVerificationKey struct {
-	key        jose.JSONWebKey
-	generation uint64
+	key                  jose.JSONWebKey
+	generation           uint64
+	resolvedAfterRefresh bool
 }
 
 type refreshFlight struct {
@@ -155,7 +174,8 @@ func (cache *keyCache) resolve(
 		refreshAllowed = !now.Before(cache.nextReactiveRefreshAllowed)
 	}
 	observedAttempt := cache.attempt
-	generation := cache.generation
+	observedGeneration := cache.generation
+	generation := observedGeneration
 	cache.mu.Unlock()
 
 	if found && fresh && (!due || !refreshAllowed) {
@@ -180,7 +200,11 @@ func (cache *keyCache) resolve(
 		generation = cache.generation
 		cache.mu.Unlock()
 		if fresh && found {
-			return cachedVerificationKey{key: key, generation: generation}, nil
+			return cachedVerificationKey{
+				key:                  key,
+				generation:           generation,
+				resolvedAfterRefresh: generation != observedGeneration,
+			}, nil
 		}
 		if fresh {
 			return cachedVerificationKey{}, errNoMatchingKey
@@ -195,7 +219,11 @@ func (cache *keyCache) resolve(
 	generation = cache.generation
 	cache.mu.Unlock()
 	if found && fresh {
-		return cachedVerificationKey{key: key, generation: generation}, nil
+		return cachedVerificationKey{
+			key:                  key,
+			generation:           generation,
+			resolvedAfterRefresh: generation != observedGeneration,
+		}, nil
 	}
 	if fresh {
 		cache.mu.Lock()
@@ -210,7 +238,7 @@ func (cache *keyCache) resolveAfterSignatureFailure(
 	ctx context.Context,
 	keyID string,
 	algorithm jose.SignatureAlgorithm,
-	previousGeneration uint64,
+	previous cachedVerificationKey,
 ) (cachedVerificationKey, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return cachedVerificationKey{}, false, err
@@ -219,7 +247,7 @@ func (cache *keyCache) resolveAfterSignatureFailure(
 	now := cache.clock.Now()
 	reference := keyReference{keyID: keyID, algorithm: algorithm}
 	cache.mu.Lock()
-	if cache.generation != previousGeneration {
+	if cache.generation != previous.generation {
 		key, found := cache.keys[reference]
 		fresh := len(cache.keys) > 0 && now.Before(cache.freshUntil)
 		generation := cache.generation
@@ -231,6 +259,10 @@ func (cache *keyCache) resolveAfterSignatureFailure(
 			return cachedVerificationKey{}, true, errNoMatchingKey
 		}
 		return cachedVerificationKey{}, true, errKeySourceUnavailable
+	}
+	if previous.resolvedAfterRefresh {
+		cache.mu.Unlock()
+		return cachedVerificationKey{}, false, nil
 	}
 	freshBefore := len(cache.keys) > 0 && now.Before(cache.freshUntil)
 	if now.Before(cache.nextReactiveRefreshAllowed) {
@@ -439,7 +471,11 @@ func (cache *keyCache) fetch(ctx context.Context) (map[keyReference]jose.JSONWeb
 	}
 
 	keys := make(map[keyReference]jose.JSONWebKey)
+	var budget jwksAdmissionBudget
 	for _, encodedKey := range encodedSet.Keys {
+		if err := jwksAdmissionContextError(ctx, fetchContext); err != nil {
+			return nil, err
+		}
 		rawKey, usable := inspectVerificationJWK(encodedKey)
 		if !usable {
 			continue
@@ -448,7 +484,10 @@ func (cache *keyCache) fetch(ctx context.Context) (map[keyReference]jose.JSONWeb
 		if err := json.Unmarshal(encodedKey, &key); err != nil {
 			continue
 		}
-		algorithm, usable := cache.boundAlgorithm(key, rawKey)
+		algorithm, usable := cache.boundAlgorithmWithBudget(key, rawKey, &budget)
+		if err := jwksAdmissionContextError(ctx, fetchContext); err != nil {
+			return nil, err
+		}
 		if !usable {
 			continue
 		}
@@ -458,18 +497,51 @@ func (cache *keyCache) fetch(ctx context.Context) (map[keyReference]jose.JSONWeb
 		}
 		keys[reference] = key
 	}
+	if err := jwksAdmissionContextError(ctx, fetchContext); err != nil {
+		return nil, err
+	}
+	if budget.exceeded {
+		return nil, errKeySourceUnavailable
+	}
 	if len(keys) == 0 {
 		return nil, errKeySourceUnavailable
 	}
 	return keys, nil
 }
 
+func jwksAdmissionContextError(parent, bounded context.Context) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if bounded.Err() != nil {
+		return errKeySourceUnavailable
+	}
+	return nil
+}
+
 type rawVerificationJWK struct {
 	ecCurve     string
 	ecX         []byte
 	ecY         []byte
+	ed25519Key  []byte
 	rsaModulus  []byte
 	rsaExponent int
+}
+
+type jwksAdmissionBudget struct {
+	rsaValidationWork int64
+	exceeded          bool
+}
+
+func (budget *jwksAdmissionBudget) reserveRSA(bitLength int) bool {
+	bits := int64(bitLength)
+	work := bits * bits * bits
+	if work > maxRSAValidationWork-budget.rsaValidationWork {
+		budget.exceeded = true
+		return false
+	}
+	budget.rsaValidationWork += work
+	return true
 }
 
 func inspectVerificationJWK(encodedKey json.RawMessage) (rawVerificationJWK, bool) {
@@ -505,9 +577,14 @@ func inspectVerificationJWK(encodedKey json.RawMessage) (rawVerificationJWK, boo
 			return rawVerificationJWK{}, false
 		}
 		x, ok := requiredJSONString(members, "x")
-		if !ok || !canonicalBase64URLSize(x, ed25519.PublicKeySize) {
+		if !ok {
 			return rawVerificationJWK{}, false
 		}
+		decoded, ok := decodeCanonicalSegment(x, ed25519.PublicKeySize)
+		if !ok || len(decoded) != ed25519.PublicKeySize {
+			return rawVerificationJWK{}, false
+		}
+		return rawVerificationJWK{ed25519Key: decoded}, true
 	case "RSA":
 		modulus, ok := canonicalRSAModulus(members)
 		if !ok {
@@ -560,11 +637,6 @@ func keyOperationsPermitVerification(members map[string]json.RawMessage) bool {
 		}
 	}
 	return permitsVerification
-}
-
-func canonicalBase64URLSize(encoded string, expectedBytes int) bool {
-	decoded, ok := decodeCanonicalSegment(encoded, expectedBytes)
-	return ok && len(decoded) == expectedBytes
 }
 
 func canonicalECPublicKey(
@@ -641,6 +713,14 @@ func (cache *keyCache) boundAlgorithm(
 	key jose.JSONWebKey,
 	rawKey rawVerificationJWK,
 ) (jose.SignatureAlgorithm, bool) {
+	return cache.boundAlgorithmWithBudget(key, rawKey, nil)
+}
+
+func (cache *keyCache) boundAlgorithmWithBudget(
+	key jose.JSONWebKey,
+	rawKey rawVerificationJWK,
+	budget *jwksAdmissionBudget,
+) (jose.SignatureAlgorithm, bool) {
 	if !key.Valid() || !key.IsPublic() || !validOpaqueValue(key.KeyID, maxKeyIDBytes) {
 		return "", false
 	}
@@ -657,28 +737,37 @@ func (cache *keyCache) boundAlgorithm(
 			return "", false
 		}
 	}
+	if len(rawKey.ed25519Key) != 0 {
+		ed25519Key, ok := key.Key.(ed25519.PublicKey)
+		if !ok || !bytes.Equal(ed25519Key, rawKey.ed25519Key) {
+			return "", false
+		}
+	}
 	if key.Use != "" && key.Use != "sig" {
 		return "", false
 	}
+	var selected jose.SignatureAlgorithm
 	if key.Algorithm != "" {
 		algorithm := jose.SignatureAlgorithm(key.Algorithm)
 		if _, allowed := cache.anchor.algorithmSet[algorithm]; !allowed || !keySupportsAlgorithm(key.Key, algorithm) {
 			return "", false
 		}
-		return algorithm, true
-	}
-
-	var selected jose.SignatureAlgorithm
-	for _, candidate := range cache.anchor.algorithms {
-		if !keySupportsAlgorithm(key.Key, candidate) {
-			continue
+		selected = algorithm
+	} else {
+		for _, candidate := range cache.anchor.algorithms {
+			if !keySupportsAlgorithm(key.Key, candidate) {
+				continue
+			}
+			if selected != "" {
+				return "", false
+			}
+			selected = candidate
 		}
-		if selected != "" {
-			return "", false
-		}
-		selected = candidate
 	}
-	return selected, selected != ""
+	if selected == "" || !validVerificationKey(key.Key, budget) {
+		return "", false
+	}
+	return selected, true
 }
 
 func rawECDSAKeyMatches(rawKey rawVerificationJWK, typed *ecdsa.PublicKey) bool {
@@ -711,10 +800,6 @@ func supportedECDSACurve(name string) (elliptic.Curve, int, bool) {
 func keySupportsAlgorithm(key any, algorithm jose.SignatureAlgorithm) bool {
 	switch typed := key.(type) {
 	case *rsa.PublicKey:
-		if typed.N == nil || typed.N.BitLen() < minRSAKeyBits || typed.N.BitLen() > maxRSAKeyBits ||
-			typed.E < 3 || typed.E%2 == 0 {
-			return false
-		}
 		switch algorithm {
 		case jose.RS256, jose.RS384, jose.RS512, jose.PS256, jose.PS384, jose.PS512:
 			return true
@@ -722,12 +807,6 @@ func keySupportsAlgorithm(key any, algorithm jose.SignatureAlgorithm) bool {
 			return false
 		}
 	case *ecdsa.PublicKey:
-		if typed.Curve == nil {
-			return false
-		}
-		if _, err := typed.Bytes(); err != nil {
-			return false
-		}
 		switch algorithm {
 		case jose.ES256:
 			return typed.Curve == elliptic.P256()
@@ -739,10 +818,111 @@ func keySupportsAlgorithm(key any, algorithm jose.SignatureAlgorithm) bool {
 			return false
 		}
 	case ed25519.PublicKey:
-		return algorithm == jose.EdDSA && len(typed) == ed25519.PublicKeySize
+		return algorithm == jose.EdDSA
 	default:
 		return false
 	}
+}
+
+func validVerificationKey(key any, budget *jwksAdmissionBudget) bool {
+	switch typed := key.(type) {
+	case *rsa.PublicKey:
+		return validRSAVerificationKey(typed, budget)
+	case *ecdsa.PublicKey:
+		if typed == nil || typed.Curve == nil {
+			return false
+		}
+		_, err := typed.Bytes()
+		return err == nil
+	case ed25519.PublicKey:
+		return validEd25519VerificationKey(typed)
+	default:
+		return false
+	}
+}
+
+func validRSAVerificationKey(key *rsa.PublicKey, budget *jwksAdmissionBudget) bool {
+	if key == nil || key.N == nil || key.N.BitLen() < minRSAKeyBits || key.N.BitLen() > maxRSAKeyBits ||
+		key.E < 3 || key.E%2 == 0 || key.N.Bit(0) == 0 {
+		return false
+	}
+
+	remainder := new(big.Int)
+	for _, divisor := range rsaSmallPrimeDivisors {
+		if remainder.Mod(key.N, big.NewInt(divisor)).Sign() == 0 {
+			return false
+		}
+	}
+	if remainder.GCD(nil, nil, key.N, big.NewInt(int64(key.E))).Cmp(big.NewInt(1)) != 0 {
+		return false
+	}
+
+	root := new(big.Int).Sqrt(key.N)
+	if new(big.Int).Mul(root, root).Cmp(key.N) == 0 {
+		return false
+	}
+	if budget != nil && !budget.reserveRSA(key.N.BitLen()) {
+		return false
+	}
+	// Zero Miller-Rabin repetitions selects math/big's fixed Baillie-PSW
+	// path. All primes are rejected; a composite false positive is a safe
+	// rejection. The per-response cubic-bit budget caps adversarial work at
+	// four 8192-bit equivalents while the outer key bound still limits count.
+	return !key.N.ProbablyPrime(0)
+}
+
+func validEd25519VerificationKey(key ed25519.PublicKey) bool {
+	if len(key) != ed25519.PublicKeySize {
+		return false
+	}
+	encodedY := append([]byte(nil), key...)
+	xSign := encodedY[len(encodedY)-1] >> 7
+	encodedY[len(encodedY)-1] &= 0x7f
+	y := littleEndianInteger(encodedY)
+	if y.Cmp(ed25519FieldPrime) >= 0 {
+		return false
+	}
+
+	ySquared := new(big.Int).Mul(y, y)
+	ySquared.Mod(ySquared, ed25519FieldPrime)
+	numerator := new(big.Int).Sub(ySquared, big.NewInt(1))
+	numerator.Mod(numerator, ed25519FieldPrime)
+	denominator := new(big.Int).Mul(ed25519CurveD, ySquared)
+	denominator.Add(denominator, big.NewInt(1))
+	denominator.Mod(denominator, ed25519FieldPrime)
+	denominatorInverse := new(big.Int).ModInverse(denominator, ed25519FieldPrime)
+	if denominatorInverse == nil {
+		return false
+	}
+	xSquared := new(big.Int).Mul(numerator, denominatorInverse)
+	xSquared.Mod(xSquared, ed25519FieldPrime)
+	if xSquared.Sign() == 0 {
+		if xSign != 0 {
+			return false
+		}
+	} else if big.Jacobi(xSquared, ed25519FieldPrime) != 1 {
+		return false
+	}
+
+	_, smallOrder := ed25519SmallOrderEncodings[hex.EncodeToString(key)]
+	return !smallOrder
+}
+
+func littleEndianInteger(encoded []byte) *big.Int {
+	reversed := make([]byte, len(encoded))
+	for index, value := range encoded {
+		reversed[len(encoded)-1-index] = value
+	}
+	return new(big.Int).SetBytes(reversed)
+}
+
+func ed25519FieldParameters() (*big.Int, *big.Int) {
+	prime := new(big.Int).Lsh(big.NewInt(1), 255)
+	prime.Sub(prime, big.NewInt(19))
+	denominatorInverse := new(big.Int).ModInverse(big.NewInt(121666), prime)
+	d := new(big.Int).Mul(big.NewInt(-121665), denominatorInverse)
+	d.Mod(d, prime)
+	return prime, d
 }
 
 func validOpaqueValue(value string, maximumBytes int) bool {

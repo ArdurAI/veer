@@ -70,7 +70,7 @@ func (verifier *Verifier) Authenticate(
 			ctx,
 			inspected.header.keyID,
 			algorithm,
-			verificationKey.generation,
+			verificationKey,
 		)
 		if err != nil {
 			return identity.Principal{}, classifyResolutionError(ctx, err)
