@@ -879,6 +879,139 @@
       "RoleGranted"
     ]
   },
+  "x-veer-audit": {
+    "contractVersion": "veer.audit.v1alpha1",
+    "timestampFormat": "RFC3339-UTC-milliseconds",
+    "ordering": "stream-sequence",
+    "limits": {
+      "maxCanonicalEventBytes": 16384,
+      "maxSegmentEvents": 1000,
+      "maxCanonicalSegmentBytes": 16640512,
+      "maxCanonicalManifestBytes": 4096,
+      "maxSignatureBytes": 512,
+      "maxKeyIdBytes": 128,
+      "maxHolds": 32
+    },
+    "integrity": {
+      "digest": "SHA-256-domain-separated-uint64-length-frames",
+      "chainDigestPrefix": "ach1_",
+      "tailCompleteness": "trusted-terminal-checkpoint-required"
+    },
+    "export": {
+      "bodyDigestPrefix": "aeb1_",
+      "signatureAlgorithms": [
+        "Ed25519"
+      ],
+      "signatureProduction": "external-not-implemented",
+      "signatureVerification": "caller-supplied-interface",
+      "trustedTerminalCheckpoint": true
+    },
+    "retention": {
+      "onlineDays": 90,
+      "archiveDays": 365,
+      "holdKinds": [
+        "Legal",
+        "Incident",
+        "Security"
+      ],
+      "dispositions": [
+        "Online",
+        "Archive",
+        "Held",
+        "Expire"
+      ],
+      "deletionEligibility": "expire-only"
+    },
+    "vocabulary": {
+      "streamKinds": [
+        "Workspace",
+        "Platform"
+      ],
+      "actorKinds": [
+        "Anonymous",
+        "Human",
+        "Workload",
+        "Administrator"
+      ],
+      "authenticationMethods": [
+        "None",
+        "OIDC",
+        "WorkloadOIDC",
+        "StrongOIDC",
+        "Internal"
+      ],
+      "eventKinds": [
+        "Request",
+        "Authorization",
+        "Operation",
+        "ProviderAttempt",
+        "Elevation",
+        "Export",
+        "Retention",
+        "Integrity"
+      ],
+      "sources": [
+        "API",
+        "Worker",
+        "Controller",
+        "ProviderAdapter",
+        "Administration",
+        "System"
+      ],
+      "outcomes": [
+        "Accepted",
+        "Succeeded",
+        "Denied",
+        "Failed",
+        "Canceled",
+        "Indeterminate"
+      ],
+      "clockStates": [
+        "Synchronized",
+        "Uncertain",
+        "Regressed"
+      ],
+      "elevationStates": [
+        "Issued",
+        "Consumed",
+        "Revoked",
+        "Expired"
+      ]
+    },
+    "privilegedAdministration": {
+      "contractVersion": "veer.administration.v1alpha1",
+      "ledger": "process-local-reference",
+      "strongAuthentication": "verifier-port-no-adapter",
+      "strongAuthenticationFailures": [
+        "strong-authentication-invalid",
+        "strong-authentication-unavailable"
+      ],
+      "maxAdministrators": 64,
+      "maxTrackedElevations": 1000,
+      "maxReasonRunes": 256,
+      "maxCaseReferenceRunes": 128,
+      "maxStrongAuthProofAgeSeconds": 300,
+      "maxElevationDurationSeconds": 900,
+      "eligibleActions": [
+        "audit.export",
+        "operation.quarantine",
+        "work.redrive"
+      ],
+      "targetKinds": [
+        "PlatformAudit",
+        "WorkspaceAudit",
+        "Operation"
+      ],
+      "grantStates": [
+        "Active",
+        "Consumed",
+        "Revoked",
+        "Expired"
+      ],
+      "renewal": "unsupported",
+      "expirationBoundary": "expired-at-equality"
+    }
+  },
   "paths": {
     "/api/v1alpha1/workspaces": {
       "parameters": [

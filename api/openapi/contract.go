@@ -365,6 +365,79 @@ type authorizationResourceAction struct {
 	ResourceKind string `json:"resourceKind"`
 }
 
+type auditContract struct {
+	ContractVersion string                  `json:"contractVersion"`
+	TimestampFormat string                  `json:"timestampFormat"`
+	Ordering        string                  `json:"ordering"`
+	Limits          auditLimitsContract     `json:"limits"`
+	Integrity       auditIntegrityContract  `json:"integrity"`
+	Export          auditExportContract     `json:"export"`
+	Retention       auditRetentionContract  `json:"retention"`
+	Vocabulary      auditVocabularyContract `json:"vocabulary"`
+	PrivilegedAdmin privilegedAdminContract `json:"privilegedAdministration"`
+}
+
+type auditLimitsContract struct {
+	MaxCanonicalEventBytes    int `json:"maxCanonicalEventBytes"`
+	MaxSegmentEvents          int `json:"maxSegmentEvents"`
+	MaxCanonicalSegmentBytes  int `json:"maxCanonicalSegmentBytes"`
+	MaxCanonicalManifestBytes int `json:"maxCanonicalManifestBytes"`
+	MaxSignatureBytes         int `json:"maxSignatureBytes"`
+	MaxKeyIDBytes             int `json:"maxKeyIdBytes"`
+	MaxHolds                  int `json:"maxHolds"`
+}
+
+type auditIntegrityContract struct {
+	Digest            string `json:"digest"`
+	ChainDigestPrefix string `json:"chainDigestPrefix"`
+	TailCompleteness  string `json:"tailCompleteness"`
+}
+
+type auditExportContract struct {
+	BodyDigestPrefix          string   `json:"bodyDigestPrefix"`
+	SignatureAlgorithms       []string `json:"signatureAlgorithms"`
+	SignatureProduction       string   `json:"signatureProduction"`
+	SignatureVerification     string   `json:"signatureVerification"`
+	TrustedTerminalCheckpoint bool     `json:"trustedTerminalCheckpoint"`
+}
+
+type auditRetentionContract struct {
+	OnlineDays          int      `json:"onlineDays"`
+	ArchiveDays         int      `json:"archiveDays"`
+	HoldKinds           []string `json:"holdKinds"`
+	Dispositions        []string `json:"dispositions"`
+	DeletionEligibility string   `json:"deletionEligibility"`
+}
+
+type auditVocabularyContract struct {
+	StreamKinds           []string `json:"streamKinds"`
+	ActorKinds            []string `json:"actorKinds"`
+	AuthenticationMethods []string `json:"authenticationMethods"`
+	EventKinds            []string `json:"eventKinds"`
+	Sources               []string `json:"sources"`
+	Outcomes              []string `json:"outcomes"`
+	ClockStates           []string `json:"clockStates"`
+	ElevationStates       []string `json:"elevationStates"`
+}
+
+type privilegedAdminContract struct {
+	ContractVersion              string   `json:"contractVersion"`
+	Ledger                       string   `json:"ledger"`
+	StrongAuthentication         string   `json:"strongAuthentication"`
+	StrongAuthenticationFailures []string `json:"strongAuthenticationFailures"`
+	MaxAdministrators            int      `json:"maxAdministrators"`
+	MaxTrackedElevations         int      `json:"maxTrackedElevations"`
+	MaxReasonRunes               int      `json:"maxReasonRunes"`
+	MaxCaseReferenceRunes        int      `json:"maxCaseReferenceRunes"`
+	MaxStrongAuthProofAgeSeconds int      `json:"maxStrongAuthProofAgeSeconds"`
+	MaxElevationDurationSeconds  int      `json:"maxElevationDurationSeconds"`
+	EligibleActions              []string `json:"eligibleActions"`
+	TargetKinds                  []string `json:"targetKinds"`
+	GrantStates                  []string `json:"grantStates"`
+	Renewal                      string   `json:"renewal"`
+	ExpirationBoundary           string   `json:"expirationBoundary"`
+}
+
 var operationContracts = map[string]operationContract{
 	"listWorkspaces": {
 		location:   "GET /api/v1alpha1/workspaces",
@@ -558,6 +631,7 @@ func Validate(data []byte) error {
 		{name: "condition transitions", fn: validateConditionTransitions},
 		{name: "operations", fn: validateOperations},
 		{name: "authorization", fn: validateAuthorization},
+		{name: "audit", fn: validateAudit},
 		{name: "components", fn: validateComponents},
 		{name: "examples", fn: validateExamples},
 	}
@@ -799,7 +873,7 @@ func isReviewedFreeFormMap(path string, schema map[string]any) bool {
 
 func isReviewedExtension(path, name string) bool {
 	switch name {
-	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-admission", "x-veer-authorization", "x-veer-operation-transitions", "x-veer-condition-transitions":
+	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-admission", "x-veer-authorization", "x-veer-audit", "x-veer-operation-transitions", "x-veer-condition-transitions":
 		return path == "$"
 	case "x-veer-authorization-action":
 		return strings.HasPrefix(path, "$/paths/") &&
@@ -1425,6 +1499,92 @@ func authorizationManifestContract() authorizationContract {
 		Reasons: []string{
 			"CrossWorkspace", "ReservedAction", "NoMembership", "NoRoleBinding",
 			"ScopeNotGranted", "ActionNotGranted", "RoleGranted",
+		},
+	}
+}
+
+func validateAudit(root map[string]any) error {
+	raw, exists := root["x-veer-audit"]
+	if !exists {
+		return errors.New("x-veer-audit is missing")
+	}
+
+	var got auditContract
+	if err := decodeStrictValue(raw, &got); err != nil {
+		return fmt.Errorf("x-veer-audit shape: %w", err)
+	}
+	if !reflect.DeepEqual(got, auditManifestContract()) {
+		return errors.New("x-veer-audit contract drifted")
+	}
+	return nil
+}
+
+func auditManifestContract() auditContract {
+	return auditContract{
+		ContractVersion: "veer.audit.v1alpha1",
+		TimestampFormat: "RFC3339-UTC-milliseconds",
+		Ordering:        "stream-sequence",
+		Limits: auditLimitsContract{
+			MaxCanonicalEventBytes:    16_384,
+			MaxSegmentEvents:          1_000,
+			MaxCanonicalSegmentBytes:  16_640_512,
+			MaxCanonicalManifestBytes: 4_096,
+			MaxSignatureBytes:         512,
+			MaxKeyIDBytes:             128,
+			MaxHolds:                  32,
+		},
+		Integrity: auditIntegrityContract{
+			Digest:            "SHA-256-domain-separated-uint64-length-frames",
+			ChainDigestPrefix: "ach1_",
+			TailCompleteness:  "trusted-terminal-checkpoint-required",
+		},
+		Export: auditExportContract{
+			BodyDigestPrefix:          "aeb1_",
+			SignatureAlgorithms:       []string{"Ed25519"},
+			SignatureProduction:       "external-not-implemented",
+			SignatureVerification:     "caller-supplied-interface",
+			TrustedTerminalCheckpoint: true,
+		},
+		Retention: auditRetentionContract{
+			OnlineDays:          90,
+			ArchiveDays:         365,
+			HoldKinds:           []string{"Legal", "Incident", "Security"},
+			Dispositions:        []string{"Online", "Archive", "Held", "Expire"},
+			DeletionEligibility: "expire-only",
+		},
+		Vocabulary: auditVocabularyContract{
+			StreamKinds:           []string{"Workspace", "Platform"},
+			ActorKinds:            []string{"Anonymous", "Human", "Workload", "Administrator"},
+			AuthenticationMethods: []string{"None", "OIDC", "WorkloadOIDC", "StrongOIDC", "Internal"},
+			EventKinds: []string{
+				"Request", "Authorization", "Operation", "ProviderAttempt",
+				"Elevation", "Export", "Retention", "Integrity",
+			},
+			Sources: []string{
+				"API", "Worker", "Controller", "ProviderAdapter", "Administration", "System",
+			},
+			Outcomes:        []string{"Accepted", "Succeeded", "Denied", "Failed", "Canceled", "Indeterminate"},
+			ClockStates:     []string{"Synchronized", "Uncertain", "Regressed"},
+			ElevationStates: []string{"Issued", "Consumed", "Revoked", "Expired"},
+		},
+		PrivilegedAdmin: privilegedAdminContract{
+			ContractVersion:              "veer.administration.v1alpha1",
+			Ledger:                       "process-local-reference",
+			StrongAuthentication:         "verifier-port-no-adapter",
+			StrongAuthenticationFailures: []string{"strong-authentication-invalid", "strong-authentication-unavailable"},
+			MaxAdministrators:            64,
+			MaxTrackedElevations:         1_000,
+			MaxReasonRunes:               256,
+			MaxCaseReferenceRunes:        128,
+			MaxStrongAuthProofAgeSeconds: 300,
+			MaxElevationDurationSeconds:  900,
+			EligibleActions: []string{
+				"audit.export", "operation.quarantine", "work.redrive",
+			},
+			TargetKinds:        []string{"PlatformAudit", "WorkspaceAudit", "Operation"},
+			GrantStates:        []string{"Active", "Consumed", "Revoked", "Expired"},
+			Renewal:            "unsupported",
+			ExpirationBoundary: "expired-at-equality",
 		},
 	}
 }

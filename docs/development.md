@@ -97,7 +97,7 @@ check.
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
-| `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
+| `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization/audit projections, schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify checked-in architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
 
@@ -153,6 +153,25 @@ Issue #25 does not change the public transport. `./hack/dev api` must continue
 to report exactly four paths, seven operations, and 81 schemas. Adding broker
 material, a backend location, or session state to OpenAPI is a contract failure,
 not a required projection update.
+
+Audit or privileged-administration contract changes must keep
+[`ADR 0011`](architecture/0011-tamper-evident-audit-and-privileged-administration.md),
+the `internal/core/domain/audit` and `internal/core/domain/administration`
+constants and registries, the `StrongAuthenticationVerifier` port, the root
+`x-veer-audit` projection, and the formal threat-model status in one reviewed
+change. Focused tests must cover canonical event and segment bounds, exact
+vocabulary order, operation-timeline correlations, actor/authentication
+compatibility, stream scope, chain and export verification, trusted terminal
+checkpoints, retention boundaries and holds, exact administrator identity,
+sealed action/target pairs, strong-authentication age and replay, one-use grant
+lifecycle, clock regression, expiry equality, and redaction/serialization
+canaries. They must also prove that an internally valid hash-chain prefix does
+not establish tail completeness without a separately trusted expected head.
+These are deterministic reference checks: they make no database, archive,
+signing, cloud, or paid-service call and do not establish durable, cross-node,
+atomic, API, or worker enforcement. The root projection adds no public path,
+operation, or schema; `./hack/dev api` must still report exactly four paths,
+seven operations, and 81 schemas.
 
 ## Network, disk, and CI cost safeguards
 
