@@ -146,6 +146,32 @@ func TestJWKSBadSignatureDoesNotRefetchJustResolvedGeneration(t *testing.T) {
 	}
 }
 
+func TestJWKSFailedProactiveRefreshThrottlesReactiveRetry(t *testing.T) {
+	fixture := newKeyServer(t)
+	clock := newFakeClock(testNow)
+	trustedKey := generateECDSAKey(t)
+	untrustedKey := generateECDSAKey(t)
+	fixture.setKeys(t, publicJWK(trustedKey, "stable-outage-kid", jose.ES256))
+	anchor := testTrustAnchor(fixture, identity.KindHuman)
+	verifier := newTestVerifier(t, fixture, anchor, clock)
+	claims := cacheClaims(anchor, clock.Now())
+	trustedToken := signClaims(t, trustedKey, jose.ES256, "stable-outage-kid", "at+jwt", claims)
+	if _, err := authenticate(t, verifier, trustedToken); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+
+	clock.Advance(anchor.Cache.Freshness - anchor.Cache.RefreshAhead)
+	fixture.setResponse(http.StatusServiceUnavailable, []byte(`{"error":"unavailable"}`))
+	badToken := signClaims(t, untrustedKey, jose.ES256, "stable-outage-kid", "at+jwt", claims)
+	for range 8 {
+		_, err := authenticate(t, verifier, badToken)
+		requireAuthenticationError(t, err, ports.ErrAuthenticationInvalid)
+	}
+	if got := fixture.hits.Load(); got != 2 {
+		t.Fatalf("failed proactive plus bad-signature retries caused %d fetches, want 2", got)
+	}
+}
+
 func TestJWKSProactiveRefreshAndFreshKeyFallback(t *testing.T) {
 	fixture := newKeyServer(t)
 	clock := newFakeClock(testNow)

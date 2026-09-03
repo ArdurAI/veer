@@ -84,9 +84,10 @@ type keyReference struct {
 }
 
 type cachedVerificationKey struct {
-	key                  jose.JSONWebKey
-	generation           uint64
-	resolvedAfterRefresh bool
+	key                jose.JSONWebKey
+	generation         uint64
+	refreshAttempted   bool
+	refreshAttemptedAt time.Time
 }
 
 type refreshFlight struct {
@@ -174,8 +175,7 @@ func (cache *keyCache) resolve(
 		refreshAllowed = !now.Before(cache.nextReactiveRefreshAllowed)
 	}
 	observedAttempt := cache.attempt
-	observedGeneration := cache.generation
-	generation := observedGeneration
+	generation := cache.generation
 	cache.mu.Unlock()
 
 	if found && fresh && (!due || !refreshAllowed) {
@@ -198,12 +198,14 @@ func (cache *keyCache) resolve(
 		key, found = cache.keys[reference]
 		fresh = len(cache.keys) > 0 && now.Before(cache.freshUntil)
 		generation = cache.generation
+		refreshAttemptedAt := cache.lastAttemptAt
 		cache.mu.Unlock()
 		if fresh && found {
 			return cachedVerificationKey{
-				key:                  key,
-				generation:           generation,
-				resolvedAfterRefresh: generation != observedGeneration,
+				key:                key,
+				generation:         generation,
+				refreshAttempted:   true,
+				refreshAttemptedAt: refreshAttemptedAt,
 			}, nil
 		}
 		if fresh {
@@ -217,12 +219,14 @@ func (cache *keyCache) resolve(
 	key, found = cache.keys[reference]
 	fresh = len(cache.keys) > 0 && now.Before(cache.freshUntil)
 	generation = cache.generation
+	refreshAttemptedAt := cache.lastAttemptAt
 	cache.mu.Unlock()
 	if found && fresh {
 		return cachedVerificationKey{
-			key:                  key,
-			generation:           generation,
-			resolvedAfterRefresh: generation != observedGeneration,
+			key:                key,
+			generation:         generation,
+			refreshAttempted:   true,
+			refreshAttemptedAt: refreshAttemptedAt,
 		}, nil
 	}
 	if fresh {
@@ -260,7 +264,8 @@ func (cache *keyCache) resolveAfterSignatureFailure(
 		}
 		return cachedVerificationKey{}, true, errKeySourceUnavailable
 	}
-	if previous.resolvedAfterRefresh {
+	if previous.refreshAttempted {
+		cache.recordCooldown(refreshReactive, previous.refreshAttemptedAt)
 		cache.mu.Unlock()
 		return cachedVerificationKey{}, false, nil
 	}
