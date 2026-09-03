@@ -64,6 +64,13 @@ func ValidateProviderConnectionSpec(spec ProviderConnectionSpec) error {
 	return control.ValidateProviderConnectionSpec(spec)
 }
 
+// CheckProviderConnectionSpecTransition preserves the control package's
+// immutable provider and credential-reference identity contract through the
+// version-independent hub. Only the credential version may rotate in place.
+func CheckProviderConnectionSpecTransition(before, after ProviderConnectionSpec) error {
+	return control.CheckProviderConnectionSpecTransition(before, after)
+}
+
 // ValidateProviderConnectionStatus preserves all control observation bounds,
 // ordering rules, and explicit-known/unknown semantics.
 func ValidateProviderConnectionStatus(status ProviderConnectionStatus, resourceGeneration int64) error {

@@ -69,6 +69,22 @@ func FuzzWriteMetadataEqualityUsesLabelKeyPresence(f *testing.F) {
 	})
 }
 
+func TestProviderConnectionSpecTransitionContractIsAvailableThroughHub(t *testing.T) {
+	t.Parallel()
+
+	before := validProviderSpec()
+	after := before
+	after.CredentialRef.Version = "next"
+	if err := CheckProviderConnectionSpecTransition(before, after); err != nil {
+		t.Fatalf("CheckProviderConnectionSpecTransition(rotation) error = %v", err)
+	}
+
+	after.Provider = "kubernetes"
+	if err := CheckProviderConnectionSpecTransition(before, after); !errors.Is(err, control.ErrProviderConnectionRebind) {
+		t.Fatalf("CheckProviderConnectionSpecTransition(rebind) error = %v", err)
+	}
+}
+
 func TestIntentClosedSumAllKinds(t *testing.T) {
 	t.Parallel()
 

@@ -115,14 +115,14 @@ func (broker *Broker) prepareRequestLocked(
 		switch {
 		case request.ConnectionGeneration() < lineage.generation:
 			return nil, nil, nil, ErrStale
+		case request.ConnectionGeneration() == lineage.generation &&
+			!sameLineageRequest(lineage, request):
+			return nil, nil, nil, ErrConflict
+		case lineage.revokedThrough >= request.ConnectionGeneration():
+			return nil, nil, nil, ErrRevoked
 		case request.ConnectionGeneration() > lineage.generation:
 			return nil, nil, nil, ErrCredentialRotationRequired
-		case !sameLineageRequest(lineage, request):
-			return nil, nil, nil, ErrConflict
 		}
-	}
-	if lineage != nil && lineage.revokedThrough >= request.ConnectionGeneration() {
-		return nil, nil, nil, ErrRevoked
 	}
 
 	operation := broker.operations[opKey]

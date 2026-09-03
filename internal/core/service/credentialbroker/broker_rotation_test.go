@@ -1166,7 +1166,9 @@ func TestRepeatedCurrentGenerationRevokeTracksCanceledNextRotationCleanup(t *tes
 			}
 		},
 	}
-	broker := mustTestBroker(t, clock, &fakeBudget{}, &fakeResolver{}, issuer, base.Recipient())
+	budget := &fakeBudget{}
+	resolver := &fakeResolver{}
+	broker := mustTestBroker(t, clock, budget, resolver, issuer, base.Recipient())
 	prior, err := broker.Acquire(context.Background(), base)
 	if err != nil {
 		t.Fatalf("Acquire(base) error = %v", err)
@@ -1193,6 +1195,21 @@ func TestRepeatedCurrentGenerationRevokeTracksCanceledNextRotationCleanup(t *tes
 		t.Fatalf("revoked-through after canceling pending rotation = %d, want %d", revokedThrough, next.ConnectionGeneration())
 	}
 	waitForSignal(t, issueCanceled, "next-generation Issue cancellation")
+	assertRevokedTargetRejected := func(label string) {
+		claims, resolves := budget.callCount(), resolver.callCount()
+		issues, revokes := issuer.issueCount(), issuer.revokeCount()
+		if lease, acquireErr := broker.Acquire(context.Background(), next); lease != nil || !errors.Is(acquireErr, ErrRevoked) {
+			t.Fatalf("Acquire(%s canceled rotation target) = %v, %v, want nil, ErrRevoked", label, lease, acquireErr)
+		}
+		if rotation, rotateErr := broker.Rotate(context.Background(), next); rotation.Valid() || !errors.Is(rotateErr, ErrRevoked) {
+			t.Fatalf("Rotate(%s canceled rotation target) = %v, %v, want invalid, ErrRevoked", label, rotation, rotateErr)
+		}
+		if budget.callCount() != claims || resolver.callCount() != resolves ||
+			issuer.issueCount() != issues || issuer.revokeCount() != revokes {
+			t.Fatalf("%s canceled rotation target classification called a backend", label)
+		}
+	}
+	assertRevokedTargetRejected("during Issue cleanup")
 
 	repeatWithMidCallCancellation := func(label string, request credential.Request) lifecycleOutcome {
 		mu.Lock()
@@ -1239,6 +1256,7 @@ func TestRepeatedCurrentGenerationRevokeTracksCanceledNextRotationCleanup(t *tes
 	close(issueReturn)
 	lateSession := receiveResult(t, lateSessionOut, "late next-generation Issue output")
 	waitForSignal(t, cleanupRevokeEntered, "late Issue cleanup Revoke")
+	assertRevokedTargetRejected("during Revoke cleanup")
 	repeatWithMidCallCancellation("current generation while cleanup Revoke is outstanding", base)
 	repeatWithMidCallCancellation("target generation while cleanup Revoke is outstanding", next)
 	assertNoResult(t, rotationOut, "Rotate before late output cleanup")
@@ -1259,6 +1277,7 @@ func TestRepeatedCurrentGenerationRevokeTracksCanceledNextRotationCleanup(t *tes
 	if gotBaseRevokes != 1 || gotCleanupRevokes != 1 {
 		t.Fatalf("Revoke calls = base:%d cleanup:%d, want 1/1", gotBaseRevokes, gotCleanupRevokes)
 	}
+	assertRevokedTargetRejected("after cleanup")
 	result, err = broker.RevokeConnection(context.Background(), next)
 	if err != nil || result != ports.RevocationNotRequired {
 		t.Fatalf("RevokeConnection(canceled target after cleanup) = %v, %v, want not-required, nil", result, err)

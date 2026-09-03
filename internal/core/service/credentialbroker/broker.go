@@ -362,6 +362,12 @@ func (lease *Lease) Close() error {
 }
 
 // Use exposes an ephemeral copy to one callback under a baggage-free context.
+// Lease close and broker lifecycle changes are linearized against scratch-copy
+// admission. Caller cancellation racing the copy can create only an internal
+// scratch that is cleared without being exposed to the caller's callback.
+// A completed scratch copy is the use-start point: later invalidation may
+// finish before that admitted callback is scheduled, but it cancels the use
+// context and the final Use result reports the lifecycle outcome.
 // Non-context callback failures are collapsed to ErrUnavailable so provider
 // response text cannot escape through the broker boundary.
 func (lease *Lease) Use(
@@ -375,6 +381,7 @@ func (lease *Lease) Use(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	callerDone := ctx.Done()
 
 	state := lease.state
 	state.mu.Lock()
@@ -407,25 +414,141 @@ func (lease *Lease) Use(
 		broker.mu.Unlock()
 		return ErrExpired
 	}
-	cell.lastUsed = broker.touchLocked()
 	expires := cell.session.ExpiresAt().Add(-credential.SessionExpirySkew)
-	remaining := expires.Sub(now)
 	invalidCtx := cell.invalidCtx
 	broker.mu.Unlock()
 
-	useCtx, cancel := context.WithTimeout(context.Background(), remaining)
-	stopCaller := context.AfterFunc(ctx, cancel)
-	stopLease := context.AfterFunc(closedCtx, cancel)
-	stopCell := context.AfterFunc(invalidCtx, cancel)
+	useRoot, cancelRoot := context.WithCancel(context.Background())
+	stopCaller := context.AfterFunc(ctx, cancelRoot)
+	stopLease := context.AfterFunc(closedCtx, cancelRoot)
+	stopCell := context.AfterFunc(invalidCtx, cancelRoot)
+	var cancelUse context.CancelFunc
+	cleanupOnce := sync.Once{}
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			stopCaller()
+			stopLease()
+			stopCell()
+			if cancelUse != nil {
+				cancelUse()
+			}
+			cancelRoot()
+		})
+	}
+	defer cleanup()
+
+	// The fresh sample closes a slow-hook gap: a lease that was usable during
+	// preliminary validation may no longer have enough lifetime at admission.
+	admissionSample := broker.sampleNow()
+	state.mu.Lock()
+	select {
+	case <-callerDone:
+		state.mu.Unlock()
+		return contextFailure(ctx)
+	default:
+	}
+	if state.closed {
+		state.mu.Unlock()
+		return ErrRevoked
+	}
+	broker.mu.Lock()
+	admissionLocked := true
+	releaseAdmission := func() {
+		if !admissionLocked {
+			return
+		}
+		admissionLocked = false
+		broker.mu.Unlock()
+		state.mu.Unlock()
+	}
+	// This defer is also the panic/error path for a material implementation that
+	// returns without invoking its callback. The normal wrapper releases first.
+	defer releaseAdmission()
+	select {
+	case <-callerDone:
+		releaseAdmission()
+		return contextFailure(ctx)
+	default:
+	}
+	admittedAt, err := broker.observeNowLocked(admissionSample)
+	if err != nil {
+		releaseAdmission()
+		return err
+	}
+	if broker.closed {
+		releaseAdmission()
+		return ErrClosed
+	}
+	if cell.invalid || !broker.cellCurrentLocked(cell) {
+		releaseAdmission()
+		return ErrRevoked
+	}
+	if !cell.session.CanStartUse(admittedAt) {
+		cell.draining = true
+		releaseAdmission()
+		return ErrExpired
+	}
+	remaining := expires.Sub(admittedAt)
+	useCtx, cancel := context.WithTimeout(useRoot, remaining)
+	cancelUse = cancel
+	preCopyCanceled := false
+	select {
+	case <-callerDone:
+		preCopyCanceled = true
+	case <-useCtx.Done():
+		preCopyCanceled = true
+	default:
+	}
+	if preCopyCanceled {
+		releaseAdmission()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if useCtx.Err() == context.DeadlineExceeded {
+			return ErrExpired
+		}
+		return ErrUnavailable
+	}
+
+	callbackStarted := false
+	callerCanceledDuringCopy := false
+	useCanceledDuringCopy := false
 	callbackErr := cell.session.WithBytes(func(value []byte) error {
+		// SessionMaterial has already cloned its bounded scratch and released its
+		// material lock. Recheck cancellation before exposing that scratch, then
+		// release both admission locks before entering caller code.
+		select {
+		case <-callerDone:
+			callerCanceledDuringCopy = true
+			releaseAdmission()
+			return nil
+		case <-useCtx.Done():
+			useCanceledDuringCopy = true
+			releaseAdmission()
+			return nil
+		default:
+		}
+		cell.lastUsed = broker.touchLocked()
+		callbackStarted = true
+		releaseAdmission()
 		return callback(useCtx, value)
 	})
+	releaseAdmission()
 	useErr := useCtx.Err()
-	stopCaller()
-	stopLease()
-	stopCell()
-	cancel()
+	cleanup()
 
+	if callerCanceledDuringCopy {
+		return contextFailure(ctx)
+	}
+	if useCanceledDuringCopy {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if useErr == context.DeadlineExceeded {
+			return ErrExpired
+		}
+		return ErrUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -460,6 +583,9 @@ func (lease *Lease) Use(
 	}
 	if !finishedAt.Before(expires) {
 		return ErrExpired
+	}
+	if !callbackStarted {
+		return ErrUnavailable
 	}
 	if callbackErr != nil {
 		return ErrUnavailable

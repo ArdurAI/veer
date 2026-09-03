@@ -331,25 +331,31 @@ func TestTypedNilCredentialPointersAreSafeThroughGenericBoundaries(t *testing.T)
 
 func assertSafeValue(t testing.TB, value any) {
 	t.Helper()
+	forbiddenValues := []string{
+		testWorkspaceID.String(),
+		testEnvironmentA.String(),
+		testConnectionA.String(),
+		testComponentA.String(),
+		testOperationA.String(),
+		testReferenceA.String(),
+		"provider-adapter",
+		"version_1",
+		string(credentialBytes(48)),
+		string(credentialBytes(49)),
+	}
 	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d"} {
 		formatted := fmt.Sprintf(format, value)
-		for forbiddenIndex, forbidden := range []string{
-			testWorkspaceID.String(),
-			testEnvironmentA.String(),
-			testConnectionA.String(),
-			testReferenceA.String(),
-			"provider-adapter",
-			"version_1",
-			string(credentialBytes(48)),
-			string(credentialBytes(49)),
-		} {
+		for forbiddenIndex, forbidden := range forbiddenValues {
 			if bytes.Contains([]byte(formatted), []byte(forbidden)) {
 				t.Fatalf("format %q for %T leaked protected field %d", format, value, forbiddenIndex)
 			}
 		}
 	}
-	if logValue := slog.AnyValue(value).Resolve().String(); bytes.Contains([]byte(logValue), []byte(testReferenceA.String())) {
-		t.Fatal("slog value leaked a protected field")
+	logValue := slog.AnyValue(value).Resolve().String()
+	for forbiddenIndex, forbidden := range forbiddenValues {
+		if bytes.Contains([]byte(logValue), []byte(forbidden)) {
+			t.Fatalf("slog value for %T leaked protected field %d", value, forbiddenIndex)
+		}
 	}
 	if data, err := json.Marshal(value); !errors.Is(err, ErrSerializationForbidden) || len(data) != 0 {
 		t.Fatalf("json.Marshal() = %q, %v", data, err)

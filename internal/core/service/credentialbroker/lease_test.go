@@ -9,11 +9,50 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ArdurAI/veer/internal/core/domain/credential"
 	"github.com/ArdurAI/veer/internal/core/ports"
 )
+
+// gatedAfterFuncContext pauses context.AfterFunc registration without holding
+// any broker lock. Tests use the pause to let cancellation or invalidation win
+// after Lease.Use's preliminary checks but before its final use admission.
+type gatedAfterFuncContext struct {
+	parent  context.Context
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newGatedAfterFuncContext() (*gatedAfterFuncContext, context.CancelFunc) {
+	parent, cancel := context.WithCancel(context.Background())
+	return &gatedAfterFuncContext{
+		parent:  parent,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}, cancel
+}
+
+func (ctx *gatedAfterFuncContext) Deadline() (time.Time, bool) {
+	return ctx.parent.Deadline()
+}
+
+func (ctx *gatedAfterFuncContext) Done() <-chan struct{} { return ctx.parent.Done() }
+
+func (ctx *gatedAfterFuncContext) Err() error { return ctx.parent.Err() }
+
+// Value deliberately does not expose the parent cancelCtx. That makes the
+// standard library use this context's synchronous AfterFunc registration hook.
+func (*gatedAfterFuncContext) Value(any) any { return nil }
+
+func (ctx *gatedAfterFuncContext) AfterFunc(callback func()) func() bool {
+	ctx.once.Do(func() { close(ctx.entered) })
+	<-ctx.release
+	return context.AfterFunc(ctx.parent, callback)
+}
 
 func TestCopiedLeaseClosesExactlyOnce(t *testing.T) {
 	clock := newManualClock(testBrokerNow)
@@ -143,6 +182,248 @@ func TestLeaseUseFinalCheckRejectsConcurrentRevokeAndClose(t *testing.T) {
 	assertSessionsInvalid(t, issuer.sessionSnapshot()...)
 	if got := broker.Stats().ActiveLeases; got != 0 {
 		t.Fatalf("ActiveLeases = %d, want 0", got)
+	}
+}
+
+func TestLeaseUseAdmissionRejectsPreCopyCancellationAndClose(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(testing.TB, *Lease, *manualClock, context.CancelFunc)
+		wantErr error
+	}{
+		{
+			name: "caller cancellation",
+			mutate: func(_ testing.TB, _ *Lease, _ *manualClock, cancel context.CancelFunc) {
+				cancel()
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name: "original lease close",
+			mutate: func(t testing.TB, lease *Lease, _ *manualClock, _ context.CancelFunc) {
+				t.Helper()
+				if err := lease.Close(); err != nil {
+					t.Fatalf("Lease.Close() error = %v", err)
+				}
+			},
+			wantErr: ErrRevoked,
+		},
+		{
+			name: "copied lease close",
+			mutate: func(t testing.TB, lease *Lease, _ *manualClock, _ context.CancelFunc) {
+				t.Helper()
+				copied := *lease
+				if err := copied.Close(); err != nil {
+					t.Fatalf("copied Lease.Close() error = %v", err)
+				}
+			},
+			wantErr: ErrRevoked,
+		},
+		{
+			name: "new-use lifetime expiration",
+			mutate: func(_ testing.TB, lease *Lease, clock *manualClock, _ context.CancelFunc) {
+				clock.Set(lease.ExpiresAt().Add(
+					-credential.SessionExpirySkew - credential.MinNewUseLifetime + time.Second,
+				))
+			},
+			wantErr: ErrExpired,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clock := newManualClock(testBrokerNow)
+			request := mustTestRequest(t, defaultTestRequestConfig())
+			issuer := &fakeIssuer{clock: clock}
+			broker := mustTestBroker(
+				t,
+				clock,
+				&fakeBudget{},
+				&fakeResolver{},
+				issuer,
+				request.Recipient(),
+			)
+			lease, err := broker.Acquire(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Acquire() error = %v", err)
+			}
+
+			useCtx, cancelUse := newGatedAfterFuncContext()
+			releaseUse := sync.OnceFunc(func() { close(useCtx.release) })
+			defer func() {
+				releaseUse()
+				cancelUse()
+				_ = lease.Close()
+				_, _ = broker.Close(context.Background())
+			}()
+			callbackEntered := make(chan struct{}, 1)
+			useResult := make(chan error, 1)
+			go func() {
+				useResult <- lease.Use(useCtx, func(context.Context, []byte) error {
+					callbackEntered <- struct{}{}
+					return nil
+				})
+			}()
+			waitForSignal(t, useCtx.entered, "Lease.Use pre-copy admission pause")
+
+			test.mutate(t, lease, clock, cancelUse)
+			releaseUse()
+			if err := receiveResult(t, useResult, "Lease.Use after pre-copy invalidation"); !errors.Is(err, test.wantErr) {
+				t.Fatalf("Lease.Use() error = %v, want %v", err, test.wantErr)
+			}
+			assertNoResult(t, callbackEntered, "credential-bearing callback")
+		})
+	}
+}
+
+func TestLeaseUseAdmissionRejectsPreCopyLifecycleInvalidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		invalidate func(*Broker, credential.Request) (ports.RevocationResult, error)
+		wantErr    error
+	}{
+		{
+			name: "connection revoke",
+			invalidate: func(broker *Broker, request credential.Request) (ports.RevocationResult, error) {
+				return broker.RevokeConnection(context.Background(), request)
+			},
+			wantErr: ErrRevoked,
+		},
+		{
+			name: "operation cancel",
+			invalidate: func(broker *Broker, request credential.Request) (ports.RevocationResult, error) {
+				return broker.CancelOperation(context.Background(), request)
+			},
+			wantErr: ErrRevoked,
+		},
+		{
+			name: "operation close",
+			invalidate: func(broker *Broker, request credential.Request) (ports.RevocationResult, error) {
+				return broker.CloseOperation(context.Background(), request)
+			},
+			wantErr: ErrRevoked,
+		},
+		{
+			name: "broker close",
+			invalidate: func(broker *Broker, _ credential.Request) (ports.RevocationResult, error) {
+				return broker.Close(context.Background())
+			},
+			wantErr: ErrClosed,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clock := newManualClock(testBrokerNow)
+			request := mustTestRequest(t, defaultTestRequestConfig())
+			revokeEntered := make(chan struct{})
+			revokeRelease := make(chan struct{})
+			releaseRevoke := sync.OnceFunc(func() { close(revokeRelease) })
+			issuer := &fakeIssuer{
+				clock: clock,
+				revokeFn: func(context.Context, credential.Request, *credential.IssuedSession) (ports.RevocationResult, error) {
+					close(revokeEntered)
+					<-revokeRelease
+					return ports.RevocationProviderConfirmed, nil
+				},
+			}
+			broker := mustTestBroker(
+				t,
+				clock,
+				&fakeBudget{},
+				&fakeResolver{},
+				issuer,
+				request.Recipient(),
+			)
+			lease, err := broker.Acquire(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Acquire() error = %v", err)
+			}
+
+			useCtx, cancelUse := newGatedAfterFuncContext()
+			releaseUse := sync.OnceFunc(func() { close(useCtx.release) })
+			defer func() {
+				releaseUse()
+				cancelUse()
+				_ = lease.Close()
+				releaseRevoke()
+				_, _ = broker.Close(context.Background())
+			}()
+			callbackEntered := make(chan struct{}, 1)
+			useResult := make(chan error, 1)
+			go func() {
+				useResult <- lease.Use(useCtx, func(context.Context, []byte) error {
+					callbackEntered <- struct{}{}
+					return nil
+				})
+			}()
+			waitForSignal(t, useCtx.entered, "Lease.Use pre-copy lifecycle pause")
+
+			lifecycleResult := make(chan lifecycleOutcome, 1)
+			go func() {
+				result, err := test.invalidate(broker, request)
+				lifecycleResult <- lifecycleOutcome{result: result, err: err}
+			}()
+			waitForSignal(t, revokeEntered, "upstream Revoke after local invalidation")
+			releaseUse()
+			if err := receiveResult(t, useResult, "Lease.Use after lifecycle invalidation"); !errors.Is(err, test.wantErr) {
+				t.Fatalf("Lease.Use() error = %v, want %v", err, test.wantErr)
+			}
+			assertNoResult(t, callbackEntered, "credential-bearing callback")
+
+			releaseRevoke()
+			invalidated := receiveResult(t, lifecycleResult, "lifecycle result")
+			if invalidated.result != ports.RevocationProviderConfirmed || invalidated.err != nil {
+				t.Fatalf(
+					"lifecycle result = %v, %v, want provider-confirmed, nil",
+					invalidated.result,
+					invalidated.err,
+				)
+			}
+		})
+	}
+}
+
+func TestLeaseUseAdmissionReleasesLocksBeforeReentrantCallback(t *testing.T) {
+	clock := newManualClock(testBrokerNow)
+	request := mustTestRequest(t, defaultTestRequestConfig())
+	issuer := &fakeIssuer{clock: clock}
+	broker := mustTestBroker(t, clock, &fakeBudget{}, &fakeResolver{}, issuer, request.Recipient())
+	lease, err := broker.Acquire(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	copied := *lease
+
+	callbackDone := make(chan struct{})
+	useResult := make(chan error, 1)
+	go func() {
+		useResult <- lease.Use(context.Background(), func(_ context.Context, value []byte) error {
+			if string(value) != testSessionCanary {
+				t.Errorf("Lease.Use() callback received unexpected material")
+			}
+			if closeErr := copied.Close(); closeErr != nil {
+				t.Errorf("reentrant copied Lease.Close() error = %v", closeErr)
+			}
+			result, revokeErr := broker.RevokeConnection(context.Background(), request)
+			if result != ports.RevocationProviderConfirmed || revokeErr != nil {
+				t.Errorf(
+					"reentrant RevokeConnection() = %v, %v, want provider-confirmed, nil",
+					result,
+					revokeErr,
+				)
+			}
+			close(callbackDone)
+			return nil
+		})
+	}()
+
+	waitForSignal(t, callbackDone, "reentrant Lease.Use callback")
+	if err := receiveResult(t, useResult, "reentrant Lease.Use result"); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("Lease.Use() error = %v, want ErrRevoked", err)
+	}
+	if _, err := broker.Close(context.Background()); err != nil {
+		t.Fatalf("Broker.Close() error = %v", err)
 	}
 }
 

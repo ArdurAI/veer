@@ -118,6 +118,124 @@ func TestWorkspaceOmissionEqualsExplicitFalse(t *testing.T) {
 	}
 }
 
+func TestProviderConnectionReplacementIdentityIsImmutable(t *testing.T) {
+	t.Parallel()
+
+	snapshot, records := admissionFixture(t, testWorkspaceID)
+	current := providerConnectionSpec("aws", "cred_01J0000000000000000000000", "v1")
+	base := replaceContext(snapshot)
+	base.CurrentProviderConnectionSpec = current
+
+	tests := []struct {
+		name      string
+		provider  string
+		reference string
+		version   string
+		wantPath  string
+	}{
+		{name: "exact replay", provider: "aws", reference: current.CredentialRef.ReferenceID, version: "v1"},
+		{name: "version rotation", provider: "aws", reference: current.CredentialRef.ReferenceID, version: "v2"},
+		{name: "provider rebind", provider: "kubernetes", reference: current.CredentialRef.ReferenceID, version: "v1", wantPath: "/spec/provider"},
+		{name: "reference rebind", provider: "aws", reference: "cred_01J1111111111111111111111", version: "v1", wantPath: "/spec/credentialRef/referenceId"},
+		{
+			name: "both identities rebind selects lexical path", provider: "kubernetes",
+			reference: "cred_01J1111111111111111111111", version: "v1",
+			wantPath: "/spec/credentialRef/referenceId",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			raw := providerConnectionIntentJSON(test.provider, test.reference, test.version)
+			intent, err := AdmitReplace(raw, records[hierarchy.KindProviderConnection], base)
+			if test.wantPath != "" {
+				if intent != nil {
+					t.Fatalf("AdmitReplace(rebind) intent = %T, want nil", intent)
+				}
+				assertFailure(t, err, StageImmutable, CodeImmutableField, test.wantPath)
+				return
+			}
+			if err != nil {
+				t.Fatalf("AdmitReplace() error = %v", err)
+			}
+			got := intent.(*model.ProviderConnectionIntent).Spec()
+			if got.Provider != test.provider || got.CredentialRef.ReferenceID != test.reference ||
+				got.CredentialRef.Version != test.version {
+				t.Fatalf("admitted spec = %#v", got)
+			}
+		})
+	}
+}
+
+func TestProviderConnectionReplacementRequiresValidRetainedSpec(t *testing.T) {
+	t.Parallel()
+
+	snapshot, records := admissionFixture(t, testWorkspaceID)
+	if intent, err := AdmitReplace(
+		intentJSON(hierarchy.KindEnvironment, false),
+		records[hierarchy.KindEnvironment],
+		ReplaceContext{Snapshot: snapshot},
+	); err != nil || intent == nil {
+		t.Fatalf("AdmitReplace(Environment without provider spec) = %T, %v", intent, err)
+	}
+
+	tests := []struct {
+		name string
+		spec model.ProviderConnectionSpec
+	}{
+		{name: "missing"},
+		{
+			name: "invalid",
+			spec: providerConnectionSpec(
+				"AWS", "cred_01J0000000000000000000000", "v1",
+			),
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			context := replaceContext(snapshot)
+			context.CurrentProviderConnectionSpec = test.spec
+			intent, err := AdmitReplace(
+				providerConnectionIntentJSON("aws", "cred_01J0000000000000000000000", "v1"),
+				records[hierarchy.KindProviderConnection],
+				context,
+			)
+			if intent != nil {
+				t.Fatalf("AdmitReplace(invalid retained spec) intent = %T, want nil", intent)
+			}
+			assertFailure(t, err, StageImmutable, CodeImmutableField, "/spec")
+		})
+	}
+}
+
+func TestProviderConnectionReplacementStagePrecedence(t *testing.T) {
+	t.Parallel()
+
+	snapshot, records := admissionFixture(t, testWorkspaceID)
+	current := providerConnectionSpec("aws", "cred_01J0000000000000000000000", "v1")
+
+	context := ReplaceContext{CurrentProviderConnectionSpec: current}
+	_, err := AdmitReplace(
+		providerConnectionIntentJSON("kubernetes", "cred_01J1111111111111111111111", "v1"),
+		records[hierarchy.KindProviderConnection],
+		context,
+	)
+	assertFailure(t, err, StageImmutable, CodeImmutableField, "/spec/credentialRef/referenceId")
+
+	invalidSchema := bytes.Replace(
+		providerConnectionIntentJSON("kubernetes", "cred_01J1111111111111111111111", "v1"),
+		[]byte(`"provider":"kubernetes"`),
+		[]byte(`"provider":7`),
+		1,
+	)
+	context.Snapshot = snapshot
+	_, err = AdmitReplace(invalidSchema, records[hierarchy.KindProviderConnection], context)
+	assertFailure(t, err, StageSchema, CodeInvalidType, "/spec/provider")
+}
+
 func TestPolicyAdmissionSchemaAndSemanticBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -539,6 +657,46 @@ func TestAdmissionDoesNotMutateInputsOrRetainedOutputs(t *testing.T) {
 	}
 }
 
+func TestRejectedProviderConnectionRebindDoesNotMutateRetainedInputs(t *testing.T) {
+	t.Parallel()
+
+	snapshot, records := admissionFixture(t, testWorkspaceID)
+	current := records[hierarchy.KindProviderConnection]
+	context := replaceContext(snapshot)
+	raw := providerConnectionIntentJSON(
+		"kubernetes", "cred_01J1111111111111111111111", "v2",
+	)
+	rawBefore := bytes.Clone(raw)
+	currentBefore := current
+	contextBefore := context
+	retainedBefore, err := snapshot.Lookup(testProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	intent, err := AdmitReplace(raw, current, context)
+	if intent != nil {
+		t.Fatalf("AdmitReplace(rebind) intent = %T, want nil", intent)
+	}
+	assertFailure(t, err, StageImmutable, CodeImmutableField, "/spec/credentialRef/referenceId")
+	if !bytes.Equal(raw, rawBefore) {
+		t.Fatal("AdmitReplace mutated rejected raw bytes")
+	}
+	if !reflect.DeepEqual(current, currentBefore) {
+		t.Fatal("AdmitReplace mutated rejected current record")
+	}
+	if !reflect.DeepEqual(context, contextBefore) {
+		t.Fatal("AdmitReplace mutated rejected replacement context")
+	}
+	retainedAfter, lookupErr := snapshot.Lookup(testProviderID)
+	if lookupErr != nil {
+		t.Fatal(lookupErr)
+	}
+	if !reflect.DeepEqual(retainedBefore, retainedAfter) {
+		t.Fatal("AdmitReplace mutated rejected hierarchy snapshot")
+	}
+}
+
 func TestRejectedWritesDoNotMutateInputsCurrentOrSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -823,6 +981,25 @@ func intentJSON(kind hierarchy.Kind, explicitTrue bool) []byte {
 	return []byte(fmt.Sprintf(`{"apiVersion":"v1alpha1","kind":%q,"metadata":{"displayName":"example","labels":{"team":"platform"}},"spec":%s}`, kind, spec))
 }
 
+func providerConnectionIntentJSON(provider, referenceID, version string) []byte {
+	return []byte(fmt.Sprintf(
+		`{"apiVersion":"v1alpha1","kind":"ProviderConnection","metadata":{"displayName":"example","labels":{"team":"platform"}},"spec":{"provider":%q,"credentialRef":{"referenceId":%q,"version":%q}}}`,
+		provider,
+		referenceID,
+		version,
+	))
+}
+
+func providerConnectionSpec(provider, referenceID, version string) model.ProviderConnectionSpec {
+	return model.ProviderConnectionSpec{
+		Provider: provider,
+		CredentialRef: model.CredentialReference{
+			ReferenceID: referenceID,
+			Version:     version,
+		},
+	}
+}
+
 func policyIntentJSON(spec string) []byte {
 	return []byte(fmt.Sprintf(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"example","labels":{"team":"platform"}},"spec":%s}`, spec))
 }
@@ -888,7 +1065,12 @@ func createContext(kind hierarchy.Kind, snapshot hierarchy.Snapshot) CreateConte
 }
 
 func replaceContext(snapshot hierarchy.Snapshot) ReplaceContext {
-	context := ReplaceContext{Snapshot: snapshot}
+	context := ReplaceContext{
+		Snapshot: snapshot,
+		CurrentProviderConnectionSpec: providerConnectionSpec(
+			"aws", "cred_01J0000000000000000000000", "v1",
+		),
+	}
 	if snapshot.Len() > 0 {
 		context.Members = mustMemberDirectory(snapshot.WorkspaceID(), nil)
 	}
