@@ -1,6 +1,12 @@
 package oidc
 
 import (
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -68,6 +74,77 @@ func TestVerifierAuthenticatesWorkload(t *testing.T) {
 	if principal.Kind() != identity.KindWorkload || !present ||
 		workload.Value() != "spiffe://tenant.example/workload/api" {
 		t.Fatal("workload principal did not preserve its verified opaque identity")
+	}
+}
+
+func TestVerifierEnforcesJWAPSSSaltLength(t *testing.T) {
+	key := generateRSAKey(t)
+	tests := []struct {
+		algorithm jose.SignatureAlgorithm
+		hash      crypto.Hash
+		digest    func([]byte) []byte
+	}{
+		{algorithm: jose.PS256, hash: crypto.SHA256, digest: func(value []byte) []byte {
+			sum := sha256.Sum256(value)
+			return sum[:]
+		}},
+		{algorithm: jose.PS384, hash: crypto.SHA384, digest: func(value []byte) []byte {
+			sum := sha512.Sum384(value)
+			return sum[:]
+		}},
+		{algorithm: jose.PS512, hash: crypto.SHA512, digest: func(value []byte) []byte {
+			sum := sha512.Sum512(value)
+			return sum[:]
+		}},
+	}
+	for _, test := range tests {
+		t.Run(string(test.algorithm), func(t *testing.T) {
+			fixture := newKeyServer(t)
+			clock := newFakeClock(testNow)
+			fixture.setKeys(t, publicJWK(key, "pss-key", test.algorithm))
+			anchor := testTrustAnchor(fixture, identity.KindHuman)
+			anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{test.algorithm}
+			verifier := newTestVerifier(t, fixture, anchor, clock)
+			claims := validClaims(anchor, clock.Now())
+			payload, err := json.Marshal(claims)
+			if err != nil {
+				t.Fatalf("marshal claims: %v", err)
+			}
+			header := []byte(fmt.Sprintf(
+				`{"alg":%q,"kid":"pss-key","typ":"at+jwt"}`,
+				test.algorithm,
+			))
+			signingInput := base64.RawURLEncoding.EncodeToString(header) + "." +
+				base64.RawURLEncoding.EncodeToString(payload)
+			signature, err := rsa.SignPSS(
+				rand.Reader,
+				key,
+				test.hash,
+				test.digest([]byte(signingInput)),
+				&rsa.PSSOptions{SaltLength: 8},
+			)
+			if err != nil {
+				t.Fatalf("sign non-JWA RSA-PSS token: %v", err)
+			}
+			nonconforming := signingInput + "." + base64.RawURLEncoding.EncodeToString(signature)
+			parsed, err := jose.ParseSignedCompact(nonconforming, []jose.SignatureAlgorithm{test.algorithm})
+			if err != nil {
+				t.Fatalf("parse non-JWA RSA-PSS token: %v", err)
+			}
+			if _, err := parsed.Verify(&key.PublicKey); err != nil {
+				t.Fatalf("test token no longer demonstrates permissive generic verification: %v", err)
+			}
+
+			_, err = authenticate(t, verifier, nonconforming)
+			requireAuthenticationError(t, err, ports.ErrAuthenticationInvalid)
+			if got := fixture.hits.Load(); got != 1 {
+				t.Fatalf("non-JWA RSA-PSS token caused %d JWKS fetches, want 1", got)
+			}
+			conforming := signClaims(t, key, test.algorithm, "pss-key", "at+jwt", claims)
+			if _, err := authenticate(t, verifier, conforming); err != nil {
+				t.Fatalf("authenticate JWA RSA-PSS token: %v", err)
+			}
+		})
 	}
 }
 

@@ -3,6 +3,10 @@ package oidc
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/sha512"
 	"errors"
 	"net/http"
 	"strings"
@@ -63,7 +67,7 @@ func (verifier *Verifier) Authenticate(
 	if err != nil {
 		return identity.Principal{}, classifyResolutionError(ctx, err)
 	}
-	payload, verifyErr := signed.Verify(verificationKey.key)
+	payload, verifyErr := verifySignedPayload(signed, verificationKey.key, algorithm)
 	if verifyErr != nil {
 		var refreshed bool
 		verificationKey, refreshed, err = verifier.cache.resolveAfterSignatureFailure(
@@ -78,7 +82,7 @@ func (verifier *Verifier) Authenticate(
 		if !refreshed {
 			return identity.Principal{}, ports.ErrAuthenticationInvalid
 		}
-		payload, verifyErr = signed.Verify(verificationKey.key)
+		payload, verifyErr = verifySignedPayload(signed, verificationKey.key, algorithm)
 		if verifyErr != nil {
 			return identity.Principal{}, ports.ErrAuthenticationInvalid
 		}
@@ -125,6 +129,59 @@ func matchesParsedHeader(signature jose.Signature, expected protectedHeader) boo
 		signature.Protected.JSONWebKey == nil
 }
 
+func verifySignedPayload(
+	signed *jose.JSONWebSignature,
+	key jose.JSONWebKey,
+	algorithm jose.SignatureAlgorithm,
+) ([]byte, error) {
+	switch algorithm {
+	case jose.PS256, jose.PS384, jose.PS512:
+		publicKey, ok := key.Key.(*rsa.PublicKey)
+		if !ok || publicKey == nil {
+			return nil, jose.ErrCryptoFailure
+		}
+		return signed.Verify(jwaPSSVerifier{publicKey: publicKey})
+	default:
+		return signed.Verify(key)
+	}
+}
+
+type jwaPSSVerifier struct {
+	publicKey *rsa.PublicKey
+}
+
+func (verifier jwaPSSVerifier) VerifyPayload(
+	payload []byte,
+	signature []byte,
+	algorithm jose.SignatureAlgorithm,
+) error {
+	if verifier.publicKey == nil {
+		return jose.ErrCryptoFailure
+	}
+	var hash crypto.Hash
+	var digest []byte
+	switch algorithm {
+	case jose.PS256:
+		sum := sha256.Sum256(payload)
+		hash, digest = crypto.SHA256, sum[:]
+	case jose.PS384:
+		sum := sha512.Sum384(payload)
+		hash, digest = crypto.SHA384, sum[:]
+	case jose.PS512:
+		sum := sha512.Sum512(payload)
+		hash, digest = crypto.SHA512, sum[:]
+	default:
+		return jose.ErrUnsupportedAlgorithm
+	}
+	return rsa.VerifyPSS(
+		verifier.publicKey,
+		hash,
+		digest,
+		signature,
+		&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash},
+	)
+}
+
 func classifyResolutionError(ctx context.Context, err error) error {
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr
@@ -139,3 +196,4 @@ func classifyResolutionError(ctx context.Context, err error) error {
 }
 
 var _ ports.Authenticator = (*Verifier)(nil)
+var _ jose.OpaqueVerifier = jwaPSSVerifier{}

@@ -121,9 +121,10 @@ defaults and no issuer-derived discovery request. The anchor contains:
 The allowed algorithm vocabulary is `RS256`, `RS384`, `RS512`, `PS256`,
 `PS384`, `PS512`, `ES256`, `ES384`, `ES512`, and `EdDSA`. Symmetric MACs,
 `none`, encryption algorithms, and algorithms outside the configured subset
-are rejected. The configured lifetime is a whole-second value from one second
-through 24 hours. Clock skew is a whole-second value from zero through five
-minutes.
+are rejected. RSA-PSS signatures require the JWA salt length equal to the
+selected hash output; permissive auto-detected salt lengths are rejected. The
+configured lifetime is a whole-second value from one second through 24 hours.
+Clock skew is a whole-second value from zero through five minutes.
 
 Human and Workload anchors are intentionally distinct configuration records.
 A Human anchor forbids a workload-identity claim mapping. A Workload anchor
@@ -364,7 +365,8 @@ unknown/ambiguous zero-network checks, negative compact-JWT and claim corpora,
 runtime-generated signed tokens, bounded JWKS fetch, redirect, rotation,
 cooldown, and concurrency tests, canonical raw-to-typed EC, Ed25519, and RSA key
 binding, exhaustive accepted low-order Ed25519 encodings, prime and cheaply
-invalid RSA moduli, RSA work-budget boundaries, and
+invalid RSA moduli, RSA work-budget boundaries, exact RSA-PSS salt-length
+enforcement, and
 invalid-versus-unavailable classification checks.
 
 ```sh
