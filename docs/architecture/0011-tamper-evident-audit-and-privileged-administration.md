@@ -41,8 +41,8 @@ stream checkpoints, hash-chain records, verification segments, export
 descriptors and manifests, and pure retention decisions. The privileged
 administration domain lives in `internal/core/domain/administration` under
 contract version `veer.administration.v1alpha1`. It owns exact administrator
-bindings, sealed privileged targets, strong-authentication receipts, one-use
-grants, and a bounded process-local lifecycle ledger.
+bindings, sealed privileged targets, ledger-gated strong-authentication
+verification, one-use grants, and a bounded process-local lifecycle ledger.
 
 The OpenAPI root `x-veer-audit` manifest projects the exact versions, limits,
 closed vocabularies, integrity and export rules, fixed retention, and
@@ -51,14 +51,15 @@ decision adds no path, operation, component schema, server, or authorization
 annotation; the OpenAPI document remains at four paths, seven operations, and
 81 schemas.
 
-The reference packages perform no persistence or external I/O. In particular,
-this decision adds no `StateStore` transaction, database table or migration,
-outbox record, queue work, API or worker emission, query implementation,
-archive writer, S3 object, KMS operation, signing key or signer, strong-
-authentication adapter, provider call, or runtime enforcement. An in-memory
-value being valid does not prove that an event was durably recorded, that all
-replicas share one sequence, or that audit data committed atomically with
-state and outbox work.
+The reference packages implement no persistence or external-I/O adapter. The
+administration ledger synchronously invokes its injected strong-authentication
+verifier boundary, but this decision adds no verifier implementation,
+`StateStore` transaction, database table or migration, outbox record, queue
+work, API or worker emission, query implementation, archive writer, S3 object,
+KMS operation, signing key or signer, provider call, or runtime enforcement.
+An in-memory value being valid does not prove that an event was durably
+recorded, that all replicas share one sequence, or that audit data committed
+atomically with state and outbox work.
 
 ### Canonical event
 
@@ -204,10 +205,13 @@ conservative combined quality signal for the recorded timestamp and current
 evaluation observation; it may be `Synchronized` only when both are. A later
 good clock therefore cannot legitimize an originally uncertain `RecordedAt`.
 Evaluation fails safe for a zero, future, uncertain, or regressed time and
-never returns a deletion-eligible result. The administration ledger maintains
-one non-regressing process-local clock high-water mark. A rollback fails rather
-than extending or resurrecting authority; it remains local state and is not a
-distributed clock oracle.
+never returns a deletion-eligible result. The administration ledger owns one
+explicitly configured clock for strong-authentication admission and grant
+issuance and maintains one non-regressing process-local high-water mark. A
+sequential rollback fails rather than extending or resurrecting authority;
+overlapping samples are ordered by call start so a late older call cannot
+manufacture a rollback. This remains local state and is not a distributed clock
+oracle.
 
 ### Export verification
 
@@ -284,27 +288,43 @@ required trimmed reason of at most 256 runes, an optional case reference of at
 most 128 runes, an injected request time, and a positive millisecond-aligned
 duration no longer than 15 minutes. There is no renewal API.
 
-The core-owned `StrongAuthenticationVerifier` port must revalidate the exact
-Bearer credential, principal, request challenge, and deployment-defined
+The shared `BearerCredential` value is owned by
+`internal/core/domain/authentication`; `internal/core/ports` preserves aliases
+for transport and adapter compatibility. A ledger requires one
+`StrongAuthenticationVerifier` and one trusted `Clock`; a future composition
+root must install both because this issue supplies no adapter or runtime
+endpoint. For each otherwise valid issuance attempt,
+`Ledger.Issue(ctx, credential, request)` invokes that verifier exactly once
+with the exact credential and immutable request. The verifier must revalidate
+the request's exact principal and challenge against the deployment-defined
 `auth_time`, `acr`, and `amr` policy. A normal OIDC Principal is not proof of
-strong authentication. The port returns only the closed
+strong authentication.
+
+The verifier returns only an inert proof ID, its authenticated-at time, and an
+error. The ledger is the sole consumer and grant-issuance authority: callers
+cannot construct a public strong-authentication receipt, supply verifier
+output, or choose the issuance time. After successful verification the ledger
+samples its configured clock, normalizes both times, and requires issuance to
+be at or after the request and authentication instants and no more than five
+minutes after authentication. The port returns only the closed
 `strong-authentication-invalid` or `strong-authentication-unavailable`
 non-context failures. No verifier adapter or middleware integration exists in
 this issue.
 
-A successful verifier receipt is no more than five minutes old when verified
-and when issued. Proof IDs cannot be replayed. The process-local ledger retains
-proof tombstones and at most 1,000 grants and terminal tombstones. A grant is
-single-use and bound to its exact action and target. Its irreversible states
-are `Active`, `Consumed`, `Revoked`, and `Expired`; equality with the expiry
-instant is expired. Consumption and revocation produce receipts that can be
-projected into matching audit elevation events.
+Proof IDs cannot be replayed. The process-local ledger retains proof tombstones
+and at most 1,000 grants and terminal tombstones. A grant is single-use and
+bound to its exact action and target. Its irreversible states are `Active`,
+`Consumed`, `Revoked`, and `Expired`; equality with the expiry instant is
+expired. Consumption and revocation produce receipts that can be projected
+into matching audit elevation events.
 
-Administrator, request, proof, grant, target, consumption, and revocation
-values redact identity, scope, reason, and case data from generic formatting
-and reject JSON, text, binary, and Gob serialization. That protection limits
-accidental generic output; a compromised process can still inspect authority
-available inside its address space.
+Bearer credential, administrator, request, grant, target, consumption, and
+revocation values redact credential, identity, scope, reason, and case data
+from generic formatting and reject applicable JSON, text, binary, and Gob
+serialization. Verifier proof metadata remains internal to the ledger rather
+than becoming a serializable capability. These protections limit accidental
+generic output; a compromised process can still inspect authority available
+inside its address space.
 
 The ledger lock makes one process's grant transition race deterministic. It is
 not durable, shared across nodes, or atomic with audit, state, Operation, or
@@ -376,9 +396,11 @@ scope agreement, Operation timeline fixtures, chain mutation/deletion/
 reordering, valid-prefix behavior with and without a trusted expected head,
 segment byte/count preflights, manifest/body/signature/checkpoint verification,
 fixed retention boundaries, holds, unsafe clock outcomes, exact administrator
-identity, sealed action/target combinations, strong-authentication age and
-replay, one-use grant races, expiry equality, non-regressing time, retained
-tombstones, and redaction/serialization canaries.
+identity, sealed action/target combinations, exact verifier invocation and
+credential/request forwarding, strong-authentication age and replay,
+verifier-output rejection, trusted-clock issuance and overlap behavior,
+one-use grant races, expiry equality, non-regressing time, retained tombstones,
+and redaction/serialization canaries.
 
 Ordinary local verification commands are:
 

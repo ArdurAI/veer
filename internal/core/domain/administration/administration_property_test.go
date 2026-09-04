@@ -17,10 +17,7 @@ func TestPropertyElevationLifetimeNeverExceedsRequestedBound(t *testing.T) {
 	property := func(raw uint32) bool {
 		maximum := uint32(MaxElevationDuration / time.Millisecond)
 		duration := time.Duration(raw%maximum+1) * time.Millisecond
-		ledger, err := NewLedger([]Administrator{administrator})
-		if err != nil {
-			return false
-		}
+		ledger := mustLedger(t, administrator)
 		request, err := NewElevationRequest(
 			testGrantID,
 			administrator,
@@ -35,11 +32,7 @@ func TestPropertyElevationLifetimeNeverExceedsRequestedBound(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		receipt, err := NewStrongAuthReceipt(testProofID, request, testNow, testNow)
-		if err != nil {
-			return false
-		}
-		grant, err := ledger.Issue(testNow, receipt)
+		grant, err := mustIssue(t, ledger, testProofID, request, testNow, testNow)
 		if err != nil || grant.ExpiresAt().Sub(grant.IssuedAt()) != duration ||
 			grant.ExpiresAt().Sub(grant.IssuedAt()) > MaxElevationDuration {
 			return false
@@ -64,16 +57,12 @@ func TestPropertyStrongAuthAgeBoundaryIsClosedAtMaximum(t *testing.T) {
 	)
 	property := func(raw uint32) bool {
 		age := time.Duration(raw%uint32(2*MaxStrongAuthProofAge/time.Millisecond+1)) * time.Millisecond
-		_, err := NewStrongAuthReceipt(
-			testProofID,
-			request,
-			testNow.Add(-age),
-			testNow,
-		)
+		ledger := mustLedger(t, administrator)
+		_, err := mustIssue(t, ledger, testProofID, request, testNow.Add(-age), testNow)
 		if age <= MaxStrongAuthProofAge {
 			return err == nil
 		}
-		return errors.Is(err, ErrStrongAuthProofStale)
+		return errors.Is(err, ErrStrongAuthenticationInvalid)
 	}
 	checkAdministrationProperty(t, property)
 }
@@ -88,10 +77,7 @@ func TestPropertyGrantAliasesCannotReplay(t *testing.T) {
 			t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 			target, time.Minute,
 		)
-		grant, err := ledger.Issue(
-			testNow,
-			mustReceipt(t, testProofID, request, testNow, testNow),
-		)
+		grant, err := mustIssue(t, ledger, testProofID, request, testNow, testNow)
 		if err != nil {
 			return false
 		}

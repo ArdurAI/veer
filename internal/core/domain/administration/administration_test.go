@@ -134,11 +134,16 @@ func TestLedgerAdministratorDirectoryBoundsAndDuplicates(t *testing.T) {
 	t.Parallel()
 	principal := mustPrincipal(t, testIssuer, testSubject)
 	administrator := mustAdministrator(t, testAdministratorID, principal)
-	if _, err := NewLedger([]Administrator{administrator, administrator}); !errors.Is(err, ErrDuplicateAdministratorID) {
+	verifier := &testStrongAuthenticationVerifier{proofID: testProofID, authenticatedAt: testNow}
+	clock := &testClock{now: testNow}
+	newLedger := func(administrators []Administrator) (Ledger, error) {
+		return NewLedger(administrators, verifier, clock)
+	}
+	if _, err := newLedger([]Administrator{administrator, administrator}); !errors.Is(err, ErrDuplicateAdministratorID) {
 		t.Fatalf("NewLedger(duplicate ID) error = %v", err)
 	}
 	otherID := mustAdministrator(t, testOtherAdministratorID, principal)
-	if _, err := NewLedger([]Administrator{administrator, otherID}); !errors.Is(err, ErrDuplicateAdministrator) {
+	if _, err := newLedger([]Administrator{administrator, otherID}); !errors.Is(err, ErrDuplicateAdministrator) {
 		t.Fatalf("NewLedger(duplicate identity) error = %v", err)
 	}
 	tooMany := make([]Administrator, 0, MaxAdministrators+1)
@@ -146,11 +151,25 @@ func TestLedgerAdministratorDirectoryBoundsAndDuplicates(t *testing.T) {
 		p := mustPrincipal(t, testIssuer, generatedID("subject", index).String())
 		tooMany = append(tooMany, mustAdministrator(t, generatedID("adm", index), p))
 	}
-	if _, err := NewLedger(tooMany); !errors.Is(err, ErrTooManyAdministrators) {
+	if _, err := newLedger(tooMany); !errors.Is(err, ErrTooManyAdministrators) {
 		t.Fatalf("NewLedger(over limit) error = %v", err)
 	}
-	if ledger, err := NewLedger(nil); err != nil || ledger.state == nil {
+	if ledger, err := newLedger(nil); err != nil || ledger.state == nil {
 		t.Fatalf("NewLedger(empty) = %v, %v", ledger, err)
+	}
+	if _, err := NewLedger(nil, nil, clock); !errors.Is(err, ErrInvalidLedger) {
+		t.Fatalf("NewLedger(nil verifier) error = %v", err)
+	}
+	if _, err := NewLedger(nil, verifier, nil); !errors.Is(err, ErrInvalidLedger) {
+		t.Fatalf("NewLedger(nil clock) error = %v", err)
+	}
+	var typedNilVerifier *testStrongAuthenticationVerifier
+	var typedNilClock *testClock
+	if _, err := NewLedger(nil, typedNilVerifier, clock); !errors.Is(err, ErrInvalidLedger) {
+		t.Fatalf("NewLedger(typed-nil verifier) error = %v", err)
+	}
+	if _, err := NewLedger(nil, verifier, typedNilClock); !errors.Is(err, ErrInvalidLedger) {
+		t.Fatalf("NewLedger(typed-nil clock) error = %v", err)
 	}
 }
 
@@ -298,9 +317,8 @@ func TestResolveOperationTargetAllowsUnboundEnvironmentScopedResources(t *testin
 				target,
 				time.Minute,
 			)
-			grant, err := ledger.Issue(
-				testNow,
-				mustReceipt(t, generatedID("prf", index+10), request, testNow, testNow),
+			grant, err := mustIssue(
+				t, ledger, generatedID("prf", index+10), request, testNow, testNow,
 			)
 			if err != nil {
 				t.Fatalf("Issue(unbound %s target) error = %v", test.name, err)
@@ -434,7 +452,7 @@ func TestElevationTextBytePreflightRejectsLargeUTF8WithoutEcho(t *testing.T) {
 	}
 }
 
-func TestStrongAuthReceiptFreshnessAndTimeOrdering(t *testing.T) {
+func TestLedgerStrongAuthenticationFreshnessAndTrustedIssueTime(t *testing.T) {
 	t.Parallel()
 	principal := mustPrincipal(t, testIssuer, testSubject)
 	administrator := mustAdministrator(t, testAdministratorID, principal)
@@ -442,35 +460,39 @@ func TestStrongAuthReceiptFreshnessAndTimeOrdering(t *testing.T) {
 		t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 		ResolvePlatformAuditExportTarget(), MaxElevationDuration,
 	)
-	receipt, err := NewStrongAuthReceipt(
-		testProofID,
-		request,
+	exactLedger := mustLedger(t, administrator)
+	grant, err := mustIssue(
+		t, exactLedger, testProofID, request,
 		testNow.Add(-MaxStrongAuthProofAge).Add(222*time.Microsecond),
 		testNow.Add(888*time.Microsecond),
 	)
 	if err != nil {
 		t.Fatalf("exact proof-age boundary rejected: %v", err)
 	}
-	if receipt.VerifiedAt().Nanosecond()%int(time.Millisecond) != 0 ||
-		receipt.AuthenticatedAt().Nanosecond()%int(time.Millisecond) != 0 ||
-		receipt.ProofID() != testProofID || receipt.Request().ID() != request.ID() ||
-		!identity.SameLogicalIdentity(receipt.Request().Principal(), request.Principal()) {
-		t.Fatal("receipt accessors are not canonical and bound")
+	if grant.proofID != testProofID || grant.IssuedAt().Nanosecond()%int(time.Millisecond) != 0 ||
+		grant.IssuedAt() != testNow {
+		t.Fatal("grant did not use canonical verifier proof and trusted issue time")
 	}
 
-	if _, err := NewStrongAuthReceipt(
-		"prf_01JADMIN00000000000000002", request,
+	staleLedger := mustLedger(t, administrator)
+	if _, err := mustIssue(
+		t, staleLedger, "prf_01JADMIN00000000000000002", request,
 		testNow.Add(-MaxStrongAuthProofAge-time.Millisecond), testNow,
-	); !errors.Is(err, ErrStrongAuthProofStale) {
+	); !errors.Is(err, ErrStrongAuthenticationInvalid) {
 		t.Fatalf("stale proof error = %v", err)
 	}
-	if _, err := NewStrongAuthReceipt(
-		"prf_01JADMIN00000000000000003", request, testNow, testNow.Add(-time.Millisecond),
-	); !errors.Is(err, ErrClockRegressed) {
-		t.Fatalf("verification before request/auth error = %v", err)
+	futureLedger := mustLedger(t, administrator)
+	if _, err := mustIssue(
+		t, futureLedger, "prf_01JADMIN00000000000000003", request,
+		testNow.Add(time.Millisecond), testNow,
+	); !errors.Is(err, ErrStrongAuthenticationInvalid) {
+		t.Fatalf("future authentication error = %v", err)
 	}
-	if _, err := NewStrongAuthReceipt("short", request, testNow, testNow); !errors.Is(err, ErrInvalidStrongAuthProofID) {
-		t.Fatalf("invalid proof ID error = %v", err)
+	malformedLedger := mustLedger(t, administrator)
+	if _, err := mustIssue(
+		t, malformedLedger, "short", request, testNow, testNow,
+	); !errors.Is(err, ErrStrongAuthenticationUnavailable) {
+		t.Fatalf("invalid verifier proof ID error = %v", err)
 	}
 }
 
@@ -484,8 +506,7 @@ func TestLedgerIssueIsAtomicAndReplaySafe(t *testing.T) {
 		t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 		target, MaxElevationDuration,
 	)
-	receipt := mustReceipt(t, testProofID, request, testNow.Add(-time.Minute), testNow)
-	grant, err := ledger.Issue(testNow, receipt)
+	grant, err := mustIssue(t, ledger, testProofID, request, testNow.Add(-time.Minute), testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +521,7 @@ func TestLedgerIssueIsAtomicAndReplaySafe(t *testing.T) {
 	if reference, present := grant.CaseReference(); !present || reference != testCaseReference {
 		t.Fatalf("grant case reference = %q, %t", reference, present)
 	}
-	if _, err := ledger.Issue(testNow, receipt); !errors.Is(err, ErrStrongAuthProofReplayed) {
+	if _, err := mustIssue(t, ledger, testProofID, request, testNow.Add(-time.Minute), testNow); !errors.Is(err, ErrStrongAuthProofReplayed) {
 		t.Fatalf("replayed receipt error = %v", err)
 	}
 
@@ -511,16 +532,14 @@ func TestLedgerIssueIsAtomicAndReplaySafe(t *testing.T) {
 		t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 		target, time.Minute,
 	)
-	duplicateGrantReceipt := mustReceipt(t, proof2, duplicateGrantRequest, testNow, testNow)
-	if _, err := ledger.Issue(testNow, duplicateGrantReceipt); !errors.Is(err, ErrDuplicateGrantID) {
+	if _, err := mustIssue(t, ledger, proof2, duplicateGrantRequest, testNow, testNow); !errors.Is(err, ErrDuplicateGrantID) {
 		t.Fatalf("duplicate grant ID error = %v", err)
 	}
 	uniqueRequest := mustRequest(
 		t, "elv_01JADMIN00000000000000002", administrator, principal,
 		authorization.ActionAuditExport, target, time.Minute,
 	)
-	uniqueReceipt := mustReceipt(t, proof2, uniqueRequest, testNow, testNow)
-	if _, err := ledger.Issue(testNow, uniqueReceipt); err != nil {
+	if _, err := mustIssue(t, ledger, proof2, uniqueRequest, testNow, testNow); err != nil {
 		t.Fatalf("proof ID was partially tombstoned after failed issue: %v", err)
 	}
 
@@ -530,10 +549,9 @@ func TestLedgerIssueIsAtomicAndReplaySafe(t *testing.T) {
 		t, "elv_01JADMIN00000000000000003", otherAdministrator, otherPrincipal,
 		authorization.ActionAuditExport, target, time.Minute,
 	)
-	unregisteredReceipt := mustReceipt(
-		t, "prf_01JADMIN00000000000000003", unregisteredRequest, testNow, testNow,
-	)
-	if _, err := ledger.Issue(testNow, unregisteredReceipt); !errors.Is(err, ErrAdministratorNotRegistered) {
+	if _, err := mustIssue(
+		t, ledger, "prf_01JADMIN00000000000000003", unregisteredRequest, testNow, testNow,
+	); !errors.Is(err, ErrAdministratorNotRegistered) {
 		t.Fatalf("unregistered administrator error = %v", err)
 	}
 
@@ -544,10 +562,9 @@ func TestLedgerIssueIsAtomicAndReplaySafe(t *testing.T) {
 		t, "elv_01JADMIN00000000000000004", misboundAdministrator, otherPrincipal,
 		authorization.ActionAuditExport, target, time.Minute,
 	)
-	misboundReceipt := mustReceipt(
-		t, "prf_01JADMIN00000000000000004", misboundRequest, testNow, testNow,
-	)
-	if _, err := ledger.Issue(testNow, misboundReceipt); !errors.Is(err, ErrIdentityMismatch) {
+	if _, err := mustIssue(
+		t, ledger, "prf_01JADMIN00000000000000004", misboundRequest, testNow, testNow,
+	); !errors.Is(err, ErrIdentityMismatch) {
 		t.Fatalf("misbound configured administrator error = %v", err)
 	}
 }
@@ -561,28 +578,30 @@ func TestLedgerIssueRechecksProofAgeAndDoesNotAdvanceOnRegression(t *testing.T) 
 		t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 		target, time.Minute,
 	)
-	receipt := mustReceipt(t, testProofID, request, testNow, testNow)
-
 	exactLedger := mustLedger(t, administrator)
-	if _, err := exactLedger.Issue(testNow.Add(MaxStrongAuthProofAge), receipt); err != nil {
+	if _, err := mustIssue(t, exactLedger, testProofID, request, testNow, testNow.Add(MaxStrongAuthProofAge)); err != nil {
 		t.Fatalf("Issue(exact proof-age boundary) error = %v", err)
 	}
 	staleLedger := mustLedger(t, administrator)
-	if _, err := staleLedger.Issue(
-		testNow.Add(MaxStrongAuthProofAge+time.Millisecond), receipt,
-	); !errors.Is(err, ErrStrongAuthProofStale) {
-		t.Fatalf("Issue(delayed stale receipt) error = %v", err)
+	if _, err := mustIssue(
+		t, staleLedger, testProofID, request, testNow,
+		testNow.Add(MaxStrongAuthProofAge+time.Millisecond),
+	); !errors.Is(err, ErrStrongAuthenticationInvalid) {
+		t.Fatalf("Issue(delayed stale proof) error = %v", err)
 	}
 
 	futureVerified := testNow.Add(time.Second)
-	futureReceipt := mustReceipt(
-		t, "prf_01JADMIN00000000000000005", request, futureVerified, futureVerified,
-	)
 	regressionLedger := mustLedger(t, administrator)
-	if _, err := regressionLedger.Issue(testNow, futureReceipt); !errors.Is(err, ErrClockRegressed) {
-		t.Fatalf("Issue(before verification) error = %v", err)
+	if _, err := mustIssue(
+		t, regressionLedger, "prf_01JADMIN00000000000000005", request,
+		futureVerified, testNow,
+	); !errors.Is(err, ErrStrongAuthenticationInvalid) {
+		t.Fatalf("Issue(before authentication) error = %v", err)
 	}
-	if _, err := regressionLedger.Issue(futureVerified, futureReceipt); err != nil {
+	if _, err := mustIssue(
+		t, regressionLedger, "prf_01JADMIN00000000000000005", request,
+		futureVerified, futureVerified,
+	); err != nil {
 		t.Fatalf("failed regressed issue changed ledger state/high water: %v", err)
 	}
 }
@@ -601,9 +620,8 @@ func TestLedgerGrantLifecycleIsOneWayAndExpiryIsClosed(t *testing.T) {
 		t, testGrantID, administrator, principal, authorization.ActionWorkRedrive,
 		target, MaxElevationDuration,
 	)
-	grant, err := ledger.Issue(
-		testNow,
-		mustReceipt(t, testProofID, request, testNow.Add(-time.Minute), testNow),
+	grant, err := mustIssue(
+		t, ledger, testProofID, request, testNow.Add(-time.Minute), testNow,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -645,9 +663,9 @@ func TestLedgerGrantLifecycleIsOneWayAndExpiryIsClosed(t *testing.T) {
 
 	// Reissuing from the same verified proof is forbidden; there is no renewal
 	// transition on Grant or Ledger.
-	if _, err := ledger.Issue(testNow.Add(3*time.Second), mustReceipt(
-		t, testProofID, request, testNow.Add(-time.Minute), testNow,
-	)); !errors.Is(err, ErrStrongAuthProofReplayed) {
+	if _, err := mustIssue(
+		t, ledger, testProofID, request, testNow.Add(-time.Minute), testNow.Add(3*time.Second),
+	); !errors.Is(err, ErrStrongAuthProofReplayed) {
 		t.Fatalf("proof-based renewal error = %v", err)
 	}
 
@@ -656,9 +674,9 @@ func TestLedgerGrantLifecycleIsOneWayAndExpiryIsClosed(t *testing.T) {
 		t, "elv_01JADMIN00000000000000004", administrator, principal,
 		authorization.ActionWorkRedrive, target, time.Second,
 	)
-	expiringGrant, err := expiringLedger.Issue(
-		testNow,
-		mustReceipt(t, "prf_01JADMIN00000000000000004", expiringRequest, testNow, testNow),
+	expiringGrant, err := mustIssue(
+		t, expiringLedger, "prf_01JADMIN00000000000000004",
+		expiringRequest, testNow, testNow,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -683,10 +701,7 @@ func TestLedgerRevokeAndClockRegressionFailClosed(t *testing.T) {
 		t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 		target, time.Minute,
 	)
-	grant, err := ledger.Issue(
-		testNow,
-		mustReceipt(t, testProofID, request, testNow, testNow),
-	)
+	grant, err := mustIssue(t, ledger, testProofID, request, testNow, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,10 +740,7 @@ func TestLedgerConcurrentConsumeHasExactlyOneWinner(t *testing.T) {
 		t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 		target, time.Minute,
 	)
-	grant, err := ledger.Issue(
-		testNow,
-		mustReceipt(t, testProofID, request, testNow, testNow),
-	)
+	grant, err := mustIssue(t, ledger, testProofID, request, testNow, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -777,8 +789,7 @@ func TestLedgerRetainsTerminalTombstonesToFixedCapacity(t *testing.T) {
 			t, generatedID("elv", index), administrator, principal,
 			authorization.ActionAuditExport, target, time.Minute,
 		)
-		receipt := mustReceipt(t, generatedID("prf", index), request, testNow, testNow)
-		grant, err := ledger.Issue(testNow, receipt)
+		grant, err := mustIssue(t, ledger, generatedID("prf", index), request, testNow, testNow)
 		if err != nil {
 			t.Fatalf("Issue(%d) error = %v", index, err)
 		}
@@ -792,10 +803,9 @@ func TestLedgerRetainsTerminalTombstonesToFixedCapacity(t *testing.T) {
 		t, generatedID("elv", MaxTrackedElevations), administrator, principal,
 		authorization.ActionAuditExport, target, time.Minute,
 	)
-	extraReceipt := mustReceipt(
-		t, generatedID("prf", MaxTrackedElevations), extraRequest, testNow, testNow,
-	)
-	if _, err := ledger.Issue(testNow, extraReceipt); !errors.Is(err, ErrElevationLedgerFull) {
+	if _, err := mustIssue(
+		t, ledger, generatedID("prf", MaxTrackedElevations), extraRequest, testNow, testNow,
+	); !errors.Is(err, ErrElevationLedgerFull) {
 		t.Fatalf("Issue(over retained bound) error = %v", err)
 	}
 }
@@ -814,12 +824,9 @@ func TestBreakGlassRecoveryExercise(t *testing.T) {
 		t, "elv_01JADMIN00000000000000101", administrator, principal,
 		authorization.ActionOperationQuarantine, target, 5*time.Minute,
 	)
-	quarantineGrant, err := ledger.Issue(
-		testNow,
-		mustReceipt(
-			t, "prf_01JADMIN00000000000000101", quarantineRequest,
-			testNow.Add(-time.Minute), testNow,
-		),
+	quarantineGrant, err := mustIssue(
+		t, ledger, "prf_01JADMIN00000000000000101", quarantineRequest,
+		testNow.Add(-time.Minute), testNow,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -853,11 +860,10 @@ func TestBreakGlassRecoveryExercise(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	redriveProof := mustReceipt(
-		t, "prf_01JADMIN00000000000000102", redriveRequest,
+	redriveGrant, err := mustIssue(
+		t, ledger, "prf_01JADMIN00000000000000102", redriveRequest,
 		testNow.Add(2*time.Second), testNow.Add(2*time.Second),
 	)
-	redriveGrant, err := ledger.Issue(testNow.Add(2*time.Second), redriveProof)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -96,27 +96,18 @@ func FuzzStrongAuthAndElevationTimeBounds(f *testing.F) {
 			t.Fatal(requestErr)
 		}
 		age := time.Duration(proofAgeMillis) * time.Millisecond
-		receipt, receiptErr := NewStrongAuthReceipt(
-			testProofID,
-			request,
-			testNow.Add(-age),
-			testNow,
-		)
+		ledger := mustLedger(t, administrator)
+		grant, issueErr := mustIssue(t, ledger, testProofID, request, testNow.Add(-age), testNow)
 		switch {
 		case age < 0:
-			if !errors.Is(receiptErr, ErrClockRegressed) {
-				t.Fatalf("future auth time error = %v", receiptErr)
+			if !errors.Is(issueErr, ErrStrongAuthenticationInvalid) {
+				t.Fatalf("future auth time error = %v", issueErr)
 			}
 		case age > MaxStrongAuthProofAge:
-			if !errors.Is(receiptErr, ErrStrongAuthProofStale) {
-				t.Fatalf("stale proof error = %v", receiptErr)
+			if !errors.Is(issueErr, ErrStrongAuthenticationInvalid) {
+				t.Fatalf("stale proof error = %v", issueErr)
 			}
 		default:
-			if receiptErr != nil {
-				t.Fatal(receiptErr)
-			}
-			ledger := mustLedger(t, administrator)
-			grant, issueErr := ledger.Issue(testNow, receipt)
 			if issueErr != nil || grant.ExpiresAt().Sub(grant.IssuedAt()) != duration {
 				t.Fatalf("Issue() = %v, %v", grant, issueErr)
 			}

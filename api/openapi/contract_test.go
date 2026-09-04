@@ -402,7 +402,7 @@ func auditManifestRuntimeContract(t *testing.T) auditContract {
 		PrivilegedAdmin: privilegedAdminContract{
 			ContractVersion:              administration.ContractVersion,
 			Ledger:                       "process-local-reference",
-			StrongAuthentication:         "verifier-port-no-adapter",
+			StrongAuthentication:         "ledger-gated-verifier-port-no-adapter",
 			StrongAuthenticationFailures: []string{ports.ErrStrongAuthenticationInvalid.Error(), ports.ErrStrongAuthenticationUnavailable.Error()},
 			MaxAdministrators:            administration.MaxAdministrators,
 			MaxTrackedElevations:         administration.MaxTrackedElevations,
@@ -1917,9 +1917,9 @@ func TestAuditContractRejectsSemanticDrift(t *testing.T) {
 			message: "x-veer-audit contract drifted",
 		},
 		{
-			name: "strong authentication claims an adapter",
+			name: "strong authentication bypasses the ledger gate",
 			mutate: func(root map[string]any) {
-				nestedMap(t, root, "x-veer-audit", "privilegedAdministration")["strongAuthentication"] = "adapter-implemented"
+				nestedMap(t, root, "x-veer-audit", "privilegedAdministration")["strongAuthentication"] = "verifier-port-no-adapter"
 			},
 			message: "x-veer-audit contract drifted",
 		},

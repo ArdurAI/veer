@@ -209,9 +209,14 @@ the original recorded timestamp and current evaluation observation were both
 synchronized; a later good clock cannot upgrade uncertain recorded time.
 
 Platform administrators are configured separately from Workspace Policy and
-must be exact Human identities. Strong authentication is represented only by a
-verifier port for a future adapter, with no adapter or middleware wiring.
-One-use elevation is limited to `audit.export`, `operation.quarantine`, and
+must be exact Human identities. The process-local ledger owns one
+strong-authentication verifier port and trusted clock; a future composition
+root must install both because no verifier adapter, middleware wiring, or
+runtime endpoint exists. `Issue` passes the exact bearer credential and
+immutable elevation request to the verifier once, then uses only the returned
+proof ID and authenticated-at time with its own clock to issue a grant. Callers
+cannot construct a verification receipt or supply the issuance time. One-use
+elevation is limited to `audit.export`, `operation.quarantine`, and
 `work.redrive`, one sealed target, a required bounded reason, an optional
 bounded case reference, a proof no more than five minutes old, and a grant no
 longer than 15 minutes. A Workspace administrator never becomes a platform

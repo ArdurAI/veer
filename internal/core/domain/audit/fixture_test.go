@@ -1,11 +1,13 @@
 package audit
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ArdurAI/veer/internal/core/domain/administration"
+	"github.com/ArdurAI/veer/internal/core/domain/authentication"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
@@ -37,6 +39,26 @@ var testTime = time.Date(2026, time.September, 3, 12, 34, 56, 789_000_000, time.
 type auditFixtureStatus struct{}
 
 func (auditFixtureStatus) ObservedGenerations() []int64 { return nil }
+
+type auditStrongAuthenticationVerifier struct{}
+
+func (auditStrongAuthenticationVerifier) VerifyStrongAuthentication(
+	ctx context.Context,
+	credential authentication.BearerCredential,
+	request administration.ElevationRequest,
+) (resource.ID, time.Time, error) {
+	if err := ctx.Err(); err != nil {
+		return "", time.Time{}, err
+	}
+	if !credential.Valid() || administration.ValidateElevationRequest(request) != nil {
+		return "", time.Time{}, authentication.ErrStrongAuthenticationInvalid
+	}
+	return testProofID, testTime, nil
+}
+
+type auditClock struct{}
+
+func (auditClock) Now() time.Time { return testTime }
 
 func mustWorkspaceStream(t testing.TB) Stream {
 	t.Helper()
@@ -283,20 +305,19 @@ func mustAdministrationGrant(t testing.TB, reason, caseReference string) (admini
 	if err != nil {
 		t.Fatal(err)
 	}
-	strongAuth, err := administration.NewStrongAuthReceipt(
-		testProofID,
-		request,
-		testTime,
-		testTime,
+	credential, err := authentication.NewBearerCredential("audit-strong-auth.signature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := administration.NewLedger(
+		[]administration.Administrator{administrator},
+		auditStrongAuthenticationVerifier{},
+		auditClock{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledger, err := administration.NewLedger([]administration.Administrator{administrator})
-	if err != nil {
-		t.Fatal(err)
-	}
-	grant, err := ledger.Issue(testTime, strongAuth)
+	grant, err := ledger.Issue(context.Background(), credential, request)
 	if err != nil {
 		t.Fatal(err)
 	}

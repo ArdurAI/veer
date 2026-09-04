@@ -1,6 +1,7 @@
 // Package administration defines Veer's process-local privileged-elevation
-// reference contract. It performs no authentication, persistence, audit, or
-// provider I/O.
+// reference contract. It gates issuance through a configured authentication
+// verifier but supplies no verifier adapter, persistence, audit, or provider
+// implementation.
 package administration
 
 import "errors"
@@ -24,10 +25,7 @@ var (
 	ErrInvalidElevationDuration = errors.New("invalid privileged elevation duration")
 	ErrIdentityMismatch         = errors.New("privileged administrator identity does not match")
 
-	ErrInvalidStrongAuthReceipt = errors.New("invalid strong-authentication receipt")
-	ErrInvalidStrongAuthProofID = errors.New("invalid strong-authentication proof ID")
-	ErrStrongAuthProofStale     = errors.New("strong-authentication proof is stale")
-	ErrStrongAuthProofReplayed  = errors.New("strong-authentication proof was already used")
+	ErrStrongAuthProofReplayed = errors.New("strong-authentication proof was already used")
 
 	ErrInvalidLedger       = errors.New("invalid privileged elevation ledger")
 	ErrElevationLedgerFull = errors.New("privileged elevation ledger is full")

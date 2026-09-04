@@ -23,30 +23,35 @@ var portNow = time.Date(2026, time.September, 3, 14, 0, 0, 0, time.UTC)
 
 func TestStrongAuthenticationVerifierIsExplicitAndContextAware(t *testing.T) {
 	t.Parallel()
-	request, receipt := portElevationFixture(t)
+	request := portElevationFixture(t)
 	credential, err := NewBearerCredential(tokenCanary)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := fakeStrongAuthenticationVerifier{receipt: receipt}
-	got, err := verifier.VerifyStrongAuthentication(context.Background(), credential, request)
-	if err != nil || got.ProofID() != receipt.ProofID() ||
-		got.VerifiedAt() != receipt.VerifiedAt() || got.Request().ID() != request.ID() {
-		t.Fatalf("VerifyStrongAuthentication() = %v, %v", got, err)
+	verifier := fakeStrongAuthenticationVerifier{
+		proofID:         portProofID,
+		authenticatedAt: portNow.Add(-time.Minute),
+		requestID:       request.ID(),
+	}
+	proofID, authenticatedAt, err := verifier.VerifyStrongAuthentication(
+		context.Background(), credential, request,
+	)
+	if err != nil || proofID != portProofID || authenticatedAt != portNow.Add(-time.Minute) {
+		t.Fatalf("VerifyStrongAuthentication() = %v, %v, %v", proofID, authenticatedAt, err)
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	got, err = verifier.VerifyStrongAuthentication(canceled, credential, request)
+	proofID, authenticatedAt, err = verifier.VerifyStrongAuthentication(canceled, credential, request)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("VerifyStrongAuthentication(canceled) error = %v", err)
 	}
-	if got.ProofID() != "" {
-		t.Fatal("canceled verification returned a receipt")
+	if proofID != "" || !authenticatedAt.IsZero() {
+		t.Fatal("canceled verification returned proof metadata")
 	}
 
 	invalidCredential := BearerCredential{}
-	if _, err := verifier.VerifyStrongAuthentication(
+	if _, _, err := verifier.VerifyStrongAuthentication(
 		context.Background(), invalidCredential, request,
 	); !errors.Is(err, ErrStrongAuthenticationInvalid) {
 		t.Fatalf("VerifyStrongAuthentication(invalid credential) error = %v", err)
@@ -86,30 +91,29 @@ func TestStrongAuthenticationErrorsAreClosedAndClassifiable(t *testing.T) {
 }
 
 type fakeStrongAuthenticationVerifier struct {
-	receipt administration.StrongAuthReceipt
+	proofID         resource.ID
+	authenticatedAt time.Time
+	requestID       resource.ID
 }
 
 func (fake fakeStrongAuthenticationVerifier) VerifyStrongAuthentication(
 	ctx context.Context,
 	credential BearerCredential,
 	request administration.ElevationRequest,
-) (administration.StrongAuthReceipt, error) {
+) (resource.ID, time.Time, error) {
 	if err := ctx.Err(); err != nil {
-		return administration.StrongAuthReceipt{}, err
+		return "", time.Time{}, err
 	}
 	if !credential.Valid() || administration.ValidateElevationRequest(request) != nil {
-		return administration.StrongAuthReceipt{}, ErrStrongAuthenticationInvalid
+		return "", time.Time{}, ErrStrongAuthenticationInvalid
 	}
-	if fake.receipt.Request().ID() != request.ID() {
-		return administration.StrongAuthReceipt{}, ErrStrongAuthenticationInvalid
+	if fake.requestID != request.ID() {
+		return "", time.Time{}, ErrStrongAuthenticationInvalid
 	}
-	return fake.receipt, nil
+	return fake.proofID, fake.authenticatedAt, nil
 }
 
-func portElevationFixture(t testing.TB) (
-	administration.ElevationRequest,
-	administration.StrongAuthReceipt,
-) {
+func portElevationFixture(t testing.TB) administration.ElevationRequest {
 	t.Helper()
 	principal, err := identity.NewPrincipal(identity.PrincipalInput{
 		Kind:      identity.KindHuman,
@@ -138,16 +142,7 @@ func portElevationFixture(t testing.TB) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := administration.NewStrongAuthReceipt(
-		portProofID,
-		request,
-		portNow.Add(-time.Minute),
-		portNow,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return request, receipt
+	return request
 }
 
 var _ StrongAuthenticationVerifier = fakeStrongAuthenticationVerifier{}

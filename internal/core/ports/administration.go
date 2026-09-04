@@ -1,59 +1,35 @@
 package ports
 
 import (
-	"context"
-	"errors"
-	"fmt"
-
 	"github.com/ArdurAI/veer/internal/core/domain/administration"
+	"github.com/ArdurAI/veer/internal/core/domain/authentication"
 )
 
-// StrongAuthenticationError is one stable, claim-free verifier outcome.
-type StrongAuthenticationError uint8
+// StrongAuthenticationError preserves the port-level name for the
+// authentication-owned closed verifier outcome.
+type StrongAuthenticationError = authentication.StrongAuthenticationError
 
 const (
 	// ErrStrongAuthenticationInvalid covers absent, mismatched, insufficient,
 	// stale, or otherwise rejected strong-authentication evidence. Adapters do
 	// not expose which auth_time, acr, amr, identity, or proof check failed.
-	ErrStrongAuthenticationInvalid StrongAuthenticationError = iota + 1
+	ErrStrongAuthenticationInvalid = authentication.ErrStrongAuthenticationInvalid
 	// ErrStrongAuthenticationUnavailable means configured strong-auth trust or
 	// verification infrastructure could not be used. Callers may retry within
 	// their overall deadline without weakening the required policy.
-	ErrStrongAuthenticationUnavailable
+	ErrStrongAuthenticationUnavailable = authentication.ErrStrongAuthenticationUnavailable
 )
-
-func (failure StrongAuthenticationError) Error() string {
-	switch failure {
-	case ErrStrongAuthenticationInvalid:
-		return "strong-authentication-invalid"
-	case ErrStrongAuthenticationUnavailable:
-		return "strong-authentication-unavailable"
-	default:
-		return "strong-authentication-error"
-	}
-}
-
-func (failure StrongAuthenticationError) String() string { return failure.Error() }
-func (failure StrongAuthenticationError) GoString() string {
-	return "ports.StrongAuthenticationError(" + failure.Error() + ")"
-}
 
 // ClassifyStrongAuthenticationError recognizes only the two closed verifier
 // failure classes, including safely wrapped instances.
 func ClassifyStrongAuthenticationError(err error) (StrongAuthenticationError, bool) {
-	switch {
-	case errors.Is(err, ErrStrongAuthenticationInvalid):
-		return ErrStrongAuthenticationInvalid, true
-	case errors.Is(err, ErrStrongAuthenticationUnavailable):
-		return ErrStrongAuthenticationUnavailable, true
-	default:
-		return 0, false
-	}
+	return authentication.ClassifyStrongAuthenticationError(err)
 }
 
 // StrongAuthenticationVerifier revalidates one bearer credential against the
 // exact Principal and elevation challenge, including the deployment's strong
-// auth_time, acr, and amr policy, then returns a bound domain receipt.
+// auth_time, acr, and amr policy, then returns inert proof metadata consumed
+// only by the configured Ledger.
 //
 // Principal intentionally lacks those strong-authentication claims. Merely
 // receiving a valid Principal, or inspecting its groups or fingerprint, can
@@ -65,16 +41,4 @@ func ClassifyStrongAuthenticationError(err error) (StrongAuthenticationError, bo
 // the caller's context error when cancellation or deadline expiry wins. Errors
 // must not include credentials, claims, IDs, reasons, verifier responses, or
 // endpoints.
-type StrongAuthenticationVerifier interface {
-	VerifyStrongAuthentication(
-		ctx context.Context,
-		credential BearerCredential,
-		request administration.ElevationRequest,
-	) (administration.StrongAuthReceipt, error)
-}
-
-var (
-	_ error          = ErrStrongAuthenticationInvalid
-	_ fmt.Stringer   = ErrStrongAuthenticationInvalid
-	_ fmt.GoStringer = ErrStrongAuthenticationInvalid
-)
+type StrongAuthenticationVerifier = administration.StrongAuthenticationVerifier

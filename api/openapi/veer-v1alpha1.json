@@ -981,7 +981,7 @@
     "privilegedAdministration": {
       "contractVersion": "veer.administration.v1alpha1",
       "ledger": "process-local-reference",
-      "strongAuthentication": "verifier-port-no-adapter",
+      "strongAuthentication": "ledger-gated-verifier-port-no-adapter",
       "strongAuthenticationFailures": [
         "strong-authentication-invalid",
         "strong-authentication-unavailable"

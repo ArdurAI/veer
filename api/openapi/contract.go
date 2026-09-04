@@ -1570,7 +1570,7 @@ func auditManifestContract() auditContract {
 		PrivilegedAdmin: privilegedAdminContract{
 			ContractVersion:              "veer.administration.v1alpha1",
 			Ledger:                       "process-local-reference",
-			StrongAuthentication:         "verifier-port-no-adapter",
+			StrongAuthentication:         "ledger-gated-verifier-port-no-adapter",
 			StrongAuthenticationFailures: []string{"strong-authentication-invalid", "strong-authentication-unavailable"},
 			MaxAdministrators:            64,
 			MaxTrackedElevations:         1_000,

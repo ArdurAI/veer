@@ -1,17 +1,20 @@
 package administration
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authentication"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
 // Ledger is the sole owner of process-local elevation issuance and lifecycle
-// state. Its proof and grant indexes make aliases and reconstructed receipts
+// state. Its proof and grant indexes make aliases and reconstructed values
 // unable to replay within one process, and terminal tombstones remain retained
 // until the fixed capacity is exhausted.
 //
@@ -23,11 +26,15 @@ type Ledger struct {
 }
 
 type ledgerState struct {
-	mu             sync.Mutex
-	administrators map[resource.ID]Administrator
-	proofs         map[resource.ID]struct{}
-	grants         map[resource.ID]*grantRecord
-	highWater      time.Time
+	mu              sync.Mutex
+	clockSamples    atomic.Uint64
+	lastClockSample uint64
+	verifier        StrongAuthenticationVerifier
+	clock           Clock
+	administrators  map[resource.ID]Administrator
+	proofs          map[resource.ID]struct{}
+	grants          map[resource.ID]*grantRecord
+	highWater       time.Time
 }
 
 type grantRecord struct {
@@ -36,10 +43,24 @@ type grantRecord struct {
 	terminalAt time.Time
 }
 
+type issuanceClockSample struct {
+	sequence uint64
+	observed time.Time
+	err      error
+}
+
 // NewLedger validates and takes an immutable copy of the configured human
-// platform-administrator directory. An empty directory is valid and denies all
-// issuance.
-func NewLedger(administrators []Administrator) (Ledger, error) {
+// platform-administrator directory and the required verification authorities.
+// An empty directory is valid and denies all issuance. The verifier and clock
+// are shared by every Ledger copy and cannot be replaced through public APIs.
+func NewLedger(
+	administrators []Administrator,
+	verifier StrongAuthenticationVerifier,
+	clock Clock,
+) (Ledger, error) {
+	if isNilInterface(verifier) || isNilInterface(clock) {
+		return Ledger{}, ErrInvalidLedger
+	}
 	if len(administrators) > MaxAdministrators {
 		return Ledger{}, fmt.Errorf("%w: %w", ErrInvalidLedger, ErrTooManyAdministrators)
 	}
@@ -60,79 +81,123 @@ func NewLedger(administrators []Administrator) (Ledger, error) {
 		byIdentity[key] = administrator.id
 	}
 	return Ledger{state: &ledgerState{
+		verifier:       verifier,
+		clock:          clock,
 		administrators: byID,
 		proofs:         make(map[resource.ID]struct{}),
 		grants:         make(map[resource.ID]*grantRecord),
 	}}, nil
 }
 
-// Issue atomically records one proof tombstone and one active grant. All
-// validation is staged before either map changes. A valid forward clock sample
-// advances the ledger high-water mark even when later semantic validation
-// fails, preventing a caller from retrying failed work with an earlier clock.
-func (ledger Ledger) Issue(now time.Time, receipt StrongAuthReceipt) (Grant, error) {
-	if ledger.state == nil {
+// Issue invokes the configured verifier with the exact credential and request,
+// samples the configured clock, and atomically records one proof tombstone and
+// one active grant. Callers cannot supply verifier output or issuance time.
+// All validation is staged before either map changes. A valid forward clock
+// sample advances the ledger high-water mark even when later semantic
+// validation fails, preventing retries of failed work with an earlier clock.
+func (ledger Ledger) Issue(
+	ctx context.Context,
+	credential authentication.BearerCredential,
+	request ElevationRequest,
+) (Grant, error) {
+	if ledger.state == nil || isNilInterface(ledger.state.verifier) || isNilInterface(ledger.state.clock) {
 		return Grant{}, ErrInvalidLedger
 	}
-	if !validStrongAuthReceipt(receipt) {
-		return Grant{}, ErrInvalidStrongAuthReceipt
+	if isNilInterface(ctx) {
+		return Grant{}, ErrStrongAuthenticationUnavailable
 	}
-	normalized, err := normalizeContractTime(now)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return Grant{}, err
+	}
+	if !credential.Valid() || ValidateElevationRequest(request) != nil {
+		return Grant{}, ErrStrongAuthenticationInvalid
 	}
 
 	state := ledger.state
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if err := state.observeClockAtLeast(normalized, receipt.verifiedAt); err != nil {
+	proofID, authenticatedAt, verificationErr := state.verifier.VerifyStrongAuthentication(
+		ctx,
+		credential,
+		cloneElevationRequest(request),
+	)
+	if err := ctx.Err(); err != nil {
 		return Grant{}, err
 	}
-	if normalized.Sub(receipt.authenticatedAt) > MaxStrongAuthProofAge {
-		return Grant{}, ErrStrongAuthProofStale
+	if verificationErr != nil {
+		if failure, classified := ClassifyStrongAuthenticationError(verificationErr); classified {
+			return Grant{}, failure
+		}
+		return Grant{}, ErrStrongAuthenticationUnavailable
+	}
+	if !resourceIDValid(proofID) {
+		return Grant{}, ErrStrongAuthenticationUnavailable
+	}
+	normalizedAuthenticated, err := normalizeContractTime(authenticatedAt)
+	if err != nil {
+		return Grant{}, ErrStrongAuthenticationUnavailable
+	}
+	clockSample := state.sampleIssuanceClock()
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	normalized, err := state.observeIssuanceClockLocked(clockSample)
+	// Once sampled, time must be fenced even when cancellation wins. Otherwise
+	// a strategically canceled later observation could let a subsequent clock
+	// rollback appear fresh. Context still takes precedence over clock errors.
+	if contextErr := ctx.Err(); contextErr != nil {
+		return Grant{}, contextErr
+	}
+	if err != nil {
+		return Grant{}, err
+	}
+	if normalized.Before(request.requestedAt) || normalized.Before(normalizedAuthenticated) ||
+		normalized.Sub(normalizedAuthenticated) > MaxStrongAuthProofAge {
+		return Grant{}, ErrStrongAuthenticationInvalid
 	}
 
-	configured, exists := state.administrators[receipt.request.administrator.id]
+	configured, exists := state.administrators[request.administrator.id]
 	if !exists {
 		return Grant{}, ErrAdministratorNotRegistered
 	}
-	if !equalAdministrator(configured, receipt.request.administrator) ||
-		!configured.MatchesPrincipal(receipt.request.principal) {
+	if !equalAdministrator(configured, request.administrator) ||
+		!configured.MatchesPrincipal(request.principal) {
 		return Grant{}, ErrIdentityMismatch
 	}
-	if _, exists := state.proofs[receipt.proofID]; exists {
+	if _, exists := state.proofs[proofID]; exists {
 		return Grant{}, ErrStrongAuthProofReplayed
 	}
-	if _, exists := state.grants[receipt.request.grantID]; exists {
+	if _, exists := state.grants[request.grantID]; exists {
 		return Grant{}, ErrDuplicateGrantID
 	}
 	if len(state.grants) >= MaxTrackedElevations {
 		return Grant{}, ErrElevationLedgerFull
 	}
 
-	expiresAt, err := normalizeContractTime(normalized.Add(receipt.request.duration))
+	expiresAt, err := normalizeContractTime(normalized.Add(request.duration))
 	if err != nil {
 		return Grant{}, fmt.Errorf("%w: expiration", ErrInvalidElevationDuration)
 	}
 	grant := Grant{
 		initialized:     true,
-		id:              receipt.request.grantID,
+		id:              request.grantID,
 		administratorID: configured.id,
-		proofID:         receipt.proofID,
-		action:          receipt.request.action,
-		target:          cloneTarget(receipt.request.target),
-		reason:          receipt.request.reason,
-		caseReference:   receipt.request.caseReference,
+		proofID:         proofID,
+		action:          request.action,
+		target:          cloneTarget(request.target),
+		reason:          request.reason,
+		caseReference:   request.caseReference,
 		issuedAt:        normalized,
 		expiresAt:       expiresAt,
 	}
 	if !validGrant(grant) {
 		return Grant{}, ErrInvalidElevationRequest
 	}
+	if err := ctx.Err(); err != nil {
+		return Grant{}, err
+	}
 
 	// No operation below this point can fail: the proof tombstone and grant
 	// become visible together while the single ledger lock is held.
-	state.proofs[receipt.proofID] = struct{}{}
+	state.proofs[proofID] = struct{}{}
 	state.grants[grant.id] = &grantRecord{grant: cloneGrant(grant), state: GrantStateActive}
 	return cloneGrant(grant), nil
 }
@@ -263,14 +328,64 @@ func (state *ledgerState) observeClock(value time.Time) error {
 	return nil
 }
 
-func (state *ledgerState) observeClockAtLeast(value, minimum time.Time) error {
-	if value.Before(minimum) || (!state.highWater.IsZero() && value.Before(state.highWater)) {
-		return ErrClockRegressed
+func (state *ledgerState) sampleIssuanceClock() issuanceClockSample {
+	if state == nil || isNilInterface(state.clock) {
+		return issuanceClockSample{err: ErrStrongAuthenticationUnavailable}
 	}
-	if state.highWater.IsZero() || value.After(state.highWater) {
-		state.highWater = value
+	var sequence uint64
+	for {
+		current := state.clockSamples.Load()
+		if current == ^uint64(0) {
+			return issuanceClockSample{err: ErrStrongAuthenticationUnavailable}
+		}
+		if state.clockSamples.CompareAndSwap(current, current+1) {
+			sequence = current + 1
+			break
+		}
 	}
-	return nil
+	return issuanceClockSample{sequence: sequence, observed: state.clock.Now()}
+}
+
+// observeIssuanceClockLocked orders Clock.Now completions by call start. An
+// older overlapping call uses the latest already-observed time instead of
+// manufacturing a rollback; a fresh sequential rollback still fails closed.
+func (state *ledgerState) observeIssuanceClockLocked(sample issuanceClockSample) (time.Time, error) {
+	if sample.sequence == 0 {
+		return time.Time{}, ErrStrongAuthenticationUnavailable
+	}
+	if sample.err != nil {
+		if sample.sequence > state.lastClockSample {
+			state.lastClockSample = sample.sequence
+		}
+		return time.Time{}, ErrStrongAuthenticationUnavailable
+	}
+	normalized, err := normalizeContractTime(sample.observed)
+	if err != nil {
+		if sample.sequence > state.lastClockSample {
+			state.lastClockSample = sample.sequence
+		}
+		return time.Time{}, ErrStrongAuthenticationUnavailable
+	}
+	if sample.sequence <= state.lastClockSample {
+		// A stale sequence still carries a valid time observation. Clamp it
+		// forward against the accepted high-water mark; never replace its own
+		// later observation with an earlier time for freshness decisions.
+		if state.highWater.IsZero() || normalized.After(state.highWater) {
+			state.highWater = normalized
+		}
+		return state.highWater, nil
+	}
+
+	// Advance the sequence fence even when this fresh sample is rejected, so
+	// an older overlapping sample cannot later appear fresh.
+	state.lastClockSample = sample.sequence
+	if !state.highWater.IsZero() && normalized.Before(state.highWater) {
+		return time.Time{}, ErrClockRegressed
+	}
+	if state.highWater.IsZero() || normalized.After(state.highWater) {
+		state.highWater = normalized
+	}
+	return normalized, nil
 }
 
 func (state *ledgerState) lookupGrant(grant Grant) (*grantRecord, error) {

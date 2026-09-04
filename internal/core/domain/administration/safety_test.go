@@ -31,9 +31,8 @@ func TestAdministrationDiagnosticsAndSerializationAreSafe(t *testing.T) {
 		t, testGrantID, administrator, principal, authorization.ActionAuditExport,
 		target, time.Minute,
 	)
-	receipt := mustReceipt(t, testProofID, request, testNow, testNow)
 	ledger := mustLedger(t, administrator)
-	grant, err := ledger.Issue(testNow, receipt)
+	grant, err := mustIssue(t, ledger, testProofID, request, testNow, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,10 +48,10 @@ func TestAdministrationDiagnosticsAndSerializationAreSafe(t *testing.T) {
 		t, "elv_01JADMIN00000000000000002", administrator, principal,
 		authorization.ActionAuditExport, target, time.Minute,
 	)
-	revocationReceipt := mustReceipt(
-		t, "prf_01JADMIN00000000000000002", revocationRequest, testNow, testNow,
+	revocationGrant, err := mustIssue(
+		t, revocationLedger, "prf_01JADMIN00000000000000002",
+		revocationRequest, testNow, testNow,
 	)
-	revocationGrant, err := revocationLedger.Issue(testNow, revocationReceipt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +67,6 @@ func TestAdministrationDiagnosticsAndSerializationAreSafe(t *testing.T) {
 		&target,
 		request,
 		&request,
-		receipt,
-		&receipt,
 		grant,
 		&grant,
 		consumption,

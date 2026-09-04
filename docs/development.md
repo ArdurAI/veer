@@ -156,17 +156,21 @@ not a required projection update.
 
 Audit or privileged-administration contract changes must keep
 [`ADR 0011`](architecture/0011-tamper-evident-audit-and-privileged-administration.md),
-the `internal/core/domain/audit` and `internal/core/domain/administration`
-constants and registries, the `StrongAuthenticationVerifier` port, the root
+the `internal/core/domain/audit`, `internal/core/domain/authentication`, and
+`internal/core/domain/administration` constants and registries, the
+ledger-owned `StrongAuthenticationVerifier` and `Clock`, the root
 `x-veer-audit` projection, and the formal threat-model status in one reviewed
 change. Focused tests must cover canonical event and segment bounds, exact
 vocabulary order, operation-timeline correlations, actor/authentication
 compatibility, stream scope, chain and export verification, trusted terminal
 checkpoints, retention boundaries and holds, exact administrator identity,
-sealed action/target pairs, strong-authentication age and replay, one-use grant
+sealed action/target pairs, exactly-once verifier invocation with exact
+credential/request forwarding, strong-authentication age and replay, rejected
+verifier outputs, trusted-clock issuance and overlap behavior, one-use grant
 lifecycle, clock regression, expiry equality, and redaction/serialization
-canaries. They must also prove that an internally valid hash-chain prefix does
-not establish tail completeness without a separately trusted expected head.
+canaries. They must also prove that callers cannot inject verifier output or
+issuance time and that an internally valid hash-chain prefix does not establish
+tail completeness without a separately trusted expected head.
 These are deterministic reference checks: they make no database, archive,
 signing, cloud, or paid-service call and do not establish durable, cross-node,
 atomic, API, or worker enforcement. The root projection adds no public path,

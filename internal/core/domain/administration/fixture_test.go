@@ -1,10 +1,13 @@
 package administration
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authentication"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
@@ -27,6 +30,7 @@ const (
 	testSubject                          = "subject-canary-sensitive"
 	testReason                           = "Restore delivery after verified queue isolation"
 	testCaseReference                    = "INC-canary-1042"
+	testBearerToken                      = "strong-authentication-canary.signature"
 )
 
 var testNow = time.Date(2026, time.September, 3, 12, 0, 0, 123_000_000, time.UTC)
@@ -48,6 +52,61 @@ type hierarchyFixture struct {
 	connection         resource.ID
 	operation          operation.Operation
 	workspaceOperation operation.Operation
+}
+
+type testStrongAuthenticationVerifier struct {
+	mu              sync.Mutex
+	proofID         resource.ID
+	authenticatedAt time.Time
+	err             error
+	calls           int
+	credential      authentication.BearerCredential
+	request         ElevationRequest
+}
+
+func (verifier *testStrongAuthenticationVerifier) VerifyStrongAuthentication(
+	ctx context.Context,
+	credential authentication.BearerCredential,
+	request ElevationRequest,
+) (resource.ID, time.Time, error) {
+	if err := ctx.Err(); err != nil {
+		return "", time.Time{}, err
+	}
+	verifier.mu.Lock()
+	defer verifier.mu.Unlock()
+	verifier.calls++
+	verifier.credential = credential
+	verifier.request = cloneElevationRequest(request)
+	return verifier.proofID, verifier.authenticatedAt, verifier.err
+}
+
+func (verifier *testStrongAuthenticationVerifier) configure(
+	proofID resource.ID,
+	authenticatedAt time.Time,
+	err error,
+) {
+	verifier.mu.Lock()
+	defer verifier.mu.Unlock()
+	verifier.proofID = proofID
+	verifier.authenticatedAt = authenticatedAt
+	verifier.err = err
+}
+
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (clock *testClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *testClock) set(now time.Time) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.now = now
 }
 
 func newHierarchyFixture(t testing.TB) hierarchyFixture {
@@ -215,7 +274,12 @@ func mustAdministrator(t testing.TB, id resource.ID, principal identity.Principa
 
 func mustLedger(t testing.TB, administrators ...Administrator) Ledger {
 	t.Helper()
-	ledger, err := NewLedger(administrators)
+	verifier := &testStrongAuthenticationVerifier{
+		proofID:         testProofID,
+		authenticatedAt: testNow,
+	}
+	clock := &testClock{now: testNow}
+	ledger, err := NewLedger(administrators, verifier, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,18 +313,29 @@ func mustRequest(
 	return request
 }
 
-func mustReceipt(
+func mustIssue(
 	t testing.TB,
+	ledger Ledger,
 	proofID resource.ID,
 	request ElevationRequest,
-	authenticatedAt, verifiedAt time.Time,
-) StrongAuthReceipt {
+	authenticatedAt, issuedAt time.Time,
+) (Grant, error) {
 	t.Helper()
-	receipt, err := NewStrongAuthReceipt(proofID, request, authenticatedAt, verifiedAt)
+	verifier, ok := ledger.state.verifier.(*testStrongAuthenticationVerifier)
+	if !ok {
+		t.Fatal("mustIssue requires the test strong-authentication verifier")
+	}
+	clock, ok := ledger.state.clock.(*testClock)
+	if !ok {
+		t.Fatal("mustIssue requires the test clock")
+	}
+	verifier.configure(proofID, authenticatedAt, nil)
+	clock.set(issuedAt)
+	credential, err := authentication.NewBearerCredential(testBearerToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return receipt
+	return ledger.Issue(context.Background(), credential, request)
 }
 
 func generatedID(prefix string, index int) resource.ID {
