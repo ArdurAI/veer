@@ -2,6 +2,7 @@ package administration
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/operation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
@@ -241,6 +243,72 @@ func TestTargetResolutionSealsPlatformWorkspaceAndOperationScope(t *testing.T) {
 	}
 	if _, err := ResolveWorkspaceAuditExportTarget(hierarchy.Snapshot{}); !errors.Is(err, ErrInvalidTarget) {
 		t.Fatalf("ResolveWorkspaceAuditExportTarget(zero) error = %v", err)
+	}
+}
+
+func TestResolveOperationTargetAllowsUnboundEnvironmentScopedResources(t *testing.T) {
+	t.Parallel()
+	fixture := newHierarchyFixture(t)
+	principal := mustPrincipal(t, testIssuer, testSubject)
+	administrator := mustAdministrator(t, testAdministratorID, principal)
+
+	resources := []struct {
+		name string
+		id   resource.ID
+	}{
+		{name: "environment", id: fixture.environment},
+		{name: "application", id: fixture.application},
+		{name: "component", id: fixture.component},
+		{name: "provider connection", id: fixture.connection},
+	}
+	for index, test := range resources {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := operation.New(operation.Input{
+				ID:              generatedID("op", index+10),
+				WorkspaceID:     fixture.workspace,
+				ResourceID:      test.id,
+				Generation:      1,
+				ResourceVersion: fmt.Sprintf("rv_admin_unbound_%d", index),
+				CreatedAt:       testNow,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			target, err := ResolveOperationTarget(fixture.snapshot, value)
+			if err != nil {
+				t.Fatalf("ResolveOperationTarget(unbound %s) error = %v", test.name, err)
+			}
+			resourceID, present := target.ResourceID()
+			assertOptionalID(t, resourceID, present, test.id)
+			if _, present := target.EnvironmentID(); present {
+				t.Fatal("unbound operation target gained an environment binding")
+			}
+			if _, present := target.ProviderConnectionID(); present {
+				t.Fatal("unbound operation target gained a provider binding")
+			}
+
+			ledger := mustLedger(t, administrator)
+			request := mustRequest(
+				t,
+				generatedID("elv", index+10),
+				administrator,
+				principal,
+				authorization.ActionOperationQuarantine,
+				target,
+				time.Minute,
+			)
+			grant, err := ledger.Issue(
+				testNow,
+				mustReceipt(t, generatedID("prf", index+10), request, testNow, testNow),
+			)
+			if err != nil {
+				t.Fatalf("Issue(unbound %s target) error = %v", test.name, err)
+			}
+			if !equalTarget(grant.Target(), target) {
+				t.Fatal("issued grant lost its unbound operation target")
+			}
+		})
 	}
 }
 

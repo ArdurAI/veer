@@ -67,8 +67,8 @@ func ResolveOperationTarget(snapshot hierarchy.Snapshot, value operation.Operati
 	}
 
 	resolvedEnvironment, environmentPresent := resolved.EnvironmentID()
-	if environmentPresent != (value.EnvironmentID != nil) ||
-		(environmentPresent && resolvedEnvironment != *value.EnvironmentID) {
+	if value.EnvironmentID != nil &&
+		(!environmentPresent || resolvedEnvironment != *value.EnvironmentID) {
 		return Target{}, fmt.Errorf("%w: environment binding", ErrInvalidTarget)
 	}
 

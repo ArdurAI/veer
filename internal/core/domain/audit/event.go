@@ -559,6 +559,9 @@ func validateEventRelationships(event Event) error {
 		if event.operation == nil || event.attempt == nil || event.source != SourceProviderAdapter {
 			return fmt.Errorf("%w: operation and attempt references required", ErrInvalidEvent)
 		}
+		if workspaceID, workspaceStream := event.stream.WorkspaceID(); !workspaceStream || workspaceID != event.operation.workspaceID {
+			return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrWorkspaceMismatch)
+		}
 	case EventKindElevation:
 		if event.elevation == nil || event.source != SourceAdministration ||
 			event.actor.kind != ActorKindAdministrator ||

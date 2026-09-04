@@ -193,6 +193,62 @@ func TestOperationReferenceRetainsSafeTimelineAndProviderBinding(t *testing.T) {
 	}
 }
 
+func TestProviderAttemptRequiresMatchingWorkspaceStream(t *testing.T) {
+	t.Parallel()
+
+	valid := mustProviderAttemptEvent(t, 1)
+	operationReference, operationPresent := valid.Operation()
+	attemptReference, attemptPresent := valid.Attempt()
+	if !operationPresent || !attemptPresent {
+		t.Fatal("provider-attempt fixture omitted required references")
+	}
+	otherWorkspaceID := resource.ID("wsp_01JAUDIT00000000000000001")
+	otherWorkspace, err := NewWorkspaceStream(otherWorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		stream Stream
+	}{
+		{name: "platform stream", stream: NewPlatformStream()},
+		{name: "different workspace stream", stream: otherWorkspace},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewEvent(EventInput{
+				ID:                   eventID(2),
+				Stream:               test.stream,
+				Sequence:             2,
+				RecordedAt:           testTime.Add(time.Millisecond),
+				ClockState:           valid.ClockState(),
+				Kind:                 valid.Kind(),
+				Source:               valid.Source(),
+				Actor:                valid.Actor(),
+				AuthenticationMethod: valid.AuthenticationMethod(),
+				Action:               valid.Action(),
+				Operation:            &operationReference,
+				Attempt:              &attemptReference,
+				Outcome:              valid.Outcome(),
+			})
+			if !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("NewEvent() = %v, want %v", err, ErrWorkspaceMismatch)
+			}
+
+			wire := eventToWire(valid)
+			wire.Stream = streamToWire(test.stream)
+			data, err := jsonv2.Marshal(wire, json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := UnmarshalCanonicalEvent(data); !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("UnmarshalCanonicalEvent() = %v, want %v; event=%s", err, ErrWorkspaceMismatch, data)
+			}
+		})
+	}
+}
+
 func TestCanonicalDecodeRejectsImpossibleAuthorizationTargetRelabels(t *testing.T) {
 	t.Parallel()
 
@@ -219,6 +275,7 @@ func TestCanonicalDecodeRejectsImpossibleAuthorizationTargetRelabels(t *testing.
 		{"resource object mismatch", func(wire *eventWire) { wire.Target.ObjectID = testResourceID.String() }},
 		{"workspace with environment", func(wire *eventWire) { wire.Target.ResourceKind = "Workspace" }},
 		{"membership on environment", func(wire *eventWire) { wire.Target.ObjectKind = authorization.ObjectKindMembership }},
+		{"audit on environment", func(wire *eventWire) { wire.Target.ObjectKind = authorization.ObjectKindAudit }},
 		{"audit with provider", func(wire *eventWire) {
 			wire.Target.ObjectKind = authorization.ObjectKindAudit
 			wire.Target.ProviderConnectionID = testConnectionID.String()

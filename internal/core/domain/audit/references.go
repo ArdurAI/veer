@@ -464,7 +464,8 @@ func validateTargetRef(reference TargetRef) error {
 			return ErrInvalidReference
 		}
 	case authorization.ObjectKindAudit:
-		if reference.providerConnectionID != nil {
+		if reference.resourceKind != "Workspace" || reference.resourceID != reference.workspaceID ||
+			reference.environmentID != nil || reference.providerConnectionID != nil {
 			return ErrInvalidReference
 		}
 	case authorization.ObjectKindOperation, authorization.ObjectKindPlan:

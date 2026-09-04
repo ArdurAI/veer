@@ -60,7 +60,8 @@ func ValidateCheckpoint(checkpoint Checkpoint) error {
 	if !checkpoint.initialized || ValidateStream(checkpoint.stream) != nil || !checkpoint.digest.initialized {
 		return ErrInvalidCheckpoint
 	}
-	if checkpoint.sequence == 0 && !checkpoint.digest.Equal(deriveGenesisDigest(checkpoint.stream)) {
+	genesis := checkpoint.digest.Equal(deriveGenesisDigest(checkpoint.stream))
+	if (checkpoint.sequence == 0) != genesis {
 		return ErrInvalidCheckpoint
 	}
 	return nil
@@ -381,6 +382,13 @@ func validateSegmentStructure(segment Segment) error {
 			return err
 		}
 		if index == 0 {
+			if _, err := NewCheckpoint(
+				record.event.stream,
+				record.event.sequence-1,
+				record.previousDigest,
+			); err != nil {
+				return fmt.Errorf("%w: invalid first-record predecessor", ErrInvalidSegment)
+			}
 			continue
 		}
 		previous := segment.records[index-1]

@@ -2,6 +2,9 @@ package audit
 
 import (
 	"bytes"
+	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"math"
 	"os"
@@ -141,12 +144,122 @@ func TestStreamSeparatedGenesisAndSequenceOverflow(t *testing.T) {
 		t.Fatal("accepted export digest as chain digest")
 	}
 
-	maximum, err := NewCheckpoint(mustWorkspaceStream(t), math.MaxUint64, workspace.Digest())
+	_, nonGenesis, err := Append(workspace, mustRequestEvent(t, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	maximum, err := NewCheckpoint(mustWorkspaceStream(t), math.MaxUint64, nonGenesis.Digest())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Append(maximum, mustRequestEvent(t, 1)); !errors.Is(err, ErrInvalidSequence) {
 		t.Fatalf("Append at sequence saturation = %v", err)
+	}
+}
+
+func TestCheckpointBindsGenesisDigestToSequenceZero(t *testing.T) {
+	t.Parallel()
+
+	stream := mustWorkspaceStream(t)
+	genesis, err := GenesisCheckpoint(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCheckpoint(genesis); err != nil {
+		t.Fatalf("ValidateCheckpoint(genesis) = %v", err)
+	}
+	if _, err := NewCheckpoint(stream, 0, genesis.Digest()); err != nil {
+		t.Fatalf("NewCheckpoint(explicit genesis) = %v", err)
+	}
+
+	_, nonGenesis, err := Append(genesis, mustRequestEvent(t, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCheckpoint(stream, nonGenesis.Sequence(), nonGenesis.Digest()); err != nil {
+		t.Fatalf("NewCheckpoint(non-genesis) = %v", err)
+	}
+
+	for _, sequence := range []uint64{1, math.MaxUint64} {
+		if _, err := NewCheckpoint(stream, sequence, genesis.Digest()); !errors.Is(err, ErrInvalidCheckpoint) {
+			t.Fatalf("NewCheckpoint(sequence=%d, genesis digest) = %v", sequence, err)
+		}
+	}
+	if _, err := NewCheckpoint(stream, 0, nonGenesis.Digest()); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("NewCheckpoint(sequence=0, non-genesis digest) = %v", err)
+	}
+}
+
+func TestSegmentFirstRecordRequiresStructurallyValidPredecessor(t *testing.T) {
+	t.Parallel()
+
+	stream := mustWorkspaceStream(t)
+	genesis, err := GenesisCheckpoint(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, nonGenesis, err := Append(genesis, mustRequestEvent(t, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMidstream, _, err := NewSegment(nonGenesis, []Event{mustRequestEvent(t, 2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validData, err := MarshalCanonicalSegment(validMidstream)
+	if err != nil {
+		t.Fatalf("MarshalCanonicalSegment(valid midstream) = %v", err)
+	}
+	if _, err := UnmarshalCanonicalSegment(validData); err != nil {
+		t.Fatalf("UnmarshalCanonicalSegment(valid midstream) = %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		event       Event
+		predecessor ChainDigest
+	}{
+		{name: "sequence two with genesis", event: mustRequestEvent(t, 2), predecessor: genesis.Digest()},
+		{name: "sequence one with non-genesis", event: mustRequestEvent(t, 1), predecessor: nonGenesis.Digest()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			canonicalEvent, err := MarshalCanonicalEvent(test.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := Record{
+				event:          test.event,
+				previousDigest: test.predecessor,
+				digest:         deriveRecordDigest(test.predecessor, test.event, canonicalEvent),
+			}
+			if err := validateRecord(record); err != nil {
+				t.Fatalf("fixture record must be digest-valid: %v", err)
+			}
+
+			segment := Segment{records: []Record{record}}
+			if _, err := MarshalCanonicalSegment(segment); !errors.Is(err, ErrInvalidSegment) {
+				t.Fatalf("MarshalCanonicalSegment() = %v, want %v", err, ErrInvalidSegment)
+			}
+
+			wire := segmentWire{
+				ContractVersion: ContractVersion,
+				Records: []recordWire{{
+					Event:          eventToWire(record.event),
+					PreviousDigest: record.previousDigest.String(),
+					Digest:         record.digest.String(),
+				}},
+			}
+			data, err := jsonv2.Marshal(wire, json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := UnmarshalCanonicalSegment(data); !errors.Is(err, ErrInvalidSegment) {
+				t.Fatalf("UnmarshalCanonicalSegment() = %v, want %v; segment=%s", err, ErrInvalidSegment, data)
+			}
+		})
 	}
 }
 

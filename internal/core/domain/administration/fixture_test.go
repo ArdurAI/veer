@@ -15,6 +15,8 @@ import (
 const (
 	testWorkspaceID          resource.ID = "wrk_01JADMIN00000000000000001"
 	testEnvironmentID        resource.ID = "env_01JADMIN00000000000000001"
+	testApplicationID        resource.ID = "app_01JADMIN00000000000000001"
+	testComponentID          resource.ID = "cmp_01JADMIN00000000000000001"
 	testConnectionID         resource.ID = "con_01JADMIN00000000000000001"
 	testOperationID          resource.ID = "op_01JADMIN000000000000000001"
 	testAdministratorID      resource.ID = "adm_01JADMIN00000000000000001"
@@ -41,6 +43,8 @@ type hierarchyFixture struct {
 	snapshot           hierarchy.Snapshot
 	workspace          resource.ID
 	environment        resource.ID
+	application        resource.ID
+	component          resource.ID
 	connection         resource.ID
 	operation          operation.Operation
 	workspaceOperation operation.Operation
@@ -73,6 +77,38 @@ func newHierarchyFixture(t testing.TB) hierarchyFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	applicationPlacement, err := snapshot.DeriveChild(
+		hierarchy.KindApplication,
+		testApplicationID,
+		testEnvironmentID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applicationRecord := recordFromPlacement(t, applicationPlacement, "application")
+	snapshot, err = hierarchy.NewSnapshot(
+		testWorkspaceID,
+		[]hierarchy.Record{workspaceRecord, environmentRecord, applicationRecord},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	componentPlacement, err := snapshot.DeriveChild(
+		hierarchy.KindComponent,
+		testComponentID,
+		testApplicationID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	componentRecord := recordFromPlacement(t, componentPlacement, "component")
+	snapshot, err = hierarchy.NewSnapshot(
+		testWorkspaceID,
+		[]hierarchy.Record{workspaceRecord, environmentRecord, applicationRecord, componentRecord},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	connectionPlacement, err := snapshot.DeriveChild(
 		hierarchy.KindProviderConnection,
 		testConnectionID,
@@ -84,7 +120,13 @@ func newHierarchyFixture(t testing.TB) hierarchyFixture {
 	connectionRecord := recordFromPlacement(t, connectionPlacement, "connection")
 	snapshot, err = hierarchy.NewSnapshot(
 		testWorkspaceID,
-		[]hierarchy.Record{workspaceRecord, environmentRecord, connectionRecord},
+		[]hierarchy.Record{
+			workspaceRecord,
+			environmentRecord,
+			applicationRecord,
+			componentRecord,
+			connectionRecord,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +162,8 @@ func newHierarchyFixture(t testing.TB) hierarchyFixture {
 		snapshot:           snapshot,
 		workspace:          testWorkspaceID,
 		environment:        testEnvironmentID,
+		application:        testApplicationID,
+		component:          testComponentID,
 		connection:         testConnectionID,
 		operation:          op,
 		workspaceOperation: workspaceOperation,
