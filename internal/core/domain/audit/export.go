@@ -8,6 +8,7 @@ import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"fmt"
+	"reflect"
 	"slices"
 	"time"
 )
@@ -319,6 +320,19 @@ type SignatureVerifier interface {
 	) error
 }
 
+func isNilSignatureVerifier(verifier SignatureVerifier) bool {
+	if verifier == nil {
+		return true
+	}
+	value := reflect.ValueOf(verifier)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 // VerifyExport verifies canonical body integrity, contiguous chain/range, the
 // caller-supplied trusted terminal checkpoint, and the external signature. A
 // signed manifest is not itself proof that the selected tail is current.
@@ -331,7 +345,7 @@ func VerifyExport(
 	if err := ValidateExportManifest(manifest); err != nil {
 		return err
 	}
-	if verifier == nil {
+	if isNilSignatureVerifier(verifier) {
 		return ErrSignatureVerification
 	}
 	if ValidateCheckpoint(expectedTerminal) != nil {

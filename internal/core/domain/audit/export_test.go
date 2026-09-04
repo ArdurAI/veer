@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	jsonv2 "encoding/json/v2"
@@ -32,6 +34,20 @@ func (verifier *recordingSignatureVerifier) Verify(
 		return errors.New("unexpected verifier input")
 	}
 	return verifier.err
+}
+
+type nilUnsafeSignatureVerifier struct{}
+
+func (verifier *nilUnsafeSignatureVerifier) Verify(
+	SignatureAlgorithm,
+	string,
+	[]byte,
+	[]byte,
+) error {
+	if verifier == nil {
+		panic("typed-nil signature verifier invoked")
+	}
+	return nil
 }
 
 type exportFixture struct {
@@ -132,10 +148,19 @@ func TestVerifyExportRequiresIntegritySignatureAndTrustedTerminal(t *testing.T) 
 	if err := VerifyExport(fixture.manifest, fixture.body, fixture.terminal, nil); !errors.Is(err, ErrSignatureVerification) {
 		t.Fatalf("nil verifier = %v", err)
 	}
+	var typedNilVerifier *nilUnsafeSignatureVerifier
+	if err := VerifyExport(fixture.manifest, fixture.body, fixture.terminal, typedNilVerifier); !errors.Is(err, ErrSignatureVerification) {
+		t.Fatalf("typed-nil verifier = %v", err)
+	}
 
-	verifier.err = errors.New("external verification failure")
-	if err := VerifyExport(fixture.manifest, fixture.body, fixture.terminal, verifier); !errors.Is(err, ErrSignatureVerification) {
-		t.Fatalf("failed signature = %v", err)
+	externalCause := errors.New("external verifier cause")
+	verifier.err = fmt.Errorf("external verification failure secret-canary: %w", externalCause)
+	verificationErr := VerifyExport(fixture.manifest, fixture.body, fixture.terminal, verifier)
+	if !errors.Is(verificationErr, ErrSignatureVerification) {
+		t.Fatalf("failed signature = %v", verificationErr)
+	}
+	if errors.Is(verificationErr, externalCause) || strings.Contains(verificationErr.Error(), "secret-canary") {
+		t.Fatalf("failed signature exposed verifier error = %v", verificationErr)
 	}
 }
 
