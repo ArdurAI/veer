@@ -84,18 +84,36 @@ generation-based rotation, bounded material and lifetimes, version-aware
 single-flight, local epochs and tombstones, and forbidden credential
 serialization. It adds no public API, production backend, provider destination
 verification, distributed revocation, or runtime enforcement.
+[ADR 0012](0012-reconciliation-reliability-and-fencing.md) fixes the provider-
+free reliability model around asynchronous execution: immutable plans and
+logical effects, prepared physical attempts, fixed-window HTTP idempotency,
+signed lineage fences, duplicate delivery, cancellation, unknown outcomes,
+bounded observation, quarantine, compensation, and evidence retention. Its
+root OpenAPI projection and process-local domain package add no store, queue,
+worker, provider adapter, or exactly-once execution claim.
 
 ## Reconciliation contract
 
-Every reconciler follows the same state machine:
+Every future runtime reconciler follows the same authority flow:
 
-1. Load desired state and the last known observed state.
-2. Validate schema, authorization, policy, quota, and dependencies.
-3. Calculate a deterministic plan without side effects.
-4. Persist the plan and its authorization decision.
-5. Execute idempotent provider operations.
-6. Record observed state, conditions, external identifiers, and audit events.
-7. Retry transient failures with bounded backoff; surface terminal failures.
+1. Load authoritative desired state, observed state, generation, and prior
+   provider-effect evidence.
+2. Revalidate schema, authorization, policy, quota, cost, credential binding,
+   and dependencies.
+3. Calculate or safely supersede an immutable deterministic plan without side
+   effects, using resolved physical-attempt history plus definitive current
+   logical-effect projections.
+4. Acquire or qualify replacement of the stable resource-lineage lease, then
+   atomically mint and consume preparation authority over cancellation, retry,
+   prior-generation effects, and any deadline-bound observation budget.
+5. Prepare one exact physical attempt with its Operation, plan, effect, fence,
+   and audit evidence; recheck live retry evidence, lease, and deadline margin
+   at dispatch, then call the provider outside the database transaction.
+6. Atomically record the definitive or indeterminate result, observed state,
+   integrity anchor, audit evidence, and at most one successor outbox record.
+7. Retry only with proof, reserve each unknown-outcome observation before its
+   attempt, compare its result against the exact current logical effect, and
+   quarantine or run a qualified forward compensation plan when required.
 
 A successful API write means the desired state was durably accepted. It does
 not imply that asynchronous provider work has already completed.
@@ -145,10 +163,15 @@ not imply that asynchronous provider work has already completed.
 
 ### Reconciliation engine
 
-- Durable work queue with deduplication.
-- Per-resource serialization and bounded global concurrency.
-- Lease-based ownership so failed workers can be replaced safely.
-- Explicit cancellation and deletion semantics.
+- Durable at-least-once work queue whose messages grant no execution authority.
+- Stable Workspace/resource-lineage leases with signed monotonic fences,
+  60-second store and visibility intervals, and 15-to-20-second renewal.
+- Strict provider-call deadline margin and exact generation/Operation/plan/
+  owner/fence predicates before dispatch and result commit.
+- Separate HTTP replay, logical provider-effect, and physical attempt identity.
+- Explicit cancel-pending, indeterminate observation, quarantine, deletion, and
+  forward-compensation semantics projected through the existing Operation
+  phases.
 
 ### Provider adapters
 

@@ -145,13 +145,19 @@ an explicit quota response; they must not cause silent data loss.
 | Load-balancer processed bytes/hour, GB | local | 0.5 | 4 |
 | Billable load-balancer rule evaluations/second | local | 500 | 4,000 |
 | Concurrent non-terminal operations | 10 | 100 | 1,000 |
+| Authoritative reconciliation lease duration | local | 60 sec | 60 sec |
+| Queue visibility interval | local | 60 sec | 60 sec |
+| Stable lease and visibility renewal target | local | 15-20 sec | 15-20 sec |
+| Database lease-renewal updates/second at continuous active limit | local | 6.67 | 66.67 |
+| Database lease-renewal updates/744-hour month at continuous active limit | local | 17,856,000 | 178,560,000 |
 | Pending reconciliation items | 100 | 10,000 | 100,000 |
 | Oldest ready-item admission threshold | 30 min | 15 min | 15 min |
-| Durable queue 64 KiB billable request units/month | 0 | 20,000,000 | 100,000,000 |
+| Durable queue 64 KiB billable request units/month | 0 | 23,546,645 | 152,824,735 |
 | Queue baseline send/receive/delete units/month | 0 | 10,639,935 | 52,824,735 |
 | Queue retry/redelivery reserve units/month | 0 | 5,000,000 | 25,000,000 |
 | Queue empty-poll reserve units/month | 0 | 3,000,000 | 15,000,000 |
 | Queue critical-work reserve units/month | 0 | 1,360,065 | 7,175,265 |
+| Queue visibility-change reserve units/month | 0 | 3,546,645 | 52,824,735 |
 | Encoded queue message body, maximum | 2 KiB | 2 KiB | 2 KiB |
 | Aggregate encoded queue body bytes/month, GB | 0 | 40 | 200 |
 | Provider 4 KiB outbound/12 KiB inbound units/minute, steady | 20 | 120 | 1,200 |
@@ -235,11 +241,12 @@ unit per accepted action therefore consumes 10,639,935 and 52,824,735 queue
 units before retries or empty long polls.
 
 A durable profile-scoped meter expands batches into billable 64 KiB units and
-counts every send, receive, delete, retry, redelivery, and empty long poll. It
-partitions the 20/100 million hard caps into the baseline above, 5/25 million
-retry and redelivery units, 3/15 million empty-poll units, and
-1,360,065/7,175,265 units reserved for recovery, deletion, cancellation, and
-security work.
+counts every send, receive, delete, visibility change, retry, redelivery, and
+empty long poll. It partitions the 23,546,645/152,824,735 hard caps into the
+baseline above, 5/25 million retry and redelivery units, 3/15 million empty-poll
+units, 1,360,065/7,175,265 units reserved for recovery, deletion,
+cancellation, and security work, and 3,546,645/52,824,735 visibility-change
+units.
 
 At the start of each accounting window, a durable schedule ledger earmarks the
 entire 10,639,935/52,824,735-unit baseline for the fixed generated and synthetic
@@ -253,6 +260,16 @@ excess bursts are rejected before the ledger and cannot steal a later slot.
 Baseline claims that fit the pre-reserved schedule remain admissible through
 100% of that partition, including after its 90% threshold, so accepted and
 scheduled work can complete.
+
+Every admitted work item also pre-reserves its maximum healthy visibility-
+change allowance. The worker charges one unit before each SQS visibility API
+action, including retries and partial-batch retry entries. A successful
+completion atomically releases unused units; if completion races a heartbeat,
+exactly one transition consumes or releases each unit. Missing or exhausted
+visibility accounting stops admission rather than borrowing retry, empty-poll,
+or critical-work capacity. The earliest 15-second renewal target means a
+30-second small-profile provider call reserves one reset before completion; a
+60-second target-profile call reserves three resets at 15, 30, and 45 seconds.
 
 At 80% of any non-critical partition, Veer alerts and reduces poll frequency.
 At 90%, it rejects queue-producing mutations that cannot claim a remaining
@@ -786,7 +803,7 @@ service claims.
 | Current-state integrity anchors | Resource lifetime | 90-day tombstone after deletion | One independently write-protected latest-generation proof per resource. |
 | Operations, plans, and policy decisions | 90 days | 365 days in encrypted object storage | Secret-bearing inputs are prohibited. |
 | Security audit events | 90 days queryable | 365 days immutable and encrypted | Shorter retention requires a reviewed security decision. |
-| Idempotency records | 24 hours minimum | None | A caller cannot rely on replay safety after expiry. |
+| HTTP idempotency records | Fixed non-sliding 24-hour semantic window from first successful reservation commit | None | PostgreSQL time before expiry replays; equality is expired, cleanup lag does not extend semantics, and unresolved reservations are not recycled by age. |
 | Recovery-probe identity claims | Fixed 31-day accounting window plus 24 hours | None | At most 46,080 claims of 256 encoded bytes prevent cross-window replay. |
 | Database point-in-time recovery | 35 days in primary region | 7 days replicated in recovery region | Monthly restore verification is required. |
 | Platform logs | 14 days small; 30 days target | None by default | Security events belong in the audit stream, not ordinary logs. |
@@ -1083,8 +1100,8 @@ resources, and `us-west-2` recovery storage.
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 937.50 | USD 1,000.00 | USD 62.50 |
-| Target-scale qualification | USD 2,627.40 | USD 2,650.00 | USD 22.60 |
+| Small production | USD 938.91 | USD 1,000.00 | USD 61.09 |
+| Target-scale qualification | USD 2,648.53 | USD 2,650.00 | USD 1.47 |
 
 The target reference leaves only the narrow headroom reported above after
 conservatively pricing all retained backup data, the external synthetic, and
@@ -1166,9 +1183,10 @@ the exercise continues.
   endpoints require a before/after cost comparison that includes hourly and
   data-processing rates.
 - Queue messages carry identifiers, generations, and integrity metadata, not
-  resource bodies, and are capped at 2 KiB. The 20/100 million monthly limits
-  still count billable 64 KiB request units after sends, receives, deletes,
-  retries, batching, and empty long polls rather than only logical messages.
+  resource bodies, and are capped at 2 KiB. The 23,546,645/152,824,735 monthly
+  limits count billable 64 KiB request units after sends, receives, deletes,
+  visibility changes, retries, batching, partial-batch failures, and empty long
+  polls rather than only logical messages.
 - Directional cross-AZ bytes are measured without netting against the
   200/2,000 GB monthly caps and their queue, database/service, and failure
   reserves. The 80% alert and 90% admission guard preserve recovery headroom.

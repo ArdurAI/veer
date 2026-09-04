@@ -95,7 +95,9 @@ then enforces the highest connection generation observed during its own
 lifetime. Neither step proves that the first observed envelopes are the store's
 latest values. Authoritative reload and runtime currentness belong to issues
 [#24](https://github.com/ArdurAI/veer/issues/24) and
-[#29](https://github.com/ArdurAI/veer/issues/29).
+[#30](https://github.com/ArdurAI/veer/issues/30); the exact execution-time
+binding and fencing semantics are fixed by
+[ADR 0012](0012-reconciliation-reliability-and-fencing.md).
 
 `SourceLookup` contains exactly the Workspace, Environment,
 ProviderConnection, ProviderConnection generation, provider identifier,
@@ -510,9 +512,11 @@ was authoritative or current.
 
 The OpenAPI baseline remains exactly four paths, seven operations, and 81
 schemas. Issue [#24](https://github.com/ArdurAI/veer/issues/24) owns runtime
-reauthorization, issues [#29](https://github.com/ArdurAI/veer/issues/29) through
-[#37](https://github.com/ArdurAI/veer/issues/37) own durable plans, execution,
-fences, cancellation, and recovery, issue
+reauthorization, [ADR 0012](0012-reconciliation-reliability-and-fencing.md)
+fixes the provider-free reliability contract, and issues
+[#30](https://github.com/ArdurAI/veer/issues/30) through
+[#37](https://github.com/ArdurAI/veer/issues/37) own durable execution,
+adapters, fences, cancellation, and recovery. Issue
 [#38](https://github.com/ArdurAI/veer/issues/38) owns provider interfaces,
 issue [#39](https://github.com/ArdurAI/veer/issues/39) owns adapter execution
 context, and issues [#45](https://github.com/ArdurAI/veer/issues/45) and

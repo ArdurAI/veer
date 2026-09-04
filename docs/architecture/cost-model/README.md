@@ -50,8 +50,9 @@ does not contact AWS or read environment credentials.
 | Database changed blocks per rolling 35 days | 58.34 GiB | 583.34 GiB |
 | Primary backup storage, current plus 35 days of changes | 108.34 GB-month | 1,083.34 GB-month |
 | Recovery backup storage, current plus 7 days of changes | 61.67 GB-month | 616.67 GB-month |
-| Modeled 64 KiB queue request units with no free allowance | 20 million | 100 million |
+| Modeled 64 KiB queue request units with no free allowance | 23.546645 million | 152.824735 million |
 | Derived queue baseline, including synthetic writes | 10,639,935 units | 52,824,735 units |
+| Pre-reserved visibility-change requests | 3,546,645 units | 52,824,735 units |
 | Encoded queue message body hard limit | 2 KiB | 2 KiB |
 | Aggregate encoded queue body byte limit | 40 GB | 200 GB |
 | New TLS connections/second | 20 | 100 |
@@ -107,8 +108,9 @@ does not contact AWS or read environment credentials.
 | Probe logs/artifacts retained 30 days | 14.0616/44.64 GB | 14.0616/44.64 GB |
 | Probe artifact PUT attempts | 44,640 | 44,640 |
 
-The database and queue rows are price proxies so issue #12 can compare
-alternatives on equal assumptions. They do not select the final implementation.
+The database and queue rows preserve the accepted ADR 0002 stack and ADR 0012
+reliability envelope on equal assumptions. They are design estimates, not
+provider invoices or evidence that runtime meters exist.
 RDS Multi-AZ rates include the standby instance. Database storage uses the
 Multi-AZ gp3 rate. Database recovery storage models one provisioned copy plus a
 full-dataset equivalent of rolling 7-day changed data; recovery transfer uses
@@ -125,12 +127,18 @@ maintenance CPU cannot exceed the accepted ceiling.
 Queue units derive from the accepted 15% write-and-cancellation share of the
 generated request schedule after reserving two synthetic calls per minute. One
 send, receive, and delete for every generated and synthetic write consumes
-10,639,935 units small and 52,824,735 target. The remaining units are hard
-partitions for retries/redeliveries, empty polls, and critical work, enforced by
-the fail-closed meter in the ADR. A durable schedule ledger pre-reserves the
-complete baseline and atomically claims send/receive/delete units at admission,
-and only steady/peak schedule-token holders can consume those claims. The fixed
-workload therefore remains admissible after the 90% warning while excess bursts
+10,639,935 units small and 52,824,735 target. The prior 20/100-million envelope
+already assigned every remaining unit to retries/redeliveries, empty polls, and
+critical work. ADR 0012 therefore adds separate 3,546,645/52,824,735-unit
+visibility-change partitions instead of silently borrowing from those reserves.
+The small profile reserves one reset for each 30-second work item; the target
+profile reserves three resets at the 15-, 30-, and 45-second boundaries for
+each 60-second work item. A future durable schedule ledger must pre-reserve the
+complete baseline and visibility allowance at admission and atomically charge
+retries, partial-batch failures, and completion races. The reference
+`QueueBudget` is process-local and proves only those accounting transitions.
+
+The fixed workload remains admissible after the 90% warning while excess bursts
 are fenced before they can steal future slots. Encoded bodies are capped at 2
 KiB even though each request is conservatively priced as a 64 KiB billable unit.
 A separate counter expands batches and caps all send, receive, redelivery, and

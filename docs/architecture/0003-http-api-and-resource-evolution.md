@@ -314,9 +314,18 @@ and traces use that retry's validated or server-generated request ID.
 
 An outcome that failed before the idempotency transaction began is not cached.
 An uncertain commit result must resolve the durable idempotency row before a
-retry can execute. A record is retained for at least 24 hours; after expiry a
-caller cannot rely on replay safety. Storage and lookup remain bounded by the
-same principal and capacity admission limits as mutations.
+retry can execute. The semantic replay window is fixed and non-sliding:
+`expires_at` is the first successful reservation commit's PostgreSQL time plus
+24 hours, the row is live only while database time is strictly before that
+instant, and equality is expired. Replay never moves the cutoff and asynchronous
+cleanup lag never extends it. An unresolved reservation is not recyclable merely
+because the cutoff passed. Reuse after expiry creates a fresh transactional key
+epoch and repeats current authentication, authorization, precondition,
+validation, uniqueness, and admission checks. Storage and lookup remain bounded
+by the same principal and capacity admission limits as mutations.
+[ADR 0012](0012-reconciliation-reliability-and-fencing.md) defines the durable
+crash, provider-effect identity, and exact cutoff-race semantics without
+changing this transport scope.
 
 The name and fault-tolerance intent align with the IETF HTTPAPI working-group
 [`Idempotency-Key` draft](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/),

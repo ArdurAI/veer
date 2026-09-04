@@ -97,7 +97,7 @@ check.
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
-| `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization/audit projections, schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
+| `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization/audit/reconciliation projections, schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify checked-in architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
 
@@ -176,6 +176,39 @@ signing, cloud, or paid-service call and do not establish durable, cross-node,
 atomic, API, or worker enforcement. The root projection adds no public path,
 operation, or schema; `./hack/dev api` must still report exactly four paths,
 seven operations, and 81 schemas.
+
+Reconciliation reliability changes must keep
+[`ADR 0012`](architecture/0012-reconciliation-reliability-and-fencing.md), the
+`internal/core/domain/reconciliation` constants and closed registries, the
+fixed idempotency projection in `x-veer-evolution`, the root
+`x-veer-reconciliation` projection, the cost worksheet, and the formal threat
+model in one reviewed change. Focused tests must cover all eight crash
+boundaries, fixed non-sliding 24-hour replay at equality, unresolved
+reservations, capacity-bounded active-call and cross-key cleanup ordering,
+bounded response/key state, and stale completion rejection after safe
+reclamation; separate logical-effect and
+physical-attempt identity; immutable plan reuse and capability-qualified safe
+supersession; signed fence exhaustion; renew-without-fence-increment; strict RPC
+margin, retry-proof expiry, and live-lease dispatch recheck; failed and unknown
+maintenance;
+duplicate delivery takeover by a newer fence; exact one-use attempt preparation
+and dispatch authority; exact work-to-lease plan binding; cancel-pending
+projection through the existing six Operation phases; pre-dispatch finite
+unknown-outcome observation with a sealed deadline, exact-current completion,
+source-attempt-versioned same-millisecond late-result suppression, logical-
+effect-based replanning, completed-effect admission rejection, and exactly-once
+quarantine; qualified reverse-order compensation with sealed schedule progress;
+recovery chronology; 90-day tombstone eligibility; and full queue-request
+pre-reservation. Property, fuzz,
+redaction, and serialization tests must
+keep untrusted evidence bounded and opaque runtime authority out of diagnostics.
+
+These are provider-free, process-local reference checks. They make no database,
+queue, provider, cloud, or paid-service call and do not establish durable state,
+worker enforcement, cross-node coordination, or exactly-once provider
+execution. The root projection adds no public path, operation, or schema;
+`./hack/dev api` must remain at exactly four paths, seven operations, and 81
+schemas.
 
 ## Network, disk, and CI cost safeguards
 

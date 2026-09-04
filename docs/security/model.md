@@ -173,6 +173,96 @@ destination verification, distributed revocation, durable tombstone, or hard
 memory-zeroization guarantee. Those controls remain requirements of their
 linked runtime and provider issues.
 
+## Reconciliation reliability
+
+[ADR 0012](../architecture/0012-reconciliation-reliability-and-fencing.md)
+separates transport replay, provider-effect identity, and physical attempts.
+Plans bind bounded digests of desired intent, authoritative observation,
+authorization, provider and credential versions, capability, quota, cost, and
+completed effects; they exclude credentials and provider-native bodies. Every
+actual or conservatively possibly dispatched provider call has one prepared
+attempt, unique attempt ID and ordinal, exact Operation/plan/effect/generation/
+owner/fence binding, and one audit event. Missing definitive evidence after
+owner loss is `Indeterminate`, never implicit success or retry permission.
+
+Queue receipt possession grants no provider authority. The future worker must
+reload authoritative state, reauthorize, acquire one stable Workspace/resource-
+lineage lease with a positive signed non-reused fence, and revalidate the exact
+generation, Operation, plan, owner, fence, ProviderConnection, credential,
+quota, and cost authority immediately before dispatch. Process-local authority
+and permit copies share one-use state and bind the exact prepared attempt.
+Attempt preparation additionally consumes a one-use capability over the
+authoritative cancellation, retry, older-generation, compensation, and
+observation-budget snapshot. A time-bounded retry proof must remain live at the
+exact dispatch sample. An observation's finite deadline is sealed through its
+permit, admission, attempt, and dispatch identity, and equality is not
+dispatchable. Dispatch consumption atomically rechecks the live lease row so a
+prior permit cannot survive surrender, takeover, or replacement; durable
+compare-and-swap remains a StateStore obligation. The 60-second store
+and visibility intervals renew from 15 through 20 seconds. A call starts only
+with strictly more remaining lease time than its bounded RPC timeout plus ten
+seconds. Failed or unknown renewal stops new dispatch; higher fences cannot
+undo an unresolved external effect from an older generation.
+
+The reference lease table never lets an expired old binding replace a newer
+one implicitly. Generation or plan-revision movement uses an exact expected-
+binding compare-and-swap plus a one-use capability minted by the qualified plan
+lineage transition, with revision one for a new generation and exactly the next
+revision for a replan. A forward-to-compensation replacement additionally
+binds the complete validated qualified inverse schedule before authority is
+minted. New-generation replacement additionally requires the
+exact first mutation admission to have passed older-effect and safe-
+supersession checks, preserving the old observation path when it has not. Each
+durable work key retains the plan digest that its
+claiming and completing lease token must match. Dispatch authority cannot
+predate attempt preparation, and recovery cannot resolve before the latest
+dispatch boundary.
+
+Bounded HTTP-idempotency capacity may reclaim only completed response rows at
+exact expiry. Unresolved reservations remain charged. Ordered ledger-wide time
+and a capacity-derived active-call registry prevent an unrelated later call from
+reclaiming a row needed by an older live call. Safe reclamation deletes both the
+response and compact key state, while full immutable-tuple matching prevents a
+delayed completion from gaining fresh authority after an epoch restart.
+
+Cancellation is compare-and-swap ordered against attempt preparation. After
+preparation, `CancelPending` forbids new forward work and blind retry while the
+public Operation remains `Running` or `Waiting`; `Canceled` is allowed only once
+every dispatched result and required cleanup or quarantine disposition is
+durable. A provider-cancel attempt has a distinct effect key and separately
+binds the unresolved forward or compensation effect it targets. Retrying the
+cancellation effect itself requires `NoEffect` or exact live adapter-
+idempotency evidence.
+Persisted `Indeterminate` outcomes reserve a finite observation slot before
+attempt preparation and then reach exactly-once quarantine at count or time
+exhaustion. Observation completion must atomically compare the admission-captured
+target with the authoritative current logical effect and commit the budget plus
+returned projection. Every current projection carries the unique source attempt
+ID that established its truth. Only a dispatched definitive result against that
+exact source-versioned target updates effect truth; a concurrent retry result,
+including one in the same normalized millisecond, or undispatched recovery is
+preserved rather than overwritten. Replanning separately requires resolved
+physical history and a definitive, non-stale current projection for every
+attempted logical effect, and admission rejects effects already carried in the
+selected plan's completed set. A failed or abandoned pre-preparation observation uses
+an exact one-use release transition: the slot stays charged, but no stale permit
+can later prepare an attempt and the budget remains able to advance or expire.
+Compensation is a new immutable forward plan over proved `Applied`, Veer-owned,
+qualified inverse effects in reverse dependency order. Each prepared
+compensation attempt carries the opaque next-step capability derived from the
+complete proof schedule and exact applied prefix; it never acts on an
+indeterminate, arbitrary, or out-of-order effect.
+
+The implemented reconciliation package is a provider-free, process-local
+reference model. It bounds untrusted evidence, rejects generic serialization of
+opaque authority values, redacts diagnostics, models fixed-window idempotency,
+duplicate delivery, fencing, cancellation, retention, queue accounting, and all
+eight crash boundaries, but persists and executes nothing. Durable PostgreSQL
+transactions, SQS policy and heartbeat behavior, execution-time authorization,
+provider adapters, cross-node enforcement, and operational evidence remain the
+responsibility of issues #24 and #30 through #37. Exactly-once provider
+execution is not claimed.
+
 ## Audit requirements
 
 The accepted reference contract in

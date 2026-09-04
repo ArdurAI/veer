@@ -9,7 +9,7 @@ small	database_storage	storage	50	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 pro
 small	primary_backup_storage	storage	108.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus the hard rolling thirty-five-day changed-block cap
 small	recovery_backup_storage	recovery	61.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus the hard rolling seven-day changed-block cap
 small	recovery_backup_transfer	recovery	50	GB	0.02	aws-cross-region-transfer	Hard rolling thirty-day changed-block cap
-small	queue_requests	queue	20	million-64-KiB-request-units	0.40	aws-sqs	Covers 10.639935 million generated and synthetic baseline units plus fixed retry empty-poll and critical reserves
+small	queue_requests	queue	23.546645	million-64-KiB-request-units	0.40	aws-sqs	Covers the prior twenty-million-unit partition plus 3.546645 million pre-reserved visibility-change units
 small	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
 small	load_balancer_capacity	network	744	LCU-hour	0.008	aws-elb	One LCU bounded across new active byte and rule dimensions
 small	nat_gateways	network	1488	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of two active zones for seven hundred forty-four hours
@@ -66,7 +66,7 @@ target	database_storage	storage	500	GB-month	0.23	aws-rds-storage	Multi-AZ gp3 p
 target	primary_backup_storage	storage	1083.34	GB-month	0.095	aws-rds-primary-backup	Current copy plus the hard rolling thirty-five-day changed-block cap
 target	recovery_backup_storage	recovery	616.67	GB-month	0.095	aws-rds-recovery-storage	Current copy plus the hard rolling seven-day changed-block cap
 target	recovery_backup_transfer	recovery	500	GB	0.02	aws-cross-region-transfer	Hard rolling thirty-day changed-block cap
-target	queue_requests	queue	100	million-64-KiB-request-units	0.40	aws-sqs	Covers 52.824735 million generated and synthetic baseline units plus fixed retry empty-poll and critical reserves
+target	queue_requests	queue	152.824735	million-64-KiB-request-units	0.40	aws-sqs	Covers the prior one-hundred-million-unit partition plus 52.824735 million pre-reserved visibility-change units
 target	load_balancer	network	744	load-balancer-hour	0.0225	aws-elb	One regional Application Load Balancer for a thirty-one-day month
 target	load_balancer_capacity	network	3720	LCU-hour	0.008	aws-elb	Five LCUs bounded across new active byte and rule dimensions
 target	nat_gateways	network	2232	gateway-hour	0.045	aws-ec2-nat	One NAT gateway in each of three active zones for seven hundred forty-four hours
