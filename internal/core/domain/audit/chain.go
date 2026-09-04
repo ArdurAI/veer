@@ -15,7 +15,7 @@ import (
 const (
 	chainGenesisDomain = "veer.audit.chain.genesis.v1"
 	chainRecordDomain  = "veer.audit.chain.record.v1"
-	segmentPrefix      = `{"contractVersion":"veer.audit.v1alpha1","records":[`
+	segmentPrefix      = `{"contractVersion":"` + ContractVersion + `","records":[`
 	recordFramingBytes = 256
 )
 

@@ -624,15 +624,15 @@ func elevationMatchesOperation(elevation ElevationRef, operationReference Operat
 }
 
 func elevationMatchesTarget(elevation ElevationRef, target TargetRef) bool {
-	switch elevation.targetKind {
-	case "WorkspaceAudit":
+	switch administration.TargetKind(elevation.targetKind) {
+	case administration.TargetKindWorkspaceAudit:
 		return target.objectKind == authorization.ObjectKindAudit &&
 			elevation.objectID != nil && *elevation.objectID == target.objectID &&
 			elevation.workspaceID != nil && *elevation.workspaceID == target.workspaceID &&
 			elevation.resourceID != nil && *elevation.resourceID == target.resourceID &&
 			equalIDPointers(elevation.environmentID, target.environmentID) &&
 			equalIDPointers(elevation.providerConnectionID, target.providerConnectionID)
-	case "Operation":
+	case administration.TargetKindOperation:
 		return target.objectKind == authorization.ObjectKindOperation &&
 			elevation.objectID != nil && *elevation.objectID == target.objectID &&
 			elevation.workspaceID != nil && *elevation.workspaceID == target.workspaceID &&

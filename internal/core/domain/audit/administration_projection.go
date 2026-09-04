@@ -179,15 +179,15 @@ func validElevationActionReference(reference ElevationRef) bool {
 }
 
 func validElevationTargetShape(reference ElevationRef) bool {
-	switch reference.targetKind {
-	case "PlatformAudit":
+	switch administration.TargetKind(reference.targetKind) {
+	case administration.TargetKindPlatformAudit:
 		return reference.objectID == nil && reference.workspaceID == nil && reference.resourceID == nil &&
 			reference.environmentID == nil && reference.providerConnectionID == nil
-	case "WorkspaceAudit":
+	case administration.TargetKindWorkspaceAudit:
 		return reference.objectID != nil && reference.workspaceID != nil && reference.resourceID != nil &&
 			reference.environmentID == nil && reference.providerConnectionID == nil &&
 			*reference.objectID == *reference.workspaceID && *reference.resourceID == *reference.workspaceID
-	case "Operation":
+	case administration.TargetKindOperation:
 		return reference.objectID != nil && reference.workspaceID != nil && reference.resourceID != nil &&
 			(reference.environmentID == nil) == (reference.providerConnectionID == nil)
 	default:

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -355,5 +356,35 @@ func TestExportManifestDefensiveCopiesAndStrictBounds(t *testing.T) {
 	var decoded ExportManifest
 	if err := jsonv2.Unmarshal(manifestData, &decoded); err != nil {
 		t.Fatalf("json/v2 generic decode = %v", err)
+	}
+}
+
+func TestExportManifestCanonicalWireIsFlat(t *testing.T) {
+	t.Parallel()
+
+	fixture := newExportFixture(t)
+	descriptorData, err := MarshalCanonicalExportDescriptor(fixture.descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestData, err := MarshalCanonicalExportManifest(fixture.manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := slices.Clone(descriptorData[:len(descriptorData)-1])
+	expected = append(expected, []byte(`,"signature":"`)...)
+	expected = append(expected, base64.RawURLEncoding.EncodeToString(fixture.signature)...)
+	expected = append(expected, '"', '}')
+	if !bytes.Equal(manifestData, expected) {
+		t.Fatalf("canonical manifest is not the flat descriptor-plus-signature object\ngot:  %s\nwant: %s", manifestData, expected)
+	}
+
+	nested := append([]byte(`{"Descriptor":`), descriptorData...)
+	nested = append(nested, []byte(`,"signature":"`)...)
+	nested = append(nested, base64.RawURLEncoding.EncodeToString(fixture.signature)...)
+	nested = append(nested, '"', '}')
+	if _, err := UnmarshalCanonicalExportManifest(nested); !errors.Is(err, ErrNonCanonical) {
+		t.Fatalf("nested manifest = %v, want %v", err, ErrNonCanonical)
 	}
 }
