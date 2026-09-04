@@ -108,10 +108,12 @@ phase, optional bounded reason, and update time. It deliberately excludes the
 Operation message and cost estimate. `DecisionRef` retains only the canonical
 authorization policy version, input digest, effect, and reason. A target,
 Operation, elevation, and Workspace stream must agree on Workspace and every
-other shared scope identifier. When an elevation event also carries an
-Operation or authorization target, every shared object, Workspace, resource,
-Environment, and ProviderConnection ID must match. A `PlatformAudit` elevation
-rejects either unrelated co-reference.
+other shared scope identifier. An Operation and authorization target always
+match on Workspace and resource; Environment and ProviderConnection must also
+match when the Operation carries that optional binding. When an elevation
+event also carries an Operation or authorization target, every shared object,
+Workspace, resource, Environment, and ProviderConnection ID must match. A
+`PlatformAudit` elevation rejects either unrelated co-reference.
 
 ### Timeline vocabulary and correlation
 
@@ -144,10 +146,12 @@ a deployed Operation timeline is complete.
 
 ### Streams, sequence, and integrity
 
-Workspace events use one `Workspace` stream carrying exactly one stable
-Workspace ID. Cross-Workspace references are rejected. Platform administration
-uses the separate `Platform` stream with no Workspace ID. The two stream kinds
-cannot be merged to infer a global order.
+Every event carrying a target or Operation reference uses the `Workspace`
+stream for that exact Workspace. `WorkspaceAudit` and `Operation` elevation
+events use that same matching Workspace stream. A `PlatformAudit` elevation
+instead uses the separate `Platform` stream, which carries no Workspace ID.
+Cross-Workspace and cross-kind stream references are rejected. The two stream
+kinds cannot be merged to infer a global order.
 
 Every stream begins at a stream-specific genesis checkpoint at sequence zero.
 `Append` accepts only the next positive sequence in the same stream and binds

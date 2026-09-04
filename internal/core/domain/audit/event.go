@@ -559,9 +559,6 @@ func validateEventRelationships(event Event) error {
 		if event.operation == nil || event.attempt == nil || event.source != SourceProviderAdapter {
 			return fmt.Errorf("%w: operation and attempt references required", ErrInvalidEvent)
 		}
-		if workspaceID, workspaceStream := event.stream.WorkspaceID(); !workspaceStream || workspaceID != event.operation.workspaceID {
-			return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrWorkspaceMismatch)
-		}
 	case EventKindElevation:
 		if event.elevation == nil || event.source != SourceAdministration ||
 			event.actor.kind != ActorKindAdministrator ||
@@ -587,10 +584,15 @@ func validateEventRelationships(event Event) error {
 		}
 	}
 	if event.operation != nil && event.target != nil {
+		// An unbound Operation asserts no Environment or ProviderConnection.
+		// Its hierarchy-derived target may still retain ancestry; a bound
+		// Operation must match both optional identifiers exactly.
+		operationBound := event.operation.environmentID != nil
 		if event.operation.workspaceID != event.target.workspaceID ||
 			event.operation.resourceID != event.target.resourceID ||
-			!equalIDPointers(event.operation.environmentID, event.target.environmentID) ||
-			!equalIDPointers(event.operation.providerConnectionID, event.target.providerConnectionID) {
+			(operationBound &&
+				(!equalIDPointers(event.operation.environmentID, event.target.environmentID) ||
+					!equalIDPointers(event.operation.providerConnectionID, event.target.providerConnectionID))) {
 			return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrWorkspaceMismatch)
 		}
 		if event.target.objectKind == authorization.ObjectKindOperation &&
@@ -598,19 +600,18 @@ func validateEventRelationships(event Event) error {
 			return fmt.Errorf("%w: operation target mismatch", ErrInvalidEvent)
 		}
 	}
+	// Every hierarchy-bearing reference belongs to its Workspace history.
+	// PlatformAudit is the sole elevation scope without a Workspace.
 	workspaceID, workspaceStream := event.stream.WorkspaceID()
-	if !workspaceStream {
-		return nil
-	}
-	if event.target != nil && event.target.workspaceID != workspaceID {
+	if event.target != nil && (!workspaceStream || event.target.workspaceID != workspaceID) {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrWorkspaceMismatch)
 	}
-	if event.operation != nil && event.operation.workspaceID != workspaceID {
+	if event.operation != nil && (!workspaceStream || event.operation.workspaceID != workspaceID) {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrWorkspaceMismatch)
 	}
 	if event.elevation != nil {
 		elevationWorkspace, present := optionalID(event.elevation.workspaceID)
-		if !present || elevationWorkspace != workspaceID {
+		if present != workspaceStream || (present && elevationWorkspace != workspaceID) {
 			return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrWorkspaceMismatch)
 		}
 	}

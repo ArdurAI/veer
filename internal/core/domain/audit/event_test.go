@@ -17,6 +17,7 @@ import (
 
 	"github.com/ArdurAI/veer/internal/core/domain/administration"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
+	"github.com/ArdurAI/veer/internal/core/domain/operation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
@@ -238,6 +239,263 @@ func TestProviderAttemptRequiresMatchingWorkspaceStream(t *testing.T) {
 
 			wire := eventToWire(valid)
 			wire.Stream = streamToWire(test.stream)
+			data, err := jsonv2.Marshal(wire, json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := UnmarshalCanonicalEvent(data); !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("UnmarshalCanonicalEvent() = %v, want %v; event=%s", err, ErrWorkspaceMismatch, data)
+			}
+		})
+	}
+}
+
+func TestOperationRequiresMatchingWorkspaceStream(t *testing.T) {
+	t.Parallel()
+
+	valid := mustOperationEvent(t, 1)
+	operationReference, present := valid.Operation()
+	if !present {
+		t.Fatal("operation event fixture omitted operation reference")
+	}
+	otherWorkspace, err := NewWorkspaceStream(resource.ID("wsp_01JAUDIT00000000000000001"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		stream Stream
+	}{
+		{name: "platform stream", stream: NewPlatformStream()},
+		{name: "different workspace stream", stream: otherWorkspace},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewEvent(EventInput{
+				ID:                   eventID(2),
+				Stream:               test.stream,
+				Sequence:             2,
+				RecordedAt:           testTime.Add(time.Millisecond),
+				ClockState:           valid.ClockState(),
+				Kind:                 valid.Kind(),
+				Source:               valid.Source(),
+				Actor:                valid.Actor(),
+				AuthenticationMethod: valid.AuthenticationMethod(),
+				Action:               valid.Action(),
+				Operation:            &operationReference,
+				Outcome:              valid.Outcome(),
+			})
+			if !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("NewEvent() = %v, want %v", err, ErrWorkspaceMismatch)
+			}
+
+			wire := eventToWire(valid)
+			wire.Stream = streamToWire(test.stream)
+			data, err := jsonv2.Marshal(wire, json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := UnmarshalCanonicalEvent(data); !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("UnmarshalCanonicalEvent() = %v, want %v; event=%s", err, ErrWorkspaceMismatch, data)
+			}
+		})
+	}
+}
+
+func TestUnboundOperationAcceptsHierarchyDerivedTarget(t *testing.T) {
+	t.Parallel()
+
+	snapshot := mustHierarchySnapshot(t)
+	actor, err := ActorFromPrincipal(mustWorkloadPrincipal(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, test := range []struct {
+		name       string
+		resourceID resource.ID
+	}{
+		{name: "environment", resourceID: testEnvironmentID},
+		{name: "application", resourceID: testApplicationID},
+		{name: "component", resourceID: testResourceID},
+		{name: "provider connection", resourceID: testConnectionID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := operation.New(operation.Input{
+				ID:              resource.ID(fmt.Sprintf("op_01JAUDIT%016d", index+10)),
+				WorkspaceID:     testWorkspaceID,
+				ResourceID:      test.resourceID,
+				Generation:      1,
+				ResourceVersion: fmt.Sprintf("rv_audit_unbound_%d", index),
+				CreatedAt:       testTime,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			operationReference, err := OperationRefFromOperation(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, present := operationReference.EnvironmentID(); present {
+				t.Fatal("unbound operation gained an environment reference")
+			}
+			if _, present := operationReference.ProviderConnectionID(); present {
+				t.Fatal("unbound operation gained a provider reference")
+			}
+
+			target, err := authorization.ResolveResourceTarget(snapshot, test.resourceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			targetReference, err := TargetRefFromAuthorization(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if environmentID, present := targetReference.EnvironmentID(); !present || environmentID != testEnvironmentID {
+				t.Fatalf("hierarchy-derived environment = %q, %t", environmentID, present)
+			}
+
+			event, err := NewEvent(EventInput{
+				ID:                   eventID(uint64(index + 10)),
+				Stream:               mustWorkspaceStream(t),
+				Sequence:             uint64(index + 10),
+				RecordedAt:           testTime.Add(time.Duration(index) * time.Millisecond),
+				ClockState:           ClockStateSynchronized,
+				Kind:                 EventKindOperation,
+				Source:               SourceController,
+				Actor:                actor,
+				AuthenticationMethod: AuthenticationMethodWorkloadOIDC,
+				Action:               authorization.ActionResourceReplace,
+				Target:               &targetReference,
+				Operation:            &operationReference,
+				Outcome:              OutcomeSucceeded,
+			})
+			if err != nil {
+				t.Fatalf("NewEvent(unbound %s operation) = %v", test.name, err)
+			}
+			canonical, err := MarshalCanonicalEvent(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := UnmarshalCanonicalEvent(canonical); err != nil {
+				t.Fatalf("UnmarshalCanonicalEvent(unbound %s operation) = %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestBoundOperationRequiresExactTargetProviderScope(t *testing.T) {
+	t.Parallel()
+
+	elevationEvent := mustOperationElevationEvent(t)
+	operationReference, operationPresent := elevationEvent.Operation()
+	targetReference, targetPresent := elevationEvent.Target()
+	if !operationPresent || !targetPresent {
+		t.Fatal("bound elevation fixture omitted operation or target reference")
+	}
+	actor, err := ActorFromPrincipal(mustWorkloadPrincipal(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := NewEvent(EventInput{
+		ID:                   eventID(1),
+		Stream:               mustWorkspaceStream(t),
+		Sequence:             1,
+		RecordedAt:           testTime,
+		ClockState:           ClockStateSynchronized,
+		Kind:                 EventKindOperation,
+		Source:               SourceController,
+		Actor:                actor,
+		AuthenticationMethod: AuthenticationMethodWorkloadOIDC,
+		Action:               authorization.ActionOperationGet,
+		Target:               &targetReference,
+		Operation:            &operationReference,
+		Outcome:              OutcomeSucceeded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherID := resource.ID("ref_01JAUDIT00000000000000001")
+	for _, test := range []struct {
+		name       string
+		mutateRef  func(*TargetRef)
+		mutateWire func(*eventWire)
+	}{
+		{
+			name:       "environment",
+			mutateRef:  func(reference *TargetRef) { reference.environmentID = idPointer(otherID) },
+			mutateWire: func(wire *eventWire) { wire.Target.EnvironmentID = otherID.String() },
+		},
+		{
+			name:       "provider connection",
+			mutateRef:  func(reference *TargetRef) { reference.providerConnectionID = idPointer(otherID) },
+			mutateWire: func(wire *eventWire) { wire.Target.ProviderConnectionID = otherID.String() },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := eventInputFromEvent(valid)
+			test.mutateRef(input.Target)
+			if _, err := NewEvent(input); !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("NewEvent() = %v, want %v", err, ErrWorkspaceMismatch)
+			}
+
+			wire := eventToWire(valid)
+			test.mutateWire(&wire)
+			data, err := jsonv2.Marshal(wire, json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := UnmarshalCanonicalEvent(data); !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("UnmarshalCanonicalEvent() = %v, want %v; event=%s", err, ErrWorkspaceMismatch, data)
+			}
+		})
+	}
+}
+
+func TestReferenceStreamScopeIsExact(t *testing.T) {
+	t.Parallel()
+
+	snapshot := mustHierarchySnapshot(t)
+	target, err := authorization.ResolveResourceTarget(snapshot, testResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetReference, err := TargetRefFromAuthorization(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetEvent := mustRequestEvent(t, 1)
+	targetEvent.target = &targetReference
+	workspaceElevation := mustOperationElevationEvent(t)
+	workspaceElevation.target = nil
+	workspaceElevation.operation = nil
+	otherWorkspace, err := NewWorkspaceStream(resource.ID("wsp_01JAUDIT00000000000000001"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name          string
+		valid         Event
+		invalidStream Stream
+	}{
+		{name: "target on platform", valid: targetEvent, invalidStream: NewPlatformStream()},
+		{name: "target on different workspace", valid: targetEvent, invalidStream: otherWorkspace},
+		{name: "workspace elevation on platform", valid: workspaceElevation, invalidStream: NewPlatformStream()},
+		{name: "workspace elevation on different workspace", valid: workspaceElevation, invalidStream: otherWorkspace},
+		{name: "platform elevation on workspace", valid: mustPlatformAuditElevationEvent(t), invalidStream: mustWorkspaceStream(t)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateEvent(test.valid); err != nil {
+				t.Fatalf("valid control = %v", err)
+			}
+			input := eventInputFromEvent(test.valid)
+			input.Stream = test.invalidStream
+			if _, err := NewEvent(input); !errors.Is(err, ErrWorkspaceMismatch) {
+				t.Fatalf("NewEvent() = %v, want %v", err, ErrWorkspaceMismatch)
+			}
+
+			wire := eventToWire(test.valid)
+			wire.Stream = streamToWire(test.invalidStream)
 			data, err := jsonv2.Marshal(wire, json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false))
 			if err != nil {
 				t.Fatal(err)
