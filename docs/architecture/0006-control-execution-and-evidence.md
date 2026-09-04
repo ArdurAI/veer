@@ -135,8 +135,16 @@ direct `Running` to `Pending` transition remains invalid.
 An exact replay returns the existing value. Every material transition requires
 an injected, non-regressing millisecond timestamp and a new injected resource
 version. Identity, ownership, generation, and creation time remain immutable.
-Persistence, delivery, fencing, compensation, and uncertain provider outcomes
-remain issue [#29](https://github.com/ArdurAI/veer/issues/29).
+The persistence-facing reliability semantics are fixed by
+[ADR 0012](0012-reconciliation-reliability-and-fencing.md): prepared attempts,
+at-least-once delivery, immutable plans, signed fences, fixed-window
+idempotency, cancellation precedence, uncertain provider outcomes, and forward
+compensation all project through these same six public phases. `CancelPending`,
+`ProviderOutcomeIndeterminate`, `ProviderEffectConflict`, and `Quarantined` are
+stable internal work reasons, not new Operation phases or Conditions. Issues
+[#30](https://github.com/ArdurAI/veer/issues/30) through
+[#37](https://github.com/ArdurAI/veer/issues/37) own durable adapters and
+runtime enforcement.
 
 Standalone Operation storage uses the pinned v1-compatible internal JSON
 profile from ADR 0004 and rejects representations above 4,096 encoded bytes.

@@ -438,6 +438,89 @@ type privilegedAdminContract struct {
 	ExpirationBoundary           string   `json:"expirationBoundary"`
 }
 
+type reconciliationContract struct {
+	ContractVersion string                           `json:"contractVersion"`
+	Authority       reconciliationAuthorityContract  `json:"authority"`
+	Limits          reconciliationLimitsContract     `json:"limits"`
+	Timing          reconciliationTimingContract     `json:"timing"`
+	QueueBudget     reconciliationQueueContract      `json:"queueBudget"`
+	Vocabulary      reconciliationVocabularyContract `json:"vocabulary"`
+	NonClaims       []string                         `json:"nonClaims"`
+}
+
+type reconciliationAuthorityContract struct {
+	ReferenceModel         string   `json:"referenceModel"`
+	Persistence            string   `json:"persistence"`
+	Delivery               string   `json:"delivery"`
+	ProviderExecution      string   `json:"providerExecution"`
+	AuthoritativeTime      string   `json:"authoritativeTime"`
+	LeaseBindingTransition string   `json:"leaseBindingTransition"`
+	WorkLeasePlanBinding   string   `json:"workLeasePlanBinding"`
+	AttemptPreparation     string   `json:"attemptPreparation"`
+	PlanSupersession       string   `json:"planSupersession"`
+	ObservationCompletion  string   `json:"observationCompletion"`
+	DispatchLeaseRecheck   string   `json:"dispatchLeaseRecheck"`
+	IdempotencyReclamation string   `json:"idempotencyReclamation"`
+	CompensationAdmission  string   `json:"compensationAdmission"`
+	AttemptChronology      string   `json:"attemptChronology"`
+	PublicOperationPhases  []string `json:"publicOperationPhases"`
+}
+
+type reconciliationLimitsContract struct {
+	MaxEvidenceBytes           int    `json:"maxEvidenceBytes"`
+	MaxEvidenceVersionBytes    int    `json:"maxEvidenceVersionBytes"`
+	MaxSemanticEffectBytes     int    `json:"maxSemanticEffectBytes"`
+	MaxEffectsPerOperation     int    `json:"maxEffectsPerOperation"`
+	MaxObservationAttempts     int    `json:"maxObservationAttempts"`
+	MinIdempotencyKeyBytes     int    `json:"minIdempotencyKeyBytes"`
+	MaxIdempotencyKeyBytes     int    `json:"maxIdempotencyKeyBytes"`
+	MinimumEffectTombstoneDays int    `json:"minimumEffectTombstoneDays"`
+	MaximumFence               string `json:"maximumFence"`
+	SmallActiveLeaseLimit      int    `json:"smallActiveLeaseLimit"`
+	TargetActiveLeaseLimit     int    `json:"targetActiveLeaseLimit"`
+}
+
+type reconciliationTimingContract struct {
+	HTTPIdempotencyHours        int    `json:"httpIdempotencyHours"`
+	IdempotencyWindow           string `json:"idempotencyWindow"`
+	IdempotencyLiveBoundary     string `json:"idempotencyLiveBoundary"`
+	IdempotencyExpiryBoundary   string `json:"idempotencyExpiryBoundary"`
+	StoreLeaseSeconds           int    `json:"storeLeaseSeconds"`
+	QueueVisibilitySeconds      int    `json:"queueVisibilitySeconds"`
+	RenewalJitterMinimumSeconds int    `json:"renewalJitterMinimumSeconds"`
+	RenewalDeadlineSeconds      int    `json:"renewalDeadlineSeconds"`
+	DispatchSafetyMarginSeconds int    `json:"dispatchSafetyMarginSeconds"`
+}
+
+type reconciliationQueueContract struct {
+	SmallMonthlyLeaseRenewals       int `json:"smallMonthlyLeaseRenewals"`
+	TargetMonthlyLeaseRenewals      int `json:"targetMonthlyLeaseRenewals"`
+	SmallMonthlyVisibilityRequests  int `json:"smallMonthlyVisibilityRequests"`
+	TargetMonthlyVisibilityRequests int `json:"targetMonthlyVisibilityRequests"`
+	SmallMonthlyRequestCap          int `json:"smallMonthlyRequestCap"`
+	TargetMonthlyRequestCap         int `json:"targetMonthlyRequestCap"`
+}
+
+type reconciliationVocabularyContract struct {
+	EvidenceKinds           []string `json:"evidenceKinds"`
+	PlanKinds               []string `json:"planKinds"`
+	PlanSelections          []string `json:"planSelections"`
+	IdempotencyDispositions []string `json:"idempotencyDispositions"`
+	AttemptPurposes         []string `json:"attemptPurposes"`
+	AttemptStates           []string `json:"attemptStates"`
+	EffectStates            []string `json:"effectStates"`
+	DispatchProofs          []string `json:"dispatchProofs"`
+	WorkReasons             []string `json:"workReasons"`
+	DeliveryDispositions    []string `json:"deliveryDispositions"`
+	MaintenanceKinds        []string `json:"maintenanceKinds"`
+	MaintenanceOutcomes     []string `json:"maintenanceOutcomes"`
+	MaintenanceDirectives   []string `json:"maintenanceDirectives"`
+	ObservationDecisions    []string `json:"observationDecisions"`
+	RetentionDispositions   []string `json:"retentionDispositions"`
+	CrashPoints             []string `json:"crashPoints"`
+	RecoveryActions         []string `json:"recoveryActions"`
+}
+
 var operationContracts = map[string]operationContract{
 	"listWorkspaces": {
 		location:   "GET /api/v1alpha1/workspaces",
@@ -632,6 +715,7 @@ func Validate(data []byte) error {
 		{name: "operations", fn: validateOperations},
 		{name: "authorization", fn: validateAuthorization},
 		{name: "audit", fn: validateAudit},
+		{name: "reconciliation", fn: validateReconciliation},
 		{name: "components", fn: validateComponents},
 		{name: "examples", fn: validateExamples},
 	}
@@ -873,7 +957,7 @@ func isReviewedFreeFormMap(path string, schema map[string]any) bool {
 
 func isReviewedExtension(path, name string) bool {
 	switch name {
-	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-admission", "x-veer-authorization", "x-veer-audit", "x-veer-operation-transitions", "x-veer-condition-transitions":
+	case "x-veer-evolution", "x-veer-hierarchy", "x-veer-admission", "x-veer-authorization", "x-veer-audit", "x-veer-reconciliation", "x-veer-operation-transitions", "x-veer-condition-transitions":
 		return path == "$"
 	case "x-veer-authorization-action":
 		return strings.HasPrefix(path, "$/paths/") &&
@@ -1589,6 +1673,113 @@ func auditManifestContract() auditContract {
 	}
 }
 
+func validateReconciliation(root map[string]any) error {
+	raw, exists := root["x-veer-reconciliation"]
+	if !exists {
+		return errors.New("x-veer-reconciliation is missing")
+	}
+
+	var got reconciliationContract
+	if err := decodeStrictValue(raw, &got); err != nil {
+		return fmt.Errorf("x-veer-reconciliation shape: %w", err)
+	}
+	if !reflect.DeepEqual(got, reconciliationManifestContract()) {
+		return errors.New("x-veer-reconciliation contract drifted")
+	}
+	return nil
+}
+
+func reconciliationManifestContract() reconciliationContract {
+	return reconciliationContract{
+		ContractVersion: "veer.reconciliation.v1alpha1",
+		Authority: reconciliationAuthorityContract{
+			ReferenceModel:         "process-local-provider-free",
+			Persistence:            "not-implemented",
+			Delivery:               "at-least-once",
+			ProviderExecution:      "not-exactly-once",
+			AuthoritativeTime:      "postgresql-time-future-adapter",
+			LeaseBindingTransition: "qualified-next-mutation-or-compensation-schedule-before-exact-lineage-cas",
+			WorkLeasePlanBinding:   "exact-plan-digest",
+			AttemptPreparation:     "sealed-completed-effect-cancellation-target-retry-generation-deadline-bound-releasable-observation",
+			PlanSupersession:       "resolved-attempts-plus-source-versioned-definitive-current-effects",
+			ObservationCompletion:  "source-attempt-versioned-exact-current-effect-cas-with-stale-result-suppression",
+			DispatchLeaseRecheck:   "atomic-live-row-at-provider-boundary",
+			IdempotencyReclamation: "bounded-expired-state-with-active-call-protection",
+			CompensationAdmission:  "sealed-next-qualified-inverse",
+			AttemptChronology:      "authority-and-resolution-not-before-boundary",
+			PublicOperationPhases:  []string{"Pending", "Waiting", "Running", "Succeeded", "Failed", "Canceled"},
+		},
+		Limits: reconciliationLimitsContract{
+			MaxEvidenceBytes:           262_144,
+			MaxEvidenceVersionBytes:    128,
+			MaxSemanticEffectBytes:     65_536,
+			MaxEffectsPerOperation:     1_000,
+			MaxObservationAttempts:     1_000,
+			MinIdempotencyKeyBytes:     16,
+			MaxIdempotencyKeyBytes:     128,
+			MinimumEffectTombstoneDays: 90,
+			MaximumFence:               "9223372036854775807",
+			SmallActiveLeaseLimit:      100,
+			TargetActiveLeaseLimit:     1_000,
+		},
+		Timing: reconciliationTimingContract{
+			HTTPIdempotencyHours:        24,
+			IdempotencyWindow:           "fixed-non-sliding",
+			IdempotencyLiveBoundary:     "database-time-before-expiry",
+			IdempotencyExpiryBoundary:   "expired-at-equality",
+			StoreLeaseSeconds:           60,
+			QueueVisibilitySeconds:      60,
+			RenewalJitterMinimumSeconds: 15,
+			RenewalDeadlineSeconds:      20,
+			DispatchSafetyMarginSeconds: 10,
+		},
+		QueueBudget: reconciliationQueueContract{
+			SmallMonthlyLeaseRenewals:       17_856_000,
+			TargetMonthlyLeaseRenewals:      178_560_000,
+			SmallMonthlyVisibilityRequests:  3_546_645,
+			TargetMonthlyVisibilityRequests: 52_824_735,
+			SmallMonthlyRequestCap:          23_546_645,
+			TargetMonthlyRequestCap:         152_824_735,
+		},
+		Vocabulary: reconciliationVocabularyContract{
+			EvidenceKinds: []string{
+				"DesiredIntent", "ObservedSnapshot", "ProviderConnection", "CredentialReference",
+				"Capability", "Quota", "Cost",
+			},
+			PlanKinds:               []string{"Forward", "Compensation"},
+			PlanSelections:          []string{"Reuse", "Supersede"},
+			IdempotencyDispositions: []string{"Reserved", "Replay"},
+			AttemptPurposes:         []string{"Forward", "Observation", "ProviderCancel", "Compensation"},
+			AttemptStates:           []string{"Prepared", "Dispatched", "Applied", "NoEffect", "Indeterminate"},
+			EffectStates:            []string{"Applied", "NoEffect", "Indeterminate"},
+			DispatchProofs:          []string{"NeverBegan", "Unknown"},
+			WorkReasons: []string{
+				"CancelPending", "ProviderOutcomeIndeterminate", "ProviderEffectConflict", "Quarantined",
+			},
+			DeliveryDispositions:  []string{"Accepted", "DuplicateActive", "DuplicateCompleted"},
+			MaintenanceKinds:      []string{"StoreLease", "QueueVisibility"},
+			MaintenanceOutcomes:   []string{"Succeeded", "Failed", "Unknown"},
+			MaintenanceDirectives: []string{"Continue", "StopAndSurrender"},
+			ObservationDecisions:  []string{"Continue", "Resolved", "Quarantine", "AlreadyDone"},
+			RetentionDispositions: []string{"Keep", "Eligible"},
+			CrashPoints: []string{
+				"BeforeAPICommit", "AfterAPICommitBeforeResponse", "BeforeOutboxPublish",
+				"AfterOutboxPublishBeforeReceipt", "DeliveryBeforeFence",
+				"AfterAttemptPreparationBeforeResult", "AfterResultCommitBeforeAcknowledgement",
+				"LeaseLostDuringDispatch",
+			},
+			RecoveryActions: []string{
+				"NoAcceptedWork", "ReplayDurableResult", "ReclaimOutbox", "RepublishAllowed",
+				"NoProviderEffect", "RecordIndeterminate", "DurableNoOp", "StopAndObserve",
+			},
+		},
+		NonClaims: []string{
+			"durable-state", "queue-adapter", "worker-enforcement", "provider-adapter",
+			"exactly-once-provider-execution",
+		},
+	}
+}
+
 func validateOperationTransitions(root map[string]any) error {
 	raw, exists := root["x-veer-operation-transitions"]
 	if !exists {
@@ -1702,12 +1893,16 @@ type resourceVersionContract struct {
 }
 
 type idempotencyContract struct {
-	Header                string   `json:"header"`
-	RequiredOn            []string `json:"requiredOn"`
-	MinimumRetentionHours int      `json:"minimumRetentionHours"`
-	Scope                 string   `json:"scope"`
-	Replay                string   `json:"replay"`
-	MismatchStatus        int      `json:"mismatchStatus"`
+	Header             string   `json:"header"`
+	RequiredOn         []string `json:"requiredOn"`
+	RetentionHours     int      `json:"retentionHours"`
+	Window             string   `json:"window"`
+	LiveBoundary       string   `json:"liveBoundary"`
+	ExpirationBoundary string   `json:"expirationBoundary"`
+	Cleanup            string   `json:"cleanup"`
+	Scope              string   `json:"scope"`
+	Replay             string   `json:"replay"`
+	MismatchStatus     int      `json:"mismatchStatus"`
 }
 
 type paginationContract struct {
@@ -1776,12 +1971,16 @@ func validateEvolution(root map[string]any) error {
 			StalePreconditionStatus:   412,
 		},
 		Idempotency: idempotencyContract{
-			Header:                "Idempotency-Key",
-			RequiredOn:            []string{"POST", "PUT", "PATCH", "DELETE"},
-			MinimumRetentionHours: 24,
-			Scope:                 "principal-method-canonical-target",
-			Replay:                "original-status-body-semantic-headers-current-request-id",
-			MismatchStatus:        409,
+			Header:             "Idempotency-Key",
+			RequiredOn:         []string{"POST", "PUT", "PATCH", "DELETE"},
+			RetentionHours:     24,
+			Window:             "fixed-non-sliding",
+			LiveBoundary:       "database-time-before-expiry",
+			ExpirationBoundary: "expired-at-equality",
+			Cleanup:            "cleanup-lag-does-not-extend-semantics",
+			Scope:              "principal-method-canonical-target",
+			Replay:             "original-status-body-semantic-headers-current-request-id",
+			MismatchStatus:     409,
 		},
 		Pagination: paginationContract{
 			Strategy:             "opaque-keyset-token",

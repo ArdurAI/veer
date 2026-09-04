@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,8 @@ import (
 	"github.com/ArdurAI/veer/internal/core/domain/admission"
 	"github.com/ArdurAI/veer/internal/core/domain/audit"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
+	"github.com/ArdurAI/veer/internal/core/domain/operation"
+	"github.com/ArdurAI/veer/internal/core/domain/reconciliation"
 	"github.com/ArdurAI/veer/internal/core/ports"
 )
 
@@ -424,6 +427,115 @@ func auditManifestRuntimeContract(t *testing.T) auditContract {
 			}),
 			Renewal:            "unsupported",
 			ExpirationBoundary: "expired-at-equality",
+		},
+	}
+}
+
+func TestReconciliationManifestMatchesRuntimeTokens(t *testing.T) {
+	t.Parallel()
+
+	data, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, data)
+	var manifest reconciliationContract
+	if err := decodeStrictValue(root["x-veer-reconciliation"], &manifest); err != nil {
+		t.Fatalf("decode reconciliation manifest: %v", err)
+	}
+
+	want := reconciliationManifestRuntimeContract(t)
+	if !reflect.DeepEqual(manifest, want) {
+		t.Fatalf("x-veer-reconciliation runtime projection drifted:\n manifest %#v\n runtime  %#v", manifest, want)
+	}
+	if static := reconciliationManifestContract(); !reflect.DeepEqual(static, want) {
+		t.Fatalf("contract.go reconciliation projection drifted:\n static  %#v\n runtime %#v", static, want)
+	}
+}
+
+func reconciliationManifestRuntimeContract(t *testing.T) reconciliationContract {
+	t.Helper()
+
+	return reconciliationContract{
+		ContractVersion: reconciliation.ContractVersion,
+		Authority: reconciliationAuthorityContract{
+			ReferenceModel:         "process-local-provider-free",
+			Persistence:            "not-implemented",
+			Delivery:               "at-least-once",
+			ProviderExecution:      "not-exactly-once",
+			AuthoritativeTime:      "postgresql-time-future-adapter",
+			LeaseBindingTransition: "qualified-next-mutation-or-compensation-schedule-before-exact-lineage-cas",
+			WorkLeasePlanBinding:   "exact-plan-digest",
+			AttemptPreparation:     "sealed-completed-effect-cancellation-target-retry-generation-deadline-bound-releasable-observation",
+			PlanSupersession:       "resolved-attempts-plus-source-versioned-definitive-current-effects",
+			ObservationCompletion:  "source-attempt-versioned-exact-current-effect-cas-with-stale-result-suppression",
+			DispatchLeaseRecheck:   "atomic-live-row-at-provider-boundary",
+			IdempotencyReclamation: "bounded-expired-state-with-active-call-protection",
+			CompensationAdmission:  "sealed-next-qualified-inverse",
+			AttemptChronology:      "authority-and-resolution-not-before-boundary",
+			PublicOperationPhases: []string{
+				string(operation.PhasePending),
+				string(operation.PhaseWaiting),
+				string(operation.PhaseRunning),
+				string(operation.PhaseSucceeded),
+				string(operation.PhaseFailed),
+				string(operation.PhaseCanceled),
+			},
+		},
+		Limits: reconciliationLimitsContract{
+			MaxEvidenceBytes:           reconciliation.MaxEvidenceBytes,
+			MaxEvidenceVersionBytes:    reconciliation.MaxEvidenceVersionBytes,
+			MaxSemanticEffectBytes:     reconciliation.MaxSemanticEffectBytes,
+			MaxEffectsPerOperation:     reconciliation.MaxEffectsPerOperation,
+			MaxObservationAttempts:     reconciliation.MaxObservationAttempts,
+			MinIdempotencyKeyBytes:     reconciliation.MinIdempotencyKeyBytes,
+			MaxIdempotencyKeyBytes:     reconciliation.MaxIdempotencyKeyBytes,
+			MinimumEffectTombstoneDays: exactDurationUnits(t, "reconciliation.MinimumEffectTombstoneRetention", reconciliation.MinimumEffectTombstoneRetention, 24*time.Hour),
+			MaximumFence:               strconv.FormatInt(reconciliation.MaxFence, 10),
+			SmallActiveLeaseLimit:      reconciliation.SmallActiveLeaseLimit,
+			TargetActiveLeaseLimit:     reconciliation.TargetActiveLeaseLimit,
+		},
+		Timing: reconciliationTimingContract{
+			HTTPIdempotencyHours:        exactDurationUnits(t, "reconciliation.HTTPIdempotencyWindow", reconciliation.HTTPIdempotencyWindow, time.Hour),
+			IdempotencyWindow:           "fixed-non-sliding",
+			IdempotencyLiveBoundary:     "database-time-before-expiry",
+			IdempotencyExpiryBoundary:   "expired-at-equality",
+			StoreLeaseSeconds:           exactDurationUnits(t, "reconciliation.StoreLeaseDuration", reconciliation.StoreLeaseDuration, time.Second),
+			QueueVisibilitySeconds:      exactDurationUnits(t, "reconciliation.QueueVisibilityDuration", reconciliation.QueueVisibilityDuration, time.Second),
+			RenewalJitterMinimumSeconds: exactDurationUnits(t, "reconciliation.RenewalJitterMinimum", reconciliation.RenewalJitterMinimum, time.Second),
+			RenewalDeadlineSeconds:      exactDurationUnits(t, "reconciliation.RenewalDeadline", reconciliation.RenewalDeadline, time.Second),
+			DispatchSafetyMarginSeconds: exactDurationUnits(t, "reconciliation.DispatchSafetyMargin", reconciliation.DispatchSafetyMargin, time.Second),
+		},
+		QueueBudget: reconciliationQueueContract{
+			SmallMonthlyLeaseRenewals:       reconciliation.SmallMonthlyLeaseRenewals,
+			TargetMonthlyLeaseRenewals:      reconciliation.TargetMonthlyLeaseRenewals,
+			SmallMonthlyVisibilityRequests:  reconciliation.SmallMonthlyVisibilityRequests,
+			TargetMonthlyVisibilityRequests: reconciliation.TargetMonthlyVisibilityRequests,
+			SmallMonthlyRequestCap:          reconciliation.SmallMonthlyQueueRequestCap,
+			TargetMonthlyRequestCap:         reconciliation.TargetMonthlyQueueRequestCap,
+		},
+		Vocabulary: reconciliationVocabularyContract{
+			EvidenceKinds:           auditStrings(reconciliation.EvidenceKinds()),
+			PlanKinds:               auditStrings(reconciliation.PlanKinds()),
+			PlanSelections:          auditStrings(reconciliation.PlanSelections()),
+			IdempotencyDispositions: auditStrings(reconciliation.IdempotencyDispositions()),
+			AttemptPurposes:         auditStrings(reconciliation.AttemptPurposes()),
+			AttemptStates:           auditStrings(reconciliation.AttemptStates()),
+			EffectStates:            auditStrings(reconciliation.EffectStates()),
+			DispatchProofs:          auditStrings(reconciliation.DispatchProofs()),
+			WorkReasons:             auditStrings(reconciliation.WorkReasons()),
+			DeliveryDispositions:    auditStrings(reconciliation.DeliveryDispositions()),
+			MaintenanceKinds:        auditStrings(reconciliation.MaintenanceKinds()),
+			MaintenanceOutcomes:     auditStrings(reconciliation.MaintenanceOutcomes()),
+			MaintenanceDirectives:   auditStrings(reconciliation.MaintenanceDirectives()),
+			ObservationDecisions:    auditStrings(reconciliation.ObservationDecisions()),
+			RetentionDispositions:   auditStrings(reconciliation.RetentionDispositions()),
+			CrashPoints:             auditStrings(reconciliation.CrashPoints()),
+			RecoveryActions:         auditStrings(reconciliation.RecoveryActions()),
+		},
+		NonClaims: []string{
+			"durable-state", "queue-adapter", "worker-enforcement", "provider-adapter",
+			"exactly-once-provider-execution",
 		},
 	}
 }
@@ -1943,6 +2055,165 @@ func TestAuditContractRejectsSemanticDrift(t *testing.T) {
 	}
 }
 
+func TestReconciliationContractRejectsSemanticDrift(t *testing.T) {
+	t.Parallel()
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		message string
+	}{
+		{
+			name: "manifest removed",
+			mutate: func(root map[string]any) {
+				delete(root, "x-veer-reconciliation")
+			},
+			message: "x-veer-reconciliation is missing",
+		},
+		{
+			name: "provider execution claims exactly once",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["providerExecution"] = "exactly-once"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "work lease plan binding weakens",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["workLeasePlanBinding"] = "unchecked"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "attempt preparation gates become optional",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["attemptPreparation"] = "caller-optional"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "attempt preparation omits completed effect fence",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["attemptPreparation"] =
+					"sealed-cancellation-target-retry-generation-deadline-bound-releasable-observation"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "replan ignores current logical effects",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["planSupersession"] =
+					"physical-attempt-state-only"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "replan current effects omit source attempt version",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["planSupersession"] =
+					"resolved-attempts-plus-definitive-current-effects"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "observation overwrites a stale target",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["observationCompletion"] =
+					"blind-observation-overwrite"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "observation CAS omits source attempt version",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["observationCompletion"] =
+					"exact-current-effect-cas-with-stale-result-suppression"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "dispatch omits live lease recheck",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["dispatchLeaseRecheck"] = "permit-snapshot-only"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "public operation phase added",
+			mutate: func(root map[string]any) {
+				phases := nestedMap(t, root, "x-veer-reconciliation", "authority")["publicOperationPhases"].([]any)
+				nestedMap(t, root, "x-veer-reconciliation", "authority")["publicOperationPhases"] =
+					append(phases, "CancelPending")
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "signed fence ceiling changes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "limits")["maximumFence"] = "18446744073709551615"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "lease duration changes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "timing")["storeLeaseSeconds"] = json.Number("61")
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "idempotency window slides",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "timing")["idempotencyWindow"] = "sliding"
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "visibility budget disappears",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "queueBudget")["targetMonthlyVisibilityRequests"] = json.Number("0")
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "indeterminate effect disappears",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation", "vocabulary")["effectStates"] =
+					[]any{"Applied", "NoEffect"}
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+		{
+			name: "durability nonclaim disappears",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-reconciliation")["nonClaims"] =
+					[]any{"queue-adapter", "worker-enforcement", "provider-adapter", "exactly-once-provider-execution"}
+			},
+			message: "x-veer-reconciliation contract drifted",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			err = Validate(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.message)
+			}
+		})
+	}
+}
+
 func admissionStageForMutation(t *testing.T, root map[string]any, index int) map[string]any {
 	t.Helper()
 	stages := nestedMap(t, root, "x-veer-admission")["stages"].([]any)
@@ -2968,6 +3239,30 @@ func TestContractRejectsSemanticDrift(t *testing.T) {
 			mutate: func(root map[string]any) {
 				idempotency := nestedMap(t, root, "x-veer-evolution", "idempotency")
 				idempotency["replay"] = "original-status-headers-body"
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "idempotency window becomes sliding",
+			mutate: func(root map[string]any) {
+				idempotency := nestedMap(t, root, "x-veer-evolution", "idempotency")
+				idempotency["window"] = "sliding"
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "idempotency equality remains live",
+			mutate: func(root map[string]any) {
+				idempotency := nestedMap(t, root, "x-veer-evolution", "idempotency")
+				idempotency["expirationBoundary"] = "live-at-equality"
+			},
+			message: "rules drifted",
+		},
+		{
+			name: "idempotency cleanup extends semantics",
+			mutate: func(root map[string]any) {
+				idempotency := nestedMap(t, root, "x-veer-evolution", "idempotency")
+				idempotency["cleanup"] = "row-presence-extends-window"
 			},
 			message: "rules drifted",
 		},

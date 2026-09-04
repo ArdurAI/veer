@@ -72,7 +72,11 @@
         "PATCH",
         "DELETE"
       ],
-      "minimumRetentionHours": 24,
+      "retentionHours": 24,
+      "window": "fixed-non-sliding",
+      "liveBoundary": "database-time-before-expiry",
+      "expirationBoundary": "expired-at-equality",
+      "cleanup": "cleanup-lag-does-not-extend-semantics",
       "scope": "principal-method-canonical-target",
       "replay": "original-status-body-semantic-headers-current-request-id",
       "mismatchStatus": 409
@@ -1011,6 +1015,171 @@
       "renewal": "unsupported",
       "expirationBoundary": "expired-at-equality"
     }
+  },
+  "x-veer-reconciliation": {
+    "contractVersion": "veer.reconciliation.v1alpha1",
+    "authority": {
+      "referenceModel": "process-local-provider-free",
+      "persistence": "not-implemented",
+      "delivery": "at-least-once",
+      "providerExecution": "not-exactly-once",
+      "authoritativeTime": "postgresql-time-future-adapter",
+      "leaseBindingTransition": "qualified-next-mutation-or-compensation-schedule-before-exact-lineage-cas",
+      "workLeasePlanBinding": "exact-plan-digest",
+      "attemptPreparation": "sealed-completed-effect-cancellation-target-retry-generation-deadline-bound-releasable-observation",
+      "planSupersession": "resolved-attempts-plus-source-versioned-definitive-current-effects",
+      "observationCompletion": "source-attempt-versioned-exact-current-effect-cas-with-stale-result-suppression",
+      "dispatchLeaseRecheck": "atomic-live-row-at-provider-boundary",
+      "idempotencyReclamation": "bounded-expired-state-with-active-call-protection",
+      "compensationAdmission": "sealed-next-qualified-inverse",
+      "attemptChronology": "authority-and-resolution-not-before-boundary",
+      "publicOperationPhases": [
+        "Pending",
+        "Waiting",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Canceled"
+      ]
+    },
+    "limits": {
+      "maxEvidenceBytes": 262144,
+      "maxEvidenceVersionBytes": 128,
+      "maxSemanticEffectBytes": 65536,
+      "maxEffectsPerOperation": 1000,
+      "maxObservationAttempts": 1000,
+      "minIdempotencyKeyBytes": 16,
+      "maxIdempotencyKeyBytes": 128,
+      "minimumEffectTombstoneDays": 90,
+      "maximumFence": "9223372036854775807",
+      "smallActiveLeaseLimit": 100,
+      "targetActiveLeaseLimit": 1000
+    },
+    "timing": {
+      "httpIdempotencyHours": 24,
+      "idempotencyWindow": "fixed-non-sliding",
+      "idempotencyLiveBoundary": "database-time-before-expiry",
+      "idempotencyExpiryBoundary": "expired-at-equality",
+      "storeLeaseSeconds": 60,
+      "queueVisibilitySeconds": 60,
+      "renewalJitterMinimumSeconds": 15,
+      "renewalDeadlineSeconds": 20,
+      "dispatchSafetyMarginSeconds": 10
+    },
+    "queueBudget": {
+      "smallMonthlyLeaseRenewals": 17856000,
+      "targetMonthlyLeaseRenewals": 178560000,
+      "smallMonthlyVisibilityRequests": 3546645,
+      "targetMonthlyVisibilityRequests": 52824735,
+      "smallMonthlyRequestCap": 23546645,
+      "targetMonthlyRequestCap": 152824735
+    },
+    "vocabulary": {
+      "evidenceKinds": [
+        "DesiredIntent",
+        "ObservedSnapshot",
+        "ProviderConnection",
+        "CredentialReference",
+        "Capability",
+        "Quota",
+        "Cost"
+      ],
+      "planKinds": [
+        "Forward",
+        "Compensation"
+      ],
+      "planSelections": [
+        "Reuse",
+        "Supersede"
+      ],
+      "idempotencyDispositions": [
+        "Reserved",
+        "Replay"
+      ],
+      "attemptPurposes": [
+        "Forward",
+        "Observation",
+        "ProviderCancel",
+        "Compensation"
+      ],
+      "attemptStates": [
+        "Prepared",
+        "Dispatched",
+        "Applied",
+        "NoEffect",
+        "Indeterminate"
+      ],
+      "effectStates": [
+        "Applied",
+        "NoEffect",
+        "Indeterminate"
+      ],
+      "dispatchProofs": [
+        "NeverBegan",
+        "Unknown"
+      ],
+      "workReasons": [
+        "CancelPending",
+        "ProviderOutcomeIndeterminate",
+        "ProviderEffectConflict",
+        "Quarantined"
+      ],
+      "deliveryDispositions": [
+        "Accepted",
+        "DuplicateActive",
+        "DuplicateCompleted"
+      ],
+      "maintenanceKinds": [
+        "StoreLease",
+        "QueueVisibility"
+      ],
+      "maintenanceOutcomes": [
+        "Succeeded",
+        "Failed",
+        "Unknown"
+      ],
+      "maintenanceDirectives": [
+        "Continue",
+        "StopAndSurrender"
+      ],
+      "observationDecisions": [
+        "Continue",
+        "Resolved",
+        "Quarantine",
+        "AlreadyDone"
+      ],
+      "retentionDispositions": [
+        "Keep",
+        "Eligible"
+      ],
+      "crashPoints": [
+        "BeforeAPICommit",
+        "AfterAPICommitBeforeResponse",
+        "BeforeOutboxPublish",
+        "AfterOutboxPublishBeforeReceipt",
+        "DeliveryBeforeFence",
+        "AfterAttemptPreparationBeforeResult",
+        "AfterResultCommitBeforeAcknowledgement",
+        "LeaseLostDuringDispatch"
+      ],
+      "recoveryActions": [
+        "NoAcceptedWork",
+        "ReplayDurableResult",
+        "ReclaimOutbox",
+        "RepublishAllowed",
+        "NoProviderEffect",
+        "RecordIndeterminate",
+        "DurableNoOp",
+        "StopAndObserve"
+      ]
+    },
+    "nonClaims": [
+      "durable-state",
+      "queue-adapter",
+      "worker-enforcement",
+      "provider-adapter",
+      "exactly-once-provider-execution"
+    ]
   },
   "paths": {
     "/api/v1alpha1/workspaces": {

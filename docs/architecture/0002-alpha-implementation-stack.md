@@ -56,7 +56,8 @@ In particular:
   worker processes remain stateless;
 - the developer profile must run locally without private credentials or paid
   cloud services;
-- the target profile has only USD 22.60 of monthly headroom, so this decision
+- the target profile has only USD 1.47 of monthly headroom after ADR 0012's
+  visibility-renewal partition, so this decision
   adds no continuously billed service to ADR 0001's worksheet.
 
 ## Runtime and process model
@@ -150,6 +151,15 @@ generation and digest, acquire fenced resource ownership, and treat stale or
 duplicate work as a no-op with bounded evidence. Queue deduplication is never a
 correctness dependency.
 
+[ADR 0012](0012-reconciliation-reliability-and-fencing.md) closes the external-
+effect gap: before any provider mutation, the worker atomically persists an
+immutable prepared attempt bound to the exact Operation, plan, logical effect,
+generation, owner, and signed fence. It then calls the provider outside the
+transaction. Missing definitive result evidence after owner or process loss is
+`Indeterminate`, not success or permission for a blind retry. Conflicting newer-
+generation dispatch remains gated until old external-effect truth is resolved
+or an adapter supplies exact safe-supersession evidence.
+
 ### Store port
 
 `internal/core/ports.StateStore` owns the following capability contract:
@@ -158,7 +168,7 @@ correctness dependency.
 | --- | --- |
 | Read snapshot | Load a workspace-scoped resource, desired generation, observed generation, resource version, conditions, and integrity metadata from one consistent snapshot. |
 | Atomic mutation | Run one bounded transaction that conditionally writes desired state, generation, idempotency result, integrity anchor, required audit data, and outbox work, or writes none of them. |
-| Fenced operation | Acquire, renew, and complete operation ownership using a monotonically increasing fence; a stale holder cannot commit provider results. |
+| Fenced operation | Acquire or take over one stable Workspace/resource-lineage row with a strictly increasing positive signed `bigint` fence; renewal preserves that fence, and every attempt/result/observation commit predicates generation, Operation, plan, owner, and fence. |
 | Observation | Persist observed state and conditions only for the generation and fence that produced them. |
 | Outbox | Claim, settle, retry, and recover publication records without deleting unproved work. |
 | Audit query | Read append-only audit records through bounded, deterministic pagination; mutation is not exposed. |
@@ -179,11 +189,16 @@ which matches the failure model Veer must already prove. Each message is at
 most 2 KiB and contains references and integrity metadata, never desired state,
 credentials, policy inputs, or other secret-bearing payloads.
 
-The adapter uses long polling, bounded batches, visibility leases with bounded
-heartbeat extension, explicit deletion after commit, and a same-region dead
-letter queue. Visibility expiry is a lease loss, not proof that the first worker
-stopped. A worker that loses its database fence must stop external mutation even
-if it still holds a queue receipt.
+The adapter uses long polling, bounded batches, a 60-second visibility interval
+with a stable per-work renewal target from 15 through 20 seconds, explicit
+deletion after commit, and a same-region dead-letter queue. The authoritative
+PostgreSQL lease is also 60 seconds and uses the same renewal envelope. A
+provider mutation may start only when the remaining store lease is strictly
+greater than its bounded RPC timeout plus ten seconds, with the RPC deadline
+strictly before lease expiry minus that margin. Failed or unknown store or visibility
+maintenance stops new dispatch. Visibility expiry is a lease loss, not proof
+that the first worker stopped. A worker that loses its database fence must stop
+external mutation even if it still holds a queue receipt.
 
 The source queue and dead-letter queue use SQS-managed server-side encryption
 (`SSE-SQS`) at rest, TLS in transit, restrictive queue policies, and separate
@@ -313,7 +328,7 @@ they are architecture comparisons, not vendor quotes or forecasts.
 | Candidate | Correctness | Recovery | Security | Performance | Operability | Monthly baseline cost | Outcome |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RDS PostgreSQL 18.6 Multi-AZ | Native transactions atomically cover state, audit, integrity anchor, idempotency, and outbox. | Managed synchronous standby, PITR, and snapshot workflows fit the zero-RPO AZ and documented regional-restore exercises. | Private endpoint, KMS encryption, verified TLS, engine patching, and separated runtime/migrator roles. | Must pass 40/400-GiB occupancy, failover, query-latency, and write-amplification qualification. | One familiar relational engine locally and in production; AWS owns host and standby operations. | USD 347.83 small and USD 642.13 target for compute, storage, backup, transfer, and modeled small-profile credits. | Selected. |
-| Aurora PostgreSQL 18.4 with one cross-AZ reader | PostgreSQL-compatible transactions fit, but Aurora-specific behavior becomes part of the adapter and test matrix. | Fast managed failover is attractive; regional recovery and exact-version restore still require separate proof. | Comparable managed controls, with a separate engine patch schedule; Aurora 18.4 lagged the selected community/RDS 18.6 baseline on the decision date. | Storage architecture may help some workloads, while I/O charging makes the unmeasured access pattern material. | Adds Aurora-specific capacity, version, I/O, and failover operations. | Two db.r7g.large instances alone are USD 410.69/month at the checked price, before storage, I/O, backup, and transfer; target headroom is USD 22.60. | Rejected until a measured Aurora worksheet beats the selected total. |
+| Aurora PostgreSQL 18.4 with one cross-AZ reader | PostgreSQL-compatible transactions fit, but Aurora-specific behavior becomes part of the adapter and test matrix. | Fast managed failover is attractive; regional recovery and exact-version restore still require separate proof. | Comparable managed controls, with a separate engine patch schedule; Aurora 18.4 lagged the selected community/RDS 18.6 baseline on the decision date. | Storage architecture may help some workloads, while I/O charging makes the unmeasured access pattern material. | Adds Aurora-specific capacity, version, I/O, and failover operations. | Two db.r7g.large instances alone are USD 410.69/month at the checked price, before storage, I/O, backup, and transfer; target headroom is USD 1.47. | Rejected until a measured Aurora worksheet beats the selected total. |
 | Self-managed PostgreSQL on EKS | Same SQL semantics are possible, but correctness now depends on operator-built replication, fencing, backup, and failover. | The alpha would have to prove database orchestration itself while also proving Veer recovery. | Veer would own host hardening, patching, replication credentials, certificates, and backup isolation. | Can be tuned, but competes with API/worker capacity and creates noisy-neighbor risk. | Highest on-call and upgrade burden; ADR 0001 rejects self-managed state as the reference baseline. | Reusing nodes hides capacity cost; three dedicated modeled m7g.xlarge nodes cost USD 364.26/month before volumes, backup, transfer, and operations. | Rejected for alpha recovery and operability. |
 | DynamoDB on-demand | Regional transactions exist but are limited to 100 distinct items and 4 MiB; the selected boundary explicitly requires relational state and relational qualification. | Managed AZ durability is strong, but relational PITR, query, migration, and integrity evidence would need redesign. | Strong managed controls; access-pattern-specific IAM and indexes expand the policy surface. | Can scale well for designed keys, but Veer's evolving relational access patterns are not yet stable enough to prove. | Removes SQL operations but shifts schema, indexes, joins, migrations, and local parity into application code. | Not priced because it fails the relational-store contract; accepting it requires a replacement of ADR 0001 and a complete request/storage worksheet. | Rejected on a hard contract, not price. |
 
@@ -327,9 +342,9 @@ worksheet. The Aurora lower bound uses the same AWS price snapshot: two
 
 | Candidate | Correctness | Recovery | Security | Performance | Operability | Monthly baseline cost | Outcome |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| SQS Standard plus transactional outbox | Deliberate duplicate and reordering semantics force generation checks, idempotency, and fencing at the source of truth. | Multi-AZ managed queue and visibility expiry replace failed consumers; outbox replay repairs uncertain publication. | SQS-managed encryption, compact non-secret messages, scoped producer/consumer/redrive roles, TLS enforcement, and restrictive policies. | Managed throughput is far above the accepted envelope; the hard gates are age, depth, wire bytes, redelivery, and cost units. | No brokers to patch; visibility, DLQ, redrive, and CloudWatch behavior still require runbooks and drills. | USD 8.00 small and USD 40.00 target, already included in ADR 0001. | Selected for production. |
-| SQS FIFO | Broker deduplication and per-group ordering do not remove the need for store fencing, especially after visibility expiry and outside the deduplication window. | Managed recovery fits, but a poisoned or slow message can block its resource group. | Same managed controls plus deduplication/group identifiers that must not expose sensitive data. | Accepted throughput fits, but ordering supplies no required correctness property and adds head-of-line behavior. | More grouping and redrive semantics for no reduction in Veer's mandatory recovery tests. | USD 10.00 small and USD 50.00 target at the accepted request envelopes, USD 2.00/10.00 above Standard. | Rejected because ordering is unnecessary for correctness, not because it is unaffordable. |
-| PostgreSQL `SKIP LOCKED` queue | Can be durable and at-least-once when leases and fences are implemented; shares the authoritative transaction boundary. | A database failure removes both record and delivery paths, reducing failure independence. | Reuses database controls but broadens database permissions and contention surface. | Avoids network sends but adds hot-table churn, vacuum, lock, WAL, backup, and cross-AZ load to the narrow database envelope. | Excellent local parity and debugging; poor production fault isolation. | USD 0 separate service only if it causes no database uplift, which is unproved with just USD 22.60 target headroom. | Selected only for developer and contract-test profiles. |
+| SQS Standard plus transactional outbox | Deliberate duplicate and reordering semantics force generation checks, idempotency, and fencing at the source of truth. | Multi-AZ managed queue and visibility expiry replace failed consumers; outbox replay repairs uncertain publication. | SQS-managed encryption, compact non-secret messages, scoped producer/consumer/redrive roles, TLS enforcement, and restrictive policies. | Managed throughput is far above the accepted envelope; the hard gates are age, depth, wire bytes, redelivery, visibility renewal, and cost units. | No brokers to patch; visibility, DLQ, redrive, and CloudWatch behavior still require runbooks and drills. | USD 9.42 small and USD 61.13 target, already included in ADR 0001. | Selected for production. |
+| SQS FIFO | Broker deduplication and per-group ordering do not remove the need for store fencing, especially after visibility expiry and outside the deduplication window. | Managed recovery fits, but a poisoned or slow message can block its resource group. | Same managed controls plus deduplication/group identifiers that must not expose sensitive data. | Accepted throughput fits, but ordering supplies no required correctness property and adds head-of-line behavior. | More grouping and redrive semantics for no reduction in Veer's mandatory recovery tests. | USD 11.77 small and USD 76.41 target at the accepted request envelopes, USD 2.35/15.28 above Standard. | Rejected because ordering is unnecessary for correctness, not because it is affordable within the target headroom. |
+| PostgreSQL `SKIP LOCKED` queue | Can be durable and at-least-once when leases and fences are implemented; shares the authoritative transaction boundary. | A database failure removes both record and delivery paths, reducing failure independence. | Reuses database controls but broadens database permissions and contention surface. | Avoids network sends but adds hot-table churn, vacuum, lock, WAL, backup, and cross-AZ load to the narrow database envelope. | Excellent local parity and debugging; poor production fault isolation. | USD 0 separate service only if it causes no database uplift, which is unproved with just USD 1.47 target headroom. | Selected only for developer and contract-test profiles. |
 | MSK Serverless/Kafka | Durable replay and partition order are stronger than required, but exactly-once provider effects still need Veer fencing. | Adds broker, partition, consumer-offset, and retention recovery to the store/outbox recovery path. | Private connectivity and IAM are available; topic ACL, connector, and data-retention surfaces expand blast radius. | Far beyond the accepted 100-RPS/100-million-unit envelope and introduces partition planning. | Adds Kafka-specific monitoring, clients, lag, retention, and incident skills. | The published cluster-hour charge alone is USD 558 per 744-hour month, before partitions, traffic, and storage. | Rejected for cost and operability. |
 
 ### Migration-tool alternatives
@@ -345,7 +360,7 @@ worksheet. The Aurora lower bound uses the same AWS price snapshot: two
 | Candidate | Correctness | Recovery | Security | Performance | Operability | Monthly baseline cost | Outcome |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | One module, two binaries, core-owned ports | One domain transaction model is shared while API and worker lifecycles remain independent. | Either process can restart or scale without splitting the state protocol. | Go `internal` boundaries prevent accidental external imports; adapters isolate credentials and generated code. | In-process core calls avoid an unnecessary service hop. | One build graph and release, with separate deployment and telemetry. | Fits the existing API/worker node envelope with no added service. | Selected. |
-| Service per architectural box | Network protocols would split the atomic domain boundary before those protocols are stable. | More partial-failure and deployment-order cases during the alpha. | More identities, certificates, endpoints, and policies. | Adds serialization and network latency to a 100-RPS control plane. | Independent scaling is possible but not needed; on-call and release coordination increase. | Any new load balancer, service mesh, or nodes consume the USD 22.60 target headroom. | Rejected for alpha; extraction requires measured pressure and an ADR. |
+| Service per architectural box | Network protocols would split the atomic domain boundary before those protocols are stable. | More partial-failure and deployment-order cases during the alpha. | More identities, certificates, endpoints, and policies. | Adds serialization and network latency to a 100-RPS control plane. | Independent scaling is possible but not needed; on-call and release coordination increase. | Any new load balancer, service mesh, or nodes consume the USD 1.47 target headroom. | Rejected for alpha; extraction requires measured pressure and an ADR. |
 | Flat packages shared by commands | Easy initially, but transport, SQL, and AWS types can become de facto domain contracts. | Recovery logic becomes coupled to adapter details and harder to fault-test. | Credential-bearing clients and user-facing data have weak structural separation. | No meaningful advantage over explicit internal packages at this scale. | Import cycles and ownership ambiguity grow with each provider. | No direct service cost, but maintenance cost is unbounded. | Rejected. |
 
 ## Benchmark and qualification assumptions
@@ -369,9 +384,11 @@ its seed or denominator:
   rows present;
 - acknowledged mutations peak at 121/601 per minute and must commit through
   outbox and required audit data within the write-latency SLO;
-- queue tests cover 20/100 million 64-KiB request units per month, 2-KiB
+- queue tests cover 23,546,645/152,824,735 64-KiB request units per month,
+  including 3,546,645/52,824,735 pre-reserved visibility changes, 2-KiB
   messages, 10,000/100,000 pending items, duplicate and reordered deliveries,
-  lease expiry, long-poll empties, and each cost-reserve threshold;
+  lease expiry, long-poll empties, partial-batch retry, and each cost-reserve
+  threshold;
 - read latency must remain p95 at most 300 ms and p99 at most 750 ms; write
   acceptance must remain p95 at most 500 ms and p99 at most one second;
 - worker, node, Availability Zone, database, queue, and uncertain-publication
@@ -432,8 +449,8 @@ The selected store and queue consume exactly the already modeled amounts:
 | Profile | PostgreSQL envelope | SQS Standard | Combined | Whole control plane | Remaining headroom |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 | USD 0.00 | USD 0.00 |
-| Small production | USD 347.83 | USD 8.00 | USD 355.83 | USD 937.50 | USD 62.50 |
-| Target qualification | USD 642.13 | USD 40.00 | USD 682.13 | USD 2,627.40 | USD 22.60 |
+| Small production | USD 347.83 | USD 9.42 | USD 357.25 | USD 938.91 | USD 61.09 |
+| Target qualification | USD 642.13 | USD 61.13 | USD 703.26 | USD 2,648.53 | USD 1.47 |
 
 The PostgreSQL envelope includes the worksheet's compute, provisioned storage,
 primary and recovery backup storage, recovery transfer, and small-profile CPU
@@ -521,6 +538,12 @@ keep that difference honest.
 - Persistence and reconciliation issues must implement contract suites that
   run unchanged against every store or queue adapter except capability-specific
   fault controls.
+- ADR 0012's provider-free reference contract is the executable oracle for
+  fixed-window idempotency, prepared attempts, immutable planning, duplicate
+  delivery, lease/fence ownership, visibility accounting, cancellation,
+  uncertainty, and compensation. It implements no database, queue, worker, or
+  provider adapter; issues #30 through #37 must integrate those rules without
+  changing the public Operation phase registry.
 - Qualification evidence must report a version-manifest digest so a result is
   attributable to this stack rather than a floating environment.
 

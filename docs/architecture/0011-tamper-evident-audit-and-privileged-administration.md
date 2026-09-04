@@ -139,6 +139,14 @@ Sources are `API`, `Worker`, `Controller`, `ProviderAdapter`,
 an unknown external result; it does not assert success, failure, or retry
 safety.
 
+[ADR 0012](0012-reconciliation-reliability-and-fencing.md) fixes the producer
+side of that vocabulary. One `ProviderAttempt` event corresponds to each actual
+or conservatively possibly dispatched physical attempt. A prepared attempt that
+is proven never dispatched is `NoEffect` and produces no attempt event; after
+owner or process loss, absent such proof, the single attempt is recorded as
+`Indeterminate`. Provider retries use new attempt IDs and ordinals while
+retaining the same logical-effect identity.
+
 These references are sufficient for a future producer to join request,
 authorization, Operation transitions, and every externally attempted provider
 mutation, including retries, by stable IDs and sequence. No API or worker
@@ -189,7 +197,10 @@ cross-reference shapes, but it cannot re-derive historical hierarchy state or
 producer authority. Issue [#24](https://github.com/ArdurAI/veer/issues/24) owns
 runtime reauthorization; issues [#30](https://github.com/ArdurAI/veer/issues/30)
 and [#31](https://github.com/ArdurAI/veer/issues/31) own authoritative storage
-and atomic production with state and outbox work.
+and atomic production with state and outbox work. ADR 0012 requires those future
+transactions to commit Operation/work/attempt state, required audit evidence,
+the integrity anchor, and successor outbox work together, while every external
+provider call remains outside the database transaction.
 
 ### Clock handling
 
