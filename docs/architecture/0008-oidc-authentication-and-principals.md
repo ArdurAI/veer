@@ -24,12 +24,17 @@ taxonomy before routes or authorization are implemented.
 
 ### Boundary and data flow
 
-Authentication is split across three packages with one-way dependencies:
+The bearer value is shared by ordinary authentication and privileged
+administration, so the neutral `internal/core/domain/authentication` package
+owns it. `internal/core/ports` retains type, constructor, error, and limit
+aliases for existing transport and adapter call sites. Authentication then has
+this one-way data flow:
 
 ```text
 HTTP request
   -> internal/transport/http (carrier extraction and removal)
-  -> internal/core/ports.BearerCredential (opaque short-lived value)
+  -> internal/core/ports.NewBearerCredential (compatibility facade)
+  -> internal/core/domain/authentication.BearerCredential (opaque shared value)
   -> internal/adapters/identity/oidc (signature, claim, and JWKS validation)
   -> internal/core/domain/identity.Principal (provider-neutral actor)
 ```
@@ -248,14 +253,18 @@ unavailable; they remain explicit absence for route policy to handle.
 Invalid `TrustAnchor` input is a constructor/configuration failure and must stop
 startup; it is not a per-request invalid or unavailable result.
 
-The bearer credential keeps its raw value private, bounds construction, and
-exposes raw access only through the authentication-adapter accessor. Its
-`Error`, `String`, and `GoString` methods always return redacted fixed text;
-JSON and text marshaling fail. Principal construction inputs, logical identity,
-workload identity, and principals similarly block generic serialization and
-redact personal claims from diagnostic formatting. Raw-token canaries cover
-success, parse failure, alternative carriers, formatting, serialization, claim
-validation, and JWKS failures.
+The authentication domain owns the bearer credential, keeps its raw value
+private, bounds construction, and exposes raw access through an accessor
+intended only for verifier adapters. Ports aliases do not create another value
+or ownership boundary. Ordinary OIDC verification and ledger-gated privileged
+verification may consume the same type; neither contract makes the value
+serializable or persistent. Its `Error`, `String`, and `GoString` methods
+always return redacted fixed text; JSON and text marshaling fail. Principal
+construction inputs, logical identity, workload identity, and principals
+similarly block generic serialization and redact personal claims from
+diagnostic formatting. Raw-token canaries cover success, parse failure,
+alternative carriers, formatting, serialization, claim validation, and JWKS
+failures.
 
 ### Dependency and offline build
 
@@ -370,11 +379,14 @@ enforcement, and
 invalid-versus-unavailable classification checks.
 
 ```sh
-go test ./internal/core/domain/identity ./internal/core/ports \
+go test ./internal/core/domain/authentication ./internal/core/domain/identity \
+  ./internal/core/ports \
   ./internal/transport/http ./internal/adapters/identity/oidc
-go test -race ./internal/core/domain/identity ./internal/core/ports \
+go test -race ./internal/core/domain/authentication ./internal/core/domain/identity \
+  ./internal/core/ports \
   ./internal/transport/http ./internal/adapters/identity/oidc
-go test -count=100 ./internal/core/domain/identity ./internal/core/ports \
+go test -count=100 ./internal/core/domain/authentication ./internal/core/domain/identity \
+  ./internal/core/ports \
   ./internal/transport/http ./internal/adapters/identity/oidc
 ./hack/dev docs
 ./hack/dev check

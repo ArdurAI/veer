@@ -201,3 +201,17 @@ The alpha runtime, relational store, queue, migration tooling, replaceable
 ports, and repository boundaries are selected in
 [ADR 0002](0002-alpha-implementation-stack.md). Implementations must preserve
 its weak queue-delivery contract and atomic store boundary.
+
+## Audit and privileged administration reference
+
+[ADR 0011](0011-tamper-evident-audit-and-privileged-administration.md)
+fixes bounded canonical audit events, separate Workspace and Platform streams,
+contiguous sequence and hash-chain verification, trusted-terminal-checkpoint
+export verification, fixed 90-day online and 365-day archive retention
+decisions, and strong-authenticated one-use grants for exactly `audit.export`,
+`operation.quarantine`, and `work.redrive`. Its audit and administration
+packages and root OpenAPI manifest are pure reference contracts. They add no
+route, persistence, cross-node ledger, archive, signer, verifier adapter,
+worker action, or runtime enforcement. A valid hash-chain prefix cannot prove
+that its tail is complete without an independently trusted terminal
+checkpoint.

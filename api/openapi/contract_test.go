@@ -12,9 +12,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ArdurAI/veer/internal/core/domain/administration"
 	"github.com/ArdurAI/veer/internal/core/domain/admission"
+	"github.com/ArdurAI/veer/internal/core/domain/audit"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
+	"github.com/ArdurAI/veer/internal/core/ports"
 )
 
 type schemaExampleWire struct {
@@ -326,6 +330,126 @@ func TestAuthorizationManifestMatchesRuntimeTokens(t *testing.T) {
 	if !reflect.DeepEqual(manifest.Reasons, wantReasons) {
 		t.Fatalf("decision reasons = %#v, want %#v", manifest.Reasons, wantReasons)
 	}
+}
+
+func TestAuditManifestMatchesRuntimeTokens(t *testing.T) {
+	t.Parallel()
+
+	data, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	root := decodeForMutation(t, data)
+	var manifest auditContract
+	if err := decodeStrictValue(root["x-veer-audit"], &manifest); err != nil {
+		t.Fatalf("decode audit manifest: %v", err)
+	}
+
+	want := auditManifestRuntimeContract(t)
+	if !reflect.DeepEqual(manifest, want) {
+		t.Fatalf("x-veer-audit runtime projection drifted:\n manifest %#v\n runtime  %#v", manifest, want)
+	}
+	if static := auditManifestContract(); !reflect.DeepEqual(static, want) {
+		t.Fatalf("contract.go audit projection drifted:\n static  %#v\n runtime %#v", static, want)
+	}
+}
+
+func auditManifestRuntimeContract(t *testing.T) auditContract {
+	t.Helper()
+
+	return auditContract{
+		ContractVersion: audit.ContractVersion,
+		TimestampFormat: "RFC3339-UTC-milliseconds",
+		Ordering:        "stream-sequence",
+		Limits: auditLimitsContract{
+			MaxCanonicalEventBytes:    audit.MaxCanonicalEventBytes,
+			MaxSegmentEvents:          audit.MaxSegmentEvents,
+			MaxCanonicalSegmentBytes:  audit.MaxCanonicalSegmentBytes,
+			MaxCanonicalManifestBytes: audit.MaxCanonicalManifestBytes,
+			MaxSignatureBytes:         audit.MaxSignatureBytes,
+			MaxKeyIDBytes:             audit.MaxKeyIDBytes,
+			MaxHolds:                  audit.MaxHolds,
+		},
+		Integrity: auditIntegrityContract{
+			Digest:            "SHA-256-domain-separated-uint64-length-frames",
+			ChainDigestPrefix: audit.ChainDigestPrefix,
+			TailCompleteness:  "trusted-terminal-checkpoint-required",
+		},
+		Export: auditExportContract{
+			BodyDigestPrefix:          audit.ExportBodyDigestPrefix,
+			SignatureAlgorithms:       auditStrings(audit.SignatureAlgorithms()),
+			SignatureProduction:       "external-not-implemented",
+			SignatureVerification:     "caller-supplied-interface",
+			TrustedTerminalCheckpoint: true,
+		},
+		Retention: auditRetentionContract{
+			OnlineDays:          exactDurationUnits(t, "audit.OnlineRetention", audit.OnlineRetention, 24*time.Hour),
+			ArchiveDays:         exactDurationUnits(t, "audit.ArchiveRetention", audit.ArchiveRetention, 24*time.Hour),
+			HoldKinds:           auditStrings(audit.HoldKinds()),
+			Dispositions:        auditStrings(audit.RetentionDispositions()),
+			DeletionEligibility: "expire-only",
+		},
+		Vocabulary: auditVocabularyContract{
+			StreamKinds:           auditStrings(audit.StreamKinds()),
+			ActorKinds:            auditStrings(audit.ActorKinds()),
+			AuthenticationMethods: auditStrings(audit.AuthenticationMethods()),
+			EventKinds:            auditStrings(audit.EventKinds()),
+			Sources:               auditStrings(audit.Sources()),
+			Outcomes:              auditStrings(audit.Outcomes()),
+			ClockStates:           auditStrings(audit.ClockStates()),
+			ElevationStates:       auditStrings(audit.ElevationStates()),
+		},
+		PrivilegedAdmin: privilegedAdminContract{
+			ContractVersion:              administration.ContractVersion,
+			Ledger:                       "process-local-reference",
+			StrongAuthentication:         "ledger-gated-verifier-port-no-adapter",
+			StrongAuthenticationFailures: []string{ports.ErrStrongAuthenticationInvalid.Error(), ports.ErrStrongAuthenticationUnavailable.Error()},
+			MaxAdministrators:            administration.MaxAdministrators,
+			MaxTrackedElevations:         administration.MaxTrackedElevations,
+			MaxReasonRunes:               administration.MaxReasonRunes,
+			MaxCaseReferenceRunes:        administration.MaxCaseReferenceRunes,
+			MaxStrongAuthProofAgeSeconds: exactDurationUnits(t, "administration.MaxStrongAuthProofAge", administration.MaxStrongAuthProofAge, time.Second),
+			MaxElevationDurationSeconds:  exactDurationUnits(t, "administration.MaxElevationDuration", administration.MaxElevationDuration, time.Second),
+			EligibleActions:              authorizationActions(administration.EligibleActions()),
+			TargetKinds: auditStrings([]administration.TargetKind{
+				administration.TargetKindPlatformAudit,
+				administration.TargetKindWorkspaceAudit,
+				administration.TargetKindOperation,
+			}),
+			GrantStates: auditStrings([]administration.GrantState{
+				administration.GrantStateActive,
+				administration.GrantStateConsumed,
+				administration.GrantStateRevoked,
+				administration.GrantStateExpired,
+			}),
+			Renewal:            "unsupported",
+			ExpirationBoundary: "expired-at-equality",
+		},
+	}
+}
+
+func auditStrings[T interface{ String() string }](values []T) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = value.String()
+	}
+	return result
+}
+
+func authorizationActions(actions []authorization.Action) []string {
+	result := make([]string, len(actions))
+	for index, action := range actions {
+		result[index] = action.String()
+	}
+	return result
+}
+
+func exactDurationUnits(t *testing.T, name string, duration, unit time.Duration) int {
+	t.Helper()
+	if duration <= 0 || duration%unit != 0 {
+		t.Fatalf("%s = %s, want a positive exact multiple of %s", name, duration, unit)
+	}
+	return int(duration / unit)
 }
 
 func TestWorkspaceGoldenMatchesContractExample(t *testing.T) {
@@ -1703,6 +1827,101 @@ func TestAuthorizationContractRejectsSemanticDrift(t *testing.T) {
 				}
 			},
 			message: "outside canonical order",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := decodeForMutation(t, baseline)
+			test.mutate(root)
+			mutated, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			err = Validate(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestAuditContractRejectsSemanticDrift(t *testing.T) {
+	t.Parallel()
+	baseline, err := Load("veer-v1alpha1.json")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(map[string]any)
+		message string
+	}{
+		{
+			name: "manifest removed",
+			mutate: func(root map[string]any) {
+				delete(root, "x-veer-audit")
+			},
+			message: "x-veer-audit is missing",
+		},
+		{
+			name: "canonical event ceiling changes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "limits")["maxCanonicalEventBytes"] = json.Number("16385")
+			},
+			message: "x-veer-audit contract drifted",
+		},
+		{
+			name: "tail completeness loses trusted checkpoint",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "integrity")["tailCompleteness"] = "hash-chain-only"
+			},
+			message: "x-veer-audit contract drifted",
+		},
+		{
+			name: "export no longer requires trusted terminal checkpoint",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "export")["trustedTerminalCheckpoint"] = false
+			},
+			message: "x-veer-audit contract drifted",
+		},
+		{
+			name: "online retention changes",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "retention")["onlineDays"] = json.Number("91")
+			},
+			message: "x-veer-audit contract drifted",
+		},
+		{
+			name: "hold vocabulary reorders",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "retention")["holdKinds"] = []any{"Incident", "Legal", "Security"}
+			},
+			message: "x-veer-audit contract drifted",
+		},
+		{
+			name: "eligible actions reorder",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "privilegedAdministration")["eligibleActions"] =
+					[]any{"operation.quarantine", "audit.export", "work.redrive"}
+			},
+			message: "x-veer-audit contract drifted",
+		},
+		{
+			name: "ledger claims durability",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "privilegedAdministration")["ledger"] = "durable-cross-node"
+			},
+			message: "x-veer-audit contract drifted",
+		},
+		{
+			name: "strong authentication bypasses the ledger gate",
+			mutate: func(root map[string]any) {
+				nestedMap(t, root, "x-veer-audit", "privilegedAdministration")["strongAuthentication"] = "verifier-port-no-adapter"
+			},
+			message: "x-veer-audit contract drifted",
 		},
 	}
 

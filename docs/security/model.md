@@ -175,10 +175,60 @@ linked runtime and provider issues.
 
 ## Audit requirements
 
-Audit events include actor, authentication method, action, resource, decision,
-request identifier, timestamp, source, resulting operation, and outcome. Events
-must be tamper evident, access controlled, retention managed, and exportable to
-an operator-owned security system.
+The accepted reference contract in
+[ADR 0011](../architecture/0011-tamper-evident-audit-and-privileged-administration.md)
+defines bounded canonical events containing a pseudonymous actor,
+authentication method, registered action, hierarchy-sealed target, canonical
+policy decision, request, Operation, provider attempt, elevation lifecycle,
+timestamp and clock state, source, and closed outcome. It excludes raw tokens,
+issuer and subject claims, request and response bodies, provider payloads,
+arbitrary attributes, Operation messages, cost estimates, and error text.
+
+Workspace and Platform histories are separate streams ordered by positive
+contiguous sequence, never by timestamp. Domain-separated length-framed
+SHA-256 chaining detects mutation, deletion within a presented range,
+insertion, reordering, and stream substitution from a known predecessor. A
+valid prefix cannot prove that no suffix was deleted; tail completeness
+requires comparison with an independently trusted terminal checkpoint.
+Canonical decoding and chain verification also cannot prove that the original
+producer assertion was true or authorized, or re-derive historical hierarchy
+state. Those require the future reauthorization and atomic durable producer
+boundaries.
+
+The export reference binds its canonical body, predecessor, range, record
+count, terminal checkpoint, generated time, key identifier, and external
+`Ed25519` signature descriptor. Verification requires an explicit trusted
+terminal checkpoint and a caller-supplied verifier. The package supplies no
+signer, public-key parser, key store, archive, or transport.
+
+Retention decisions are fixed at 90 days online and 365 days in archive, with
+Legal, Incident, and Security holds. Only a valid expired decision is eligible
+for deletion. The pure evaluator neither persists nor moves, locks, archives,
+or deletes an event. Its one clock-state input may be synchronized only when
+the original recorded timestamp and current evaluation observation were both
+synchronized; a later good clock cannot upgrade uncertain recorded time.
+
+Platform administrators are configured separately from Workspace Policy and
+must be exact Human identities. The process-local ledger owns one
+strong-authentication verifier port and trusted clock; a future composition
+root must install both because no verifier adapter, middleware wiring, or
+runtime endpoint exists. `Issue` passes the exact bearer credential and
+immutable elevation request to the verifier once, then uses only the returned
+proof ID and authenticated-at time with its own clock to issue a grant. Callers
+cannot construct a verification receipt or supply the issuance time. One-use
+elevation is limited to `audit.export`, `operation.quarantine`, and
+`work.redrive`, one sealed target, a required bounded reason, an optional
+bounded case reference, a proof no more than five minutes old, and a grant no
+longer than 15 minutes. A Workspace administrator never becomes a platform
+administrator implicitly.
+
+The audit and administration packages are process-local reference contracts.
+They implement no route, durable or cross-node ledger, database or outbox
+transaction, worker action, immutable object archive, KMS boundary, signing
+adapter, or runtime enforcement. Deployed audit completeness, atomicity,
+access control, archive retention, checkpoint trust, and privileged recovery
+remain requirements until their linked implementation and exercise work
+passes.
 
 ## Formal threat model
 
