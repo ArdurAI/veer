@@ -1,0 +1,219 @@
+name: DCO sign-off
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  checks: write
+  contents: read
+
+concurrency:
+  group: dco-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  signoff:
+    name: DCO sign-off
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - name: Start exact-head DCO check
+        id: exact-head-check
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          VEER_DCO_CHECK_DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          VEER_DCO_CHECK_EXTERNAL_ID: dco:${{ github.run_id }}:${{ github.run_attempt }}:${{ github.event.pull_request.base.sha }}:${{ github.event.pull_request.head.sha }}
+          VEER_DCO_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          github-token: ${{ github.token }}
+          result-encoding: string
+          script: |
+            const { data: check } = await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "DCO exact-head",
+              head_sha: process.env.VEER_DCO_HEAD_SHA,
+              details_url: process.env.VEER_DCO_CHECK_DETAILS_URL,
+              external_id: process.env.VEER_DCO_CHECK_EXTERNAL_ID,
+              status: "in_progress",
+              started_at: new Date().toISOString(),
+              output: {
+                title: "DCO verification started",
+                summary: "Trusted-base DCO verification is running.",
+              },
+            });
+            return String(check.id);
+
+      - name: Check out trusted verifier
+        timeout-minutes: 1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch commit data and verify every contribution
+        id: verification
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: sh
+        env:
+          VEER_DCO_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          VEER_COMMUNITY_POLICY_SHA256: ${{ vars.VEER_COMMUNITY_POLICY_SHA256 }}
+          VEER_DCO_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VEER_DCO_PR_NUMBER: ${{ github.event.pull_request.number }}
+          VEER_DCO_VERIFIER_SHA256: ${{ vars.VEER_DCO_VERIFIER_SHA256 }}
+          VEER_DCO_WORKFLOW_SHA256: ${{ vars.VEER_DCO_WORKFLOW_SHA256 }}
+        run: |
+          case "$VEER_DCO_PR_NUMBER" in
+            '' | *[!0-9]*)
+              printf '%s\n' 'veer-dco: pull-request number is invalid' >&2
+              exit 1
+              ;;
+          esac
+          case "$VEER_DCO_WORKFLOW_SHA256" in
+            '' | *[!0-9a-f]*)
+              printf '%s\n' 'veer-dco: approved workflow digest is invalid' >&2
+              exit 1
+              ;;
+          esac
+          if [ "${#VEER_DCO_WORKFLOW_SHA256}" -ne 64 ]; then
+            printf '%s\n' 'veer-dco: approved workflow digest must contain 64 hexadecimal characters' >&2
+            exit 1
+          fi
+          case "$VEER_COMMUNITY_POLICY_SHA256" in
+            '' | *[!0-9a-f]*)
+              printf '%s\n' 'veer-dco: approved community-policy digest is invalid' >&2
+              exit 1
+              ;;
+          esac
+          if [ "${#VEER_COMMUNITY_POLICY_SHA256}" -ne 64 ]; then
+            printf '%s\n' 'veer-dco: approved community-policy digest must contain 64 hexadecimal characters' >&2
+            exit 1
+          fi
+          case "$VEER_DCO_VERIFIER_SHA256" in
+            '' | *[!0-9a-f]*)
+              printf '%s\n' 'veer-dco: approved verifier digest is invalid' >&2
+              exit 1
+              ;;
+          esac
+          if [ "${#VEER_DCO_VERIFIER_SHA256}" -ne 64 ]; then
+            printf '%s\n' 'veer-dco: approved verifier digest must contain 64 hexadecimal characters' >&2
+            exit 1
+          fi
+          git fetch --force --no-tags --no-recurse-submodules --no-write-fetch-head \
+            origin "+refs/pull/$VEER_DCO_PR_NUMBER/head:refs/remotes/origin/dco-head"
+          fetched_head=$(git rev-parse --verify 'refs/remotes/origin/dco-head^{commit}')
+          if [ "$fetched_head" != "$VEER_DCO_HEAD_SHA" ]; then
+            printf '%s\n' 'veer-dco: fetched head does not match the event head' >&2
+            exit 1
+          fi
+          proposed_workflow_sha=$(
+            git cat-file blob "$VEER_DCO_HEAD_SHA:.github/workflows/dco.yml" |
+              sha256sum |
+              awk '{ print $1 }'
+          )
+          if [ "$proposed_workflow_sha" != "$VEER_DCO_WORKFLOW_SHA256" ]; then
+            printf '%s\n' 'veer-dco: proposed workflow does not match the externally approved digest' >&2
+            exit 1
+          fi
+          proposed_policy_sha=$(
+            for policy_path in \
+              CODE_OF_CONDUCT.md \
+              CONTRIBUTING.md \
+              GOVERNANCE.md \
+              LICENSE \
+              README.md \
+              SECURITY.md \
+              docs/development.md; do
+              policy_file_sha=$(
+                git cat-file blob "$VEER_DCO_HEAD_SHA:$policy_path" |
+                  sha256sum |
+                  awk '{ print $1 }'
+              )
+              printf '%s  %s\n' "$policy_file_sha" "$policy_path"
+            done |
+              sha256sum |
+              awk '{ print $1 }'
+          )
+          if [ "$proposed_policy_sha" != "$VEER_COMMUNITY_POLICY_SHA256" ]; then
+            printf '%s\n' 'veer-dco: proposed community policy does not match the externally approved digest' >&2
+            exit 1
+          fi
+          proposed_verifier_sha=$(
+            git cat-file blob "$VEER_DCO_HEAD_SHA:hack/verify-dco.sh" |
+              sha256sum |
+              awk '{ print $1 }'
+          )
+          if [ "$proposed_verifier_sha" != "$VEER_DCO_VERIFIER_SHA256" ]; then
+            printf '%s\n' 'veer-dco: proposed verifier does not match the externally approved digest' >&2
+            exit 1
+          fi
+          ./hack/verify-dco.sh "$VEER_DCO_BASE_SHA" "$VEER_DCO_HEAD_SHA"
+
+      - name: Complete exact-head DCO check
+        if: ${{ always() }}
+        timeout-minutes: 1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          VEER_DCO_CHECK_ID: ${{ steps.exact-head-check.outputs.result }}
+          VEER_DCO_CHECK_DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          VEER_DCO_CHECK_EXTERNAL_ID: dco:${{ github.run_id }}:${{ github.run_attempt }}:${{ github.event.pull_request.base.sha }}:${{ github.event.pull_request.head.sha }}
+          VEER_DCO_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VEER_DCO_VERIFICATION_OUTCOME: ${{ steps.verification.outcome }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            let checkRunId = Number(process.env.VEER_DCO_CHECK_ID);
+            if (!Number.isSafeInteger(checkRunId) || checkRunId <= 0) {
+              const { data } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: process.env.VEER_DCO_HEAD_SHA,
+                check_name: "DCO exact-head",
+                filter: "all",
+                per_page: 100,
+              });
+              const recovered = data.check_runs.find(
+                (check) => check.external_id === process.env.VEER_DCO_CHECK_EXTERNAL_ID,
+              );
+              checkRunId = recovered?.id;
+            }
+
+            const succeeded = process.env.VEER_DCO_VERIFICATION_OUTCOME === "success";
+            const completion = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              status: "completed",
+              conclusion: succeeded ? "success" : "failure",
+              completed_at: new Date().toISOString(),
+              output: {
+                title: succeeded ? "DCO verification passed" : "DCO verification failed",
+                summary: succeeded
+                  ? `Trusted-base DCO verification passed for ${process.env.VEER_DCO_HEAD_SHA}.`
+                  : `Trusted-base DCO verification failed for ${process.env.VEER_DCO_HEAD_SHA}.`,
+              },
+            };
+
+            if (Number.isSafeInteger(checkRunId) && checkRunId > 0) {
+              await github.rest.checks.update({
+                ...completion,
+                check_run_id: checkRunId,
+              });
+            } else {
+              await github.rest.checks.create({
+                ...completion,
+                name: "DCO exact-head",
+                head_sha: process.env.VEER_DCO_HEAD_SHA,
+                details_url: process.env.VEER_DCO_CHECK_DETAILS_URL,
+                external_id: process.env.VEER_DCO_CHECK_EXTERNAL_ID,
+                started_at: new Date().toISOString(),
+              });
+            }
+
+            if (!succeeded) {
+              core.setFailed("Trusted-base DCO verification failed.");
+            }

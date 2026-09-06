@@ -26,9 +26,21 @@ utilities and these two commands:
 
 Bootstrap installs Veer's checksum-verified toolchain under the ignored
 `.tools/` directory. The aggregate check then runs formatting, lint, build,
-unit-test, and documentation gates without cloud credentials or network
-access. See the [local development guide](docs/development.md) for supported
-hosts, individual commands, resource use, and troubleshooting.
+unit-test, API, and policy/documentation gates without cloud credentials or
+network access. See the [local development guide](docs/development.md) for
+supported hosts, individual commands, resource use, and troubleshooting.
+
+## Community and governance
+
+- [Contributing guide](CONTRIBUTING.md), including Developer Certificate of
+  Origin 1.1 sign-off requirements
+- [Maintainer-led alpha governance](GOVERNANCE.md)
+- [Contributor Covenant 2.1](CODE_OF_CONDUCT.md)
+- [Private vulnerability reporting and response policy](SECURITY.md)
+
+Contributions are reviewed against explicit issue acceptance criteria. Passing
+reference-contract tests does not establish production persistence,
+authorization enforcement, provider execution, or release readiness.
 
 ## Design principles
 
@@ -90,6 +102,9 @@ The first implementation slice targets AWS and Kubernetes:
 
 ## License
 
-An open-source license has not yet been selected. Public visibility alone does
-not grant permission to copy, modify, or redistribute this repository. License
-selection is required before the first source release or external contribution.
+Veer is licensed under the [Apache License 2.0](LICENSE), SPDX identifier
+`Apache-2.0`. Contributions are accepted under the same license and require
+Developer Certificate of Origin 1.1 certification.
+
+The authoritative contribution policy is [CONTRIBUTING.md](CONTRIBUTING.md).
+It defines the certification and repair workflow.
