@@ -24,7 +24,8 @@ telemetry, module proxies, checksum-database calls, and version control
 downloads. It also removes inherited tar and ShellCheck defaults plus common
 AWS, Google Cloud, and Azure credential variables from child processes. No
 check needs a cloud API, database, queue, cluster, container runtime, or
-private credential.
+private credential. The documentation step also verifies the canonical
+Apache-2.0 license, community-policy agreement, and DCO verifier regressions.
 
 ## Supported hosts and prerequisites
 
@@ -98,13 +99,76 @@ check.
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
 | `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization/audit/reconciliation projections, schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
-| `./hack/dev docs` | Lint Markdown and verify checked-in architecture, cost, stack, and security evidence, including negative contract fixtures. |
+| `./hack/dev docs` | Lint Markdown and verify community policy, DCO regressions, architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
 
 The aggregate command emits machine-readable lines such as
 `veer-check step=test status=passed duration_seconds=1`. These give local and
 CI logs a stable step name, outcome, and duration without printing environment
 variables or credentials.
+
+## Contribution attestation
+
+Veer uses the Developer Certificate of Origin 1.1.
+
+The authoritative contribution policy is [CONTRIBUTING.md](../CONTRIBUTING.md).
+This section describes its enforcement mechanism; it does not define exceptions
+or alternate contribution terms.
+
+The DCO workflow checks the exact pull-request range with full object IDs:
+
+```sh
+./hack/verify-dco.sh <base-commit> <head-commit>
+```
+
+In GitHub Actions, the verifier and working tree come from the trusted base
+revision under `pull_request_target`. The pull-request head is fetched only as
+Git object data, bound to the event head SHA, and never checked out or executed.
+The trusted workflow creates and completes a separate `DCO exact-head` check on
+that verified head SHA. Repository protection can therefore require the
+trusted result without treating the base-attached workflow run as head evidence.
+
+The `VEER_DCO_WORKFLOW_SHA256`, `VEER_COMMUNITY_POLICY_SHA256`, and
+`VEER_DCO_VERIFIER_SHA256` repository Actions variables are the external
+approval anchors for the workflow, authoritative policy bundle, and DCO
+verifier. The trusted base workflow rejects a proposed head whose protected
+bytes differ from those owner-controlled digests. The policy bundle covers the
+license, all four community policy files, README, and this development guide.
+The community-policy check also records all three digests in-tree as offline
+drift sentinels, but those in-tree values are not independent trust anchors.
+
+The checkout and verification steps have shorter timeouts than the seven-minute
+job ceiling, reserving time for the `always()` reporter to complete a failed
+exact-head check instead of leaving it indefinitely in progress.
+
+The workflow also runs for pull-request base edits. A retargeted pull request
+therefore receives a fresh result for its new base-to-head commit range.
+
+### First-merge bootstrap
+
+GitHub cannot execute a `pull_request_target` workflow that is absent from the
+default branch. The pull request that first installs this DCO workflow is
+therefore a one-time trust bootstrap and must follow this sequence:
+
+1. Record the repository owner's license, DCO, governance, conduct, and security
+   decisions before implementation.
+2. Validate the candidate exact head independently with the full-SHA DCO range,
+   `./hack/dev check`, `go test -race ./...`, actionlint, and exact-head reviews.
+3. Only after those reviews pass, calculate the candidate workflow, policy
+   bundle, and verifier digests; set all three repository Actions variables;
+   and read them back to confirm their exact values.
+4. Merge the reviewed head with an exact-head guard. Do not configure the DCO
+   check as required before this merge, because that would make installation
+   impossible.
+5. Require the next ordinary pull request to receive a successful
+   `DCO exact-head` result from the installed trusted-base workflow. The
+   supply-chain hardening change may make that check required only after this
+   live proof succeeds.
+
+`./hack/dev docs` runs isolated positive and negative regression cases for this
+verifier. The range check fails closed for missing objects, empty ranges,
+unsigned commits, and sign-offs that do not match the commit author, including
+identities containing literal backslashes.
 
 Authorization contract changes must update the domain registry, the root
 `x-veer-authorization` projection, affected

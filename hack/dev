@@ -45,7 +45,7 @@ Commands:
   lint       Run Go and shell static analysis without network access.
   test       Run the fast unit-test suite without network access.
   api        Validate the versioned OpenAPI and evolution contract offline.
-  docs       Validate Markdown and checked-in architecture evidence.
+  docs       Validate Markdown, community policy, and architecture evidence.
   check      Run format, lint, build, test, and docs gates.
   versions   Print the verified repository-local tool versions.
   help       Show this help.
@@ -699,7 +699,11 @@ check_api() {
 }
 
 check_docs() {
-  "$bin_dir/rumdl" check --disable MD013 README.md docs
+  "$bin_dir/rumdl" check --disable MD013 \
+    README.md CONTRIBUTING.md CODE_OF_CONDUCT.md GOVERNANCE.md SECURITY.md docs
+  "$repo_root/hack/verify-community.sh"
+  "$repo_root/hack/verify-community_test.sh"
+  "$repo_root/hack/verify-dco_test.sh"
   "$repo_root/docs/architecture/cost-model/verify.sh"
   "$repo_root/docs/architecture/stack-evaluation/verify.sh"
   "$repo_root/docs/security/verify.sh"
