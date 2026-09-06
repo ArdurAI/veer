@@ -282,8 +282,10 @@ schemas.
 - Each manifest row is bound to the selected tool's exact upstream repository,
   release version, platform artifact name, archive format, and binary member.
   Tar archives may contain only canonical, uniquely addressed regular files
-  and directories, at most 20,000 members, and at most 512 MiB of expanded
-  file data. The compressed download cap remains 100 MiB per artifact.
+  and directories. Compact, verbose, and selected-member listings are each
+  capped while streaming at 8 MiB before any listing is materialized; archives
+  are additionally limited to 20,000 members and 512 MiB of expanded file
+  data. The compressed download cap remains 100 MiB per artifact.
 - On a macOS/arm64 clean run verified on 2026-09-01, the download cache was
   exactly 176,834,836 bytes and `.tools/` occupied approximately 851 MiB after
   one full check. Other platforms may differ. The whole directory is ignored
@@ -366,9 +368,9 @@ failing step and command output.
    `./hack/dev check` from a clean tool directory.
 5. Let the clean-bootstrap CI lane exercise the same commands on Linux.
 
-If a legitimate upstream archive grows beyond the member or expanded-size
-budget, review its contents and disk-cost impact before changing the bound.
-Do not raise a limit merely to make bootstrap pass.
+If a legitimate upstream archive grows beyond the listing, member, or
+expanded-size budget, review its contents and disk-cost impact before changing
+the bound. Do not raise a limit merely to make bootstrap pass.
 
 Never use a floating tag, `@latest`, a curl-to-shell installer, or an
 unverified binary. Issue #15 owns the broader software-supply-chain gates,

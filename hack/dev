@@ -17,6 +17,7 @@ download_dir="$tools_dir/downloads"
 state_dir="$tools_dir/state"
 manifest_file="$repo_root/tools/manifest.tsv"
 max_archive_members=20000
+max_archive_listing_bytes=8388608
 max_archive_expanded_bytes=536870912
 temp_dir=
 
@@ -274,13 +275,52 @@ fetch_artifact() {
   printf '%s\n' "veer-bootstrap artifact=$artifact digest=verified"
 }
 
+capture_bounded_output() {
+  output_file=$1
+  description=$2
+  max_bytes=$3
+  shift 3
+
+  status_file="$output_file.status"
+  probe_bytes=$((max_bytes + 1))
+  rm -f -- "$output_file" "$status_file"
+
+  if ! (
+    set +e
+    "$@" 2>/dev/null
+    producer_status=$?
+    printf '%s\n' "$producer_status" >"$status_file"
+    exit 0
+  ) | head -c "$probe_bytes" >"$output_file"; then
+    fail "cannot capture $description"
+  fi
+
+  captured_bytes=$(wc -c <"$output_file" | awk '{ print $1 }')
+  case "$captured_bytes" in
+    '' | *[!0-9]*) fail "cannot measure $description" ;;
+  esac
+  if [ "$captured_bytes" -gt "$max_bytes" ]; then
+    fail "$description exceeds $max_bytes bytes"
+  fi
+
+  [ -f "$status_file" ] || fail "$description producer status is unavailable"
+  producer_status=$(sed -n '1p' "$status_file")
+  case "$producer_status" in
+    '' | *[!0-9]*) fail "$description producer status is invalid" ;;
+  esac
+  [ "$producer_status" -eq 0 ] || fail "cannot produce $description"
+  rm -f -- "$status_file"
+}
+
 validate_tar_archive() {
   archive=$1
   list_file="$temp_dir/archive-members"
   verbose_file="$temp_dir/archive-entries"
-  if ! tar -tzf "$archive" >"$list_file"; then
-    fail "cannot list archive: ${archive##*/}"
-  fi
+  capture_bounded_output \
+    "$list_file" \
+    "compact archive listing for ${archive##*/}" \
+    "$max_archive_listing_bytes" \
+    tar -tzf "$archive"
 
   member_count=$(wc -l <"$list_file" | awk '{ print $1 }')
   case "$member_count" in
@@ -309,9 +349,11 @@ validate_tar_archive() {
     fail "archive path validation failed: ${archive##*/}"
   fi
 
-  if ! tar -tvzf "$archive" >"$verbose_file"; then
-    fail "cannot inspect archive entry types: ${archive##*/}"
-  fi
+  capture_bounded_output \
+    "$verbose_file" \
+    "verbose archive listing for ${archive##*/}" \
+    "$max_archive_listing_bytes" \
+    tar -tvzf "$archive"
   verbose_count=$(wc -l <"$verbose_file" | awk '{ print $1 }')
   [ "$verbose_count" -eq "$member_count" ] ||
     fail "archive entry listing is ambiguous: ${archive##*/}"
@@ -348,9 +390,11 @@ validate_regular_archive_member() {
   archive=$1
   member=$2
   selected_file="$temp_dir/selected-entry"
-  if ! tar -tvzf "$archive" -- "$member" >"$selected_file"; then
-    fail "missing selected member $member in ${archive##*/}"
-  fi
+  capture_bounded_output \
+    "$selected_file" \
+    "selected-member listing for ${archive##*/}" \
+    "$max_archive_listing_bytes" \
+    tar -tvzf "$archive" -- "$member"
   archive_selected_count=$(wc -l <"$selected_file" | awk '{ print $1 }')
   [ "$archive_selected_count" -eq 1 ] ||
     fail "selected member $member is missing or duplicated in ${archive##*/}"
@@ -793,6 +837,15 @@ case "$command" in
     prepare_offline_environment
     cd -- "$repo_root"
     check_format
+    ;;
+  _validate-archive)
+    [ "$#" -eq 2 ] || fail '_validate-archive requires one archive path'
+    archive=$2
+    if [ ! -f "$archive" ] || [ -L "$archive" ]; then
+      fail '_validate-archive requires a regular non-symlink archive'
+    fi
+    temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/veer-archive-validation.XXXXXX")
+    validate_tar_archive "$archive"
     ;;
   versions)
     [ "$#" -eq 1 ] || fail 'versions accepts no arguments'
