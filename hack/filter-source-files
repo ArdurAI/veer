@@ -1,16 +1,70 @@
 #!/bin/sh
 set -eu
 
+fail() {
+  printf '%s\n' "filter-source-files: $*" >&2
+  exit 1
+}
+
 if [ "$#" -lt 1 ]; then
-  printf '%s\n' 'usage: filter-source-files REPOSITORY_ROOT [PATH ...]' >&2
-  exit 64
+  fail 'usage: filter-source-files REPOSITORY_ROOT [PATH ...]'
 fi
 
 repo_root=$1
 shift
+[ -d "$repo_root" ] && [ ! -L "$repo_root" ] ||
+  fail 'repository root must be a physical directory'
+physical_repo_root=$(
+  unset CDPATH
+  cd -- "$repo_root"
+  pwd -P
+) || fail 'cannot resolve repository root'
+[ "$physical_repo_root" = "$repo_root" ] ||
+  fail 'repository root must already be physically resolved'
 
 for source_path; do
-  if [ -f "$repo_root/$source_path" ] && [ ! -L "$repo_root/$source_path" ]; then
+  case "$source_path" in
+    '' | /*) fail "source path must be repository-relative: $source_path" ;;
+  esac
+
+  candidate=$repo_root
+  remaining=$source_path
+  source_available=true
+  while [ -n "$remaining" ]; do
+    case "$remaining" in
+      */*)
+        component=${remaining%%/*}
+        remaining=${remaining#*/}
+        ;;
+      *)
+        component=$remaining
+        remaining=
+        ;;
+    esac
+    case "$component" in
+      '' | . | ..) fail "source path is not canonical: $source_path" ;;
+    esac
+
+    candidate="$candidate/$component"
+    [ ! -L "$candidate" ] ||
+      fail "source path contains a symbolic-link component: $source_path"
+    if [ -n "$remaining" ] && [ ! -d "$candidate" ]; then
+      source_available=false
+      break
+    fi
+  done
+
+  if [ "$source_available" = true ] && [ -f "$candidate" ]; then
+    source_parent=${candidate%/*}
+    physical_parent=$(
+      unset CDPATH
+      cd -- "$source_parent"
+      pwd -P
+    ) || fail "cannot resolve source parent: $source_path"
+    case "$physical_parent" in
+      "$repo_root" | "$repo_root"/*) ;;
+      *) fail "source path escapes the repository: $source_path" ;;
+    esac
     printf '%s\0' "$source_path"
   fi
 done

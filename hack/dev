@@ -1,6 +1,23 @@
 #!/bin/sh
 set -eu
 
+fail() {
+  printf '%s\n' "veer-dev: $*" >&2
+  exit 1
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    fail "required bootstrap command not found: $1"
+  fi
+}
+
+# These two utilities are needed to locate the repository before the complete
+# bootstrap preflight can run. Check them before their first use so a minimal
+# host receives the same stable diagnostic as every later prerequisite.
+require_command dirname
+require_command pwd
+
 script_dir=$(
   unset CDPATH
   cd -- "$(dirname -- "$0")"
@@ -20,13 +37,18 @@ max_archive_members=20000
 max_archive_listing_bytes=8388608
 max_archive_expanded_bytes=536870912
 temp_dir=
-
-fail() {
-  printf '%s\n' "veer-dev: $*" >&2
-  exit 1
-}
+source_listing_dir=
+source_raw_listing_file=
+source_listing_file=
+bootstrap_host_commands='awk cat chmod cp curl date diff dirname env git grep head ln mkdir mktemp mv pwd rm sed sort tar uname wc xargs'
 
 cleanup() {
+  if [ -n "$source_raw_listing_file" ]; then
+    rm -f -- "$source_raw_listing_file"
+  fi
+  if [ -n "$source_listing_file" ]; then
+    rm -f -- "$source_listing_file"
+  fi
   if [ -n "$temp_dir" ] && [ -d "$temp_dir" ]; then
     rm -rf -- "$temp_dir"
   fi
@@ -53,12 +75,6 @@ Commands:
 EOF
 }
 
-require_command() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    fail "required bootstrap command not found: $1"
-  fi
-}
-
 sha256_file() {
   file=$1
   if command -v shasum >/dev/null 2>&1; then
@@ -72,18 +88,25 @@ sha256_file() {
   fail 'neither shasum nor sha256sum is available'
 }
 
-platform() {
-  case "$(uname -s)" in
+select_platform() {
+  host_system=$1
+  host_machine=$2
+
+  case "$host_system" in
     Darwin) platform_os=darwin ;;
     Linux) platform_os=linux ;;
-    *) fail "unsupported operating system: $(uname -s)" ;;
+    *) fail "unsupported operating system: $host_system" ;;
   esac
 
-  case "$(uname -m)" in
+  case "$host_machine" in
     x86_64 | amd64) platform_arch=amd64 ;;
     arm64 | aarch64) platform_arch=arm64 ;;
-    *) fail "unsupported architecture: $(uname -m)" ;;
+    *) fail "unsupported architecture: $host_machine" ;;
   esac
+}
+
+platform() {
+  select_platform "$(uname -s)" "$(uname -m)"
 }
 
 validate_manifest() {
@@ -263,6 +286,7 @@ fetch_artifact() {
   partial="$temp_dir/$artifact.partial"
   printf '%s\n' "veer-bootstrap artifact=$artifact cache=miss action=download"
   curl --disable --fail --location --silent --show-error \
+    --proxy '' --noproxy '*' \
     --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --retry-connrefused \
     --connect-timeout 15 --max-filesize 104857600 --max-time 300 \
     --output "$partial" "$url"
@@ -450,22 +474,44 @@ install_artifact() {
 sanitize_external_environment() {
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE \
     AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE GOOGLE_APPLICATION_CREDENTIALS \
-    AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID GZIP SHELLCHECK_OPTS \
-    TAR_OPTIONS VACUUM_ALLOW_HTTP VACUUM_ALLOW_PRIVATE_NETWORKS VACUUM_BASE \
+    AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID ALL_PROXY HTTPS_PROXY \
+    HTTP_PROXY NO_PROXY all_proxy http_proxy https_proxy no_proxy GIT_DIR \
+    GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_CEILING_DIRECTORIES \
+    GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_PREFIX GIT_CONFIG_SYSTEM \
+    GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT \
+    GIT_CONFIG_PARAMETERS GIT_EXEC_PATH GOOS GOARCH GO386 GOAMD64 GOARM GOARM64 \
+    GOMIPS GOMIPS64 GOPPC64 GORISCV64 GOWASM GOFIPS140 GOEXPERIMENT GOHOSTOS \
+    GOHOSTARCH GZIP SHELLCHECK_OPTS TAR_OPTIONS VACUUM_ALLOW_HTTP \
+    VACUUM_ALLOW_PRIVATE_NETWORKS VACUUM_BASE \
     VACUUM_BREAKING_CONFIG VACUUM_CHANGES VACUUM_CONFIG VACUUM_FAIL_SEVERITY \
     VACUUM_FUNCTIONS VACUUM_IGNORE_FILE VACUUM_INSECURE VACUUM_MIN_SCORE \
     VACUUM_NO_UPDATE_CHECK VACUUM_ORIGINAL VACUUM_REMOTE VACUUM_RULESET \
     VACUUM_SKIP_CHECK VEER_TEST_VACUUM_BIN || true
 }
 
-bootstrap() {
-  for host_command in awk curl date diff git grep head mktemp sed sort tar uname wc xargs; do
+prepare_host_go_target() {
+  platform
+  GOOS=$platform_os
+  GOARCH=$platform_arch
+  export GOOS GOARCH
+}
+
+preflight_host_commands() {
+  for host_command in $bootstrap_host_commands; do
     require_command "$host_command"
   done
+  if ! command -v shasum >/dev/null 2>&1 && ! command -v sha256sum >/dev/null 2>&1; then
+    fail 'neither shasum nor sha256sum is available'
+  fi
+}
+
+bootstrap() {
+  preflight_host_commands
   validate_manifest
   verify_declared_versions
-  platform
   sanitize_external_environment
+  prepare_host_go_target
 
   umask 022
   if [ -L "$tools_dir" ]; then
@@ -639,6 +685,7 @@ require_prepared() {
 prepare_offline_environment() {
   require_prepared
   sanitize_external_environment
+  prepare_host_go_target
   PATH="$bin_dir:$PATH"
   GOROOT="$tools_dir/go"
   GOCACHE="$tools_dir/cache/go-build"
@@ -646,6 +693,7 @@ prepare_offline_environment() {
   GOPATH="$tools_dir/cache/gopath"
   GOMODCACHE="$GOPATH/pkg/mod"
   XDG_CACHE_HOME="$tools_dir/cache/xdg"
+  GOTMPDIR="$tools_dir/tmp/go"
   GOTOOLCHAIN=local
   GOWORK=off
   GOPROXY=off
@@ -654,49 +702,157 @@ prepare_offline_environment() {
   GOFLAGS=-mod=vendor
   CGO_ENABLED=0
   export PATH GOROOT GOCACHE GOLANGCI_LINT_CACHE GOPATH GOMODCACHE \
-    XDG_CACHE_HOME GOTOOLCHAIN GOWORK GOPROXY GOSUMDB GOVCS GOFLAGS CGO_ENABLED
+    XDG_CACHE_HOME GOTMPDIR GOTOOLCHAIN GOWORK GOPROXY GOSUMDB GOVCS GOFLAGS \
+    CGO_ENABLED
   prepare_go_telemetry
-  for local_directory in "$GOCACHE" "$GOLANGCI_LINT_CACHE" "$GOPATH" "$XDG_CACHE_HOME"; do
+  for local_directory in \
+    "$GOCACHE" \
+    "$GOLANGCI_LINT_CACHE" \
+    "$GOPATH" \
+    "$XDG_CACHE_HOME" \
+    "$GOTMPDIR" \
+    "$tools_dir/tmp"; do
     if [ -L "$local_directory" ]; then
       fail "$local_directory must not be a symbolic link"
     fi
     mkdir -p -- "$local_directory"
   done
+  source_listing_dir="$tools_dir/tmp"
+  verify_source_repository
 }
 
-regular_source_files() {
-  xargs -0 "$repo_root/hack/filter-source-files" "$repo_root"
+isolated_git() {
+  env -i \
+    HOME=/dev/null \
+    XDG_CONFIG_HOME=/dev/null \
+    LC_ALL=C \
+    PATH="$PATH" \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_OPTIONAL_LOCKS=0 \
+    GIT_TERMINAL_PROMPT=0 \
+    git --no-pager -C "$repo_root" "$@"
 }
 
-go_source_files() {
-  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- \
-    '*.go' ':(exclude)vendor/**' |
-    regular_source_files
+verify_source_repository() {
+  discovered_root=$(isolated_git rev-parse --show-toplevel 2>/dev/null) ||
+    fail 'cannot discover the repository root in the isolated Git environment'
+  physical_root=$(
+    unset CDPATH
+    cd -- "$discovered_root" 2>/dev/null
+    pwd -P
+  ) || fail 'cannot resolve the physical Git worktree root'
+  [ "$physical_root" = "$repo_root" ] ||
+    fail "Git worktree root escapes the repository: $physical_root"
 }
 
-shell_source_files() {
-  git -C "$repo_root" ls-files --cached --others --exclude-standard -z -- \
-    '*.sh' 'hack/dev' 'hack/filter-source-files' |
-    regular_source_files
+clear_source_file_lists() {
+  if [ -n "$source_raw_listing_file" ]; then
+    rm -f -- "$source_raw_listing_file"
+  fi
+  if [ -n "$source_listing_file" ]; then
+    rm -f -- "$source_listing_file"
+  fi
+  source_raw_listing_file=
+  source_listing_file=
+}
+
+prepare_source_file_list() {
+  source_kind=$1
+  shift
+  [ -n "$source_listing_dir" ] && [ -d "$source_listing_dir" ] && [ ! -L "$source_listing_dir" ] ||
+    fail 'source-listing directory is unavailable'
+
+  clear_source_file_lists
+  source_raw_listing_file=$(mktemp "$source_listing_dir/source-files.raw.XXXXXX")
+  source_listing_file=$(mktemp "$source_listing_dir/source-files.validated.XXXXXX")
+  if ! isolated_git ls-files --cached --others --exclude-standard -z -- "$@" >"$source_raw_listing_file"; then
+    clear_source_file_lists
+    fail "cannot enumerate $source_kind source files"
+  fi
+  if ! xargs -0 "$repo_root/hack/filter-source-files" "$repo_root" \
+    <"$source_raw_listing_file" >"$source_listing_file"; then
+    clear_source_file_lists
+    fail "$source_kind source-file validation failed"
+  fi
+  rm -f -- "$source_raw_listing_file"
+  source_raw_listing_file=
+}
+
+prepare_go_source_files() {
+  prepare_source_file_list go '*.go' ':(exclude)vendor/**'
+}
+
+prepare_shell_source_files() {
+  prepare_source_file_list shell '*.sh' 'hack/dev' 'hack/filter-source-files'
+}
+
+isolation_probe() {
+  sanitize_external_environment
+  prepare_host_go_target
+
+  if [ "${GO386+x}${GOAMD64+x}${GOARM+x}${GOARM64+x}${GOMIPS+x}${GOMIPS64+x}${GOPPC64+x}${GORISCV64+x}${GOWASM+x}${GOFIPS140+x}${GOEXPERIMENT+x}${GOHOSTOS+x}${GOHOSTARCH+x}" ]; then
+    fail 'inherited Go architecture tuning remains set'
+  fi
+  if [ "${ALL_PROXY+x}${HTTPS_PROXY+x}${HTTP_PROXY+x}${NO_PROXY+x}${all_proxy+x}${http_proxy+x}${https_proxy+x}${no_proxy+x}" ]; then
+    fail 'inherited proxy routing remains set'
+  fi
+  if [ "${GIT_DIR+x}${GIT_WORK_TREE+x}${GIT_COMMON_DIR+x}${GIT_INDEX_FILE+x}${GIT_OBJECT_DIRECTORY+x}${GIT_ALTERNATE_OBJECT_DIRECTORIES+x}${GIT_NAMESPACE+x}${GIT_CEILING_DIRECTORIES+x}${GIT_DISCOVERY_ACROSS_FILESYSTEM+x}${GIT_PREFIX+x}${GIT_CONFIG_SYSTEM+x}${GIT_CONFIG_GLOBAL+x}${GIT_CONFIG_NOSYSTEM+x}${GIT_CONFIG_COUNT+x}${GIT_CONFIG_PARAMETERS+x}${GIT_EXEC_PATH+x}" ]; then
+    fail 'inherited Git selection state remains set'
+  fi
+  printf '%s\n' \
+    "veer-isolation target_os=$GOOS target_arch=$GOARCH architecture_tuning=default proxy=disabled git_selection=isolated"
 }
 
 format_files() {
   prepare_offline_environment
-  go_source_files | xargs -0 "$bin_dir/gofmt" -w --
-  shell_source_files | xargs -0 "$bin_dir/shfmt" -w -i 2 -ci --
+  prepare_go_source_files
+  if [ -s "$source_listing_file" ] &&
+    ! xargs -0 "$bin_dir/gofmt" -w -- <"$source_listing_file"; then
+    clear_source_file_lists
+    fail 'Go formatting failed'
+  fi
+  clear_source_file_lists
+
+  prepare_shell_source_files
+  if [ -s "$source_listing_file" ] &&
+    ! xargs -0 "$bin_dir/shfmt" -w -i 2 -ci -- <"$source_listing_file"; then
+    clear_source_file_lists
+    fail 'shell formatting failed'
+  fi
+  clear_source_file_lists
 }
 
 check_format() {
-  go_files=$(go_source_files | xargs -0 "$bin_dir/gofmt" -l --)
+  prepare_go_source_files
+  go_files=
+  if [ -s "$source_listing_file" ] &&
+    ! go_files=$(xargs -0 "$bin_dir/gofmt" -l -- <"$source_listing_file"); then
+    clear_source_file_lists
+    fail 'Go format verification failed'
+  fi
+  clear_source_file_lists
   if [ -n "$go_files" ]; then
     printf '%s\n' 'Go files require formatting:' "$go_files" >&2
     return 1
   fi
-  shell_source_files | xargs -0 "$bin_dir/shfmt" -d -i 2 -ci --
+
+  prepare_shell_source_files
+  if [ -s "$source_listing_file" ] &&
+    ! xargs -0 "$bin_dir/shfmt" -d -i 2 -ci -- <"$source_listing_file"; then
+    clear_source_file_lists
+    return 1
+  fi
+  clear_source_file_lists
 }
 
 lint() {
-  shell_source_files | xargs -0 "$bin_dir/shellcheck" --norc --
+  prepare_shell_source_files
+  if [ -s "$source_listing_file" ] &&
+    ! xargs -0 "$bin_dir/shellcheck" --norc -- <"$source_listing_file"; then
+    clear_source_file_lists
+    return 1
+  fi
+  clear_source_file_lists
   "$bin_dir/golangci-lint" run --config "$repo_root/.golangci.yml" ./...
 }
 
@@ -846,6 +1002,28 @@ case "$command" in
     fi
     temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/veer-archive-validation.XXXXXX")
     validate_tar_archive "$archive"
+    ;;
+  _test-isolation)
+    [ "$#" -eq 1 ] || fail '_test-isolation accepts no arguments'
+    isolation_probe
+    ;;
+  _test-platform)
+    [ "$#" -eq 3 ] || fail '_test-platform requires an operating system and architecture'
+    select_platform "$2" "$3"
+    printf '%s\n' "$platform_os/$platform_arch"
+    ;;
+  _test-go-sources)
+    [ "$#" -eq 1 ] || fail '_test-go-sources accepts no arguments'
+    preflight_host_commands
+    sanitize_external_environment
+    temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/veer-source-discovery.XXXXXX")
+    source_listing_dir=$temp_dir
+    verify_source_repository
+    prepare_go_source_files
+    if [ -s "$source_listing_file" ]; then
+      cat "$source_listing_file"
+    fi
+    clear_source_file_lists
     ;;
   versions)
     [ "$#" -eq 1 ] || fail 'versions accepts no arguments'

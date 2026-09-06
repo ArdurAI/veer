@@ -99,7 +99,7 @@ actual_license_sha=$(sha256_file "$repo_root/LICENSE")
 [ "$actual_license_sha" = "$expected_license_sha" ] ||
   fail "LICENSE is not the canonical Apache-2.0 text: got $actual_license_sha"
 
-expected_community_policy_sha=a01b3dfb5d206eb9d8c052d83700a13d9eaf4e78d3a3beb3e6957d58eab7e0c2
+expected_community_policy_sha=437900567f4806a7680697a5a12f923591362058da930519b6b821374d0c6e4f
 actual_community_policy_sha=$(community_policy_sha)
 [ "$actual_community_policy_sha" = "$expected_community_policy_sha" ] ||
   fail "community policy differs from its reviewed canonical form: got $actual_community_policy_sha"
