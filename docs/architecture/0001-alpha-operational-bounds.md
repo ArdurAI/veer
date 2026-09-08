@@ -664,6 +664,13 @@ The object contains at most 0.001 GB of encrypted result evidence retained for
 30 days. No alternate artifact path exists, so duplicate delivery cannot
 multiply artifact writes.
 
+The result bucket is versioned and lifecycle-governed: current objects expire
+after thirty-one days, noncurrent versions expire after one day, and expired
+delete markers are removed after one day. The same retention envelope is
+enforced by an exact-version cleanup pass that lists every eligible version and
+marker by identifier before re-qualifying a window, so noncurrent retention
+cannot quietly accumulate.
+
 The probe emits only `SuccessPercent`, `Duration`, and `Failed` from the bounded
 log event. Its one missing-or-failed-run alarm is high resolution: the second
 consecutive scheduled-minute failure emits the alarm signal, evaluation is
