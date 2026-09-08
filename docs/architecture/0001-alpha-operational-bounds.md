@@ -140,6 +140,7 @@ an explicit quota response; they must not cause silent data loss.
 | Accepted desired-state mutations/minute, 15-minute peak, including synthetic | 12 | 121 | 601 |
 | New TLS connections/second | local | 20 | 100 |
 | Encoded server TLS handshake bytes/new connection, maximum | local | 8 KiB | 8 KiB |
+| Encoded request headers/new request, maximum | local | 1 KiB | 1 KiB |
 | Server TLS handshake bytes/month, GB | 0 | 14 | 70 |
 | Active TLS connections, one-minute sample | local | 2,500 | 12,000 |
 | Load-balancer processed bytes/hour, GB | local | 0.5 | 4 |
@@ -589,6 +590,8 @@ and uses container or IP targets without Target Optimizer. Under the
 [AWS LCU definition](https://aws.amazon.com/elasticloadbalancing/faqs/), one LCU
 supports 25 new connections/second, 3,000 active connections/minute, 1 GB/hour,
 or 1,000 billable rule evaluations/second; the maximum dimension is charged.
+The same meter also enforces 1 KiB request- and response-header ceilings and
+includes both in the ALB processed-byte budget used by LCU admission.
 The small caps consume at most one LCU. Each target cap consumes at most four,
 while the worksheet prices five. Qualification reports connection reuse, new
 and active connections, processed bytes, rule evaluations, and `ConsumedLCUs`.
@@ -660,6 +663,7 @@ deterministic key in a versioned result bucket.
 The object contains at most 0.001 GB of encrypted result evidence retained for
 30 days. No alternate artifact path exists, so duplicate delivery cannot
 multiply artifact writes.
+
 The probe emits only `SuccessPercent`, `Duration`, and `Failed` from the bounded
 log event. Its one missing-or-failed-run alarm is high resolution: the second
 consecutive scheduled-minute failure emits the alarm signal, evaluation is

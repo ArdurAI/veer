@@ -57,6 +57,7 @@ does not contact AWS or read environment credentials.
 | Aggregate encoded queue body byte limit | 40 GB | 200 GB |
 | New TLS connections/second | 20 | 100 |
 | Encoded server TLS handshake bytes/new connection | 8 KiB | 8 KiB |
+| Encoded request headers/new request | 1 KiB | 1 KiB |
 | Server TLS handshake bytes/month | 14 GB | 70 GB |
 | Active TLS connections, one-minute sample | 2,500 | 12,000 |
 | ALB processed bytes/hour | 0.5 GB | 4 GB |
@@ -265,9 +266,9 @@ dated S3 price contract.
 
 Egress is derived from the exact monthly request schedule and fixed response
 distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
-at no more than 1 KiB, and 1 KiB of response-header allowance for every request.
-The 23,436,000/117,180,000 total API envelopes already contain the external
-synthetic. Response bodies and one KiB of response headers consume
+at no more than 1 KiB, and 1 KiB of request- and response-header allowance for
+every request. The 23,436,000/117,180,000 total API envelopes already contain
+the external synthetic. Response bodies and request/response headers consume
 137.70/688.52 GB. The ingress enforces an eight KiB encoded server-handshake
 flight and reserves 14/70 GB of monthly handshake bytes while retaining the
 20/100-per-second burst limit. Adding bounded outbound provider traffic yields
