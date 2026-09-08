@@ -12,20 +12,29 @@ From the repository root, run:
 ./hack/dev check
 ```
 
-`bootstrap` uses unauthenticated HTTPS to fetch public release artifacts from
-Go and GitHub. It validates every download against the SHA-256 digest in
+`bootstrap` uses direct, unauthenticated HTTPS to fetch public release artifacts
+from Go and GitHub. It clears inherited HTTP(S) and all-proxy variables and
+also disables proxy use in each `curl` invocation, so ambient proxy routing or
+credentials cannot cross the bootstrap trust boundary. Proxy routing is not a
+supported bootstrap mode during the alpha. A host that requires a proxy can
+place the exact manifest artifacts in `.tools/downloads/` through an explicitly
+managed channel; bootstrap still verifies every cached artifact against the
+SHA-256 digest in
 [`tools/manifest.tsv`](../tools/manifest.tsv) before extracting or executing
 it. It never invokes a remote install script and does not modify system or user
 tool directories.
 
 `check` requires the prepared repository-local toolchain. It disables Go
-toolchain switching, inherited Go workspaces, per-user Go configuration, Go
-telemetry, module proxies, checksum-database calls, and version control
-downloads. It also removes inherited tar and ShellCheck defaults plus common
-AWS, Google Cloud, and Azure credential variables from child processes. No
-check needs a cloud API, database, queue, cluster, container runtime, or
-private credential. The documentation step also verifies the canonical
-Apache-2.0 license, community-policy agreement, and DCO verifier regressions.
+toolchain switching, inherited Go workspaces, cross-compilation targets and
+architecture tuning, per-user Go configuration, Go telemetry, module proxies,
+checksum-database calls, and version control downloads. Source discovery runs
+Git with an allowlisted environment, verifies the physical worktree root, and
+rejects source paths containing any symbolic-link component. It also removes
+inherited tar and ShellCheck defaults plus common AWS, Google Cloud, and Azure
+credential variables from child processes. No check needs a cloud API,
+database, queue, cluster, container runtime, or private credential. The
+documentation step also verifies the canonical Apache-2.0 license,
+community-policy agreement, and DCO verifier regressions.
 
 ## Supported hosts and prerequisites
 
@@ -36,11 +45,13 @@ Bootstrap supports these host combinations:
 | macOS | `amd64`, `arm64` |
 | Linux | `amd64`, `arm64` |
 
-The clean host must provide POSIX `sh`, `awk`, `curl`, `date`, `diff`, `git`,
-`grep`, `head`, `mktemp`, `sed`, `sort`, `tar`, `uname`, `wc`, `xargs`, and either
-`shasum` or `sha256sum`. These are base utilities on supported macOS and common
-Linux development or CI images. No package manager or administrator access is
-required.
+The clean host must provide POSIX `sh`, `awk`, `cat`, `chmod`, `cp`, `curl`,
+`date`, `diff`, `dirname`, `env`, `git`, `grep`, `head`, `ln`, `mkdir`, `mktemp`,
+`mv`, `pwd`, `rm`, `sed`, `sort`, `tar`, `uname`, `wc`, `xargs`, and either
+`shasum` or `sha256sum`. Bootstrap preflights this complete external-utility
+set before creating its invocation-owned temporary directory. These are base
+utilities on supported macOS and common Linux development or CI images. No
+package manager or administrator access is required.
 
 Windows is not supported directly for the alpha. Use a supported Linux
 environment such as WSL 2; native Windows support requires a separate decision
@@ -94,7 +105,7 @@ check.
 | --- | --- |
 | `./hack/dev bootstrap` | Validate the full platform matrix, download or reuse verified artifacts, install them under `.tools/`, and verify versions. |
 | `./hack/dev check` | Run every required fast gate in order and stop on the first failure. |
-| `./hack/dev format` | Rewrite existing regular, non-symlink Go and shell files using the pinned formatters. |
+| `./hack/dev format` | Rewrite physically contained Go and shell files whose path components are all regular directories, using the pinned formatters. |
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
