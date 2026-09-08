@@ -85,6 +85,12 @@ ceiling. It does not contact AWS or read environment credentials.
 | OpenTelemetry trace ingestion | 10 GiB | 100 GiB |
 | Custom metrics | 50 | 500 |
 | Primary-region standard alarm metrics | 64 | 64 |
+| Audit events | 9,000,000 | 52,000,000 |
+| Shared unauthenticated-or-unauthorized audit partition | 466,934 | 2,341,814 |
+| Non-borrowable system audit partition | 857,221 | 1,359,941 |
+| Ordinary system headroom plus rejection-exhaustion reserve | 857,220 + 1 | 1,359,940 + 1 |
+| Audit record body bytes | 9 GB | 52 GB |
+| Full generated-stream rejection shift, classified audit/pre-classification 503 | 466,934/22,879,786 | 2,341,814/114,748,906 |
 | Stored archive ingress per 31-day month | 16 GB | 80 GB |
 | Archive objects written/month | 37,000 | 163,000 |
 | Normal S3 tier-1 archive requests, both regions | 111,000 | 489,000 |
@@ -503,6 +509,63 @@ retaining the 20/100-per-second burst limit. Adding 27.88/233.13 GB of bounded
 provider-request traffic yields hard egress caps of 191.88/993.13 GB; the
 worksheet prices 195/995 GB without free allowances. Request headers and request
 lines contribute to ALB processing, not server-to-client internet egress.
+
+The fixed 1% unauthenticated plus 1% unauthorized generator share is test data,
+not a production audit assumption. Both classes share a hard
+466,934/2,341,814-event partition in any mix. The configured capacity equals two
+events per generator cycle only to preserve the existing profile; runtime never
+infers or expands it from observed proportions. After request size and syntax
+checks, the API atomically reserves one event and the fixed 1,000-byte rejection
+schema before authentication or authorization. Classified rejection and generic
+capacity responses are each at most 2 KiB including headers. A rejection commits
+its event and settles its reservation in one transaction before response; a
+request that passes both checks releases the provisional reservation before
+normal work. Exhausted, missing, or stale capacity returns a
+generic at-most-2-KiB
+[`503 Service Unavailable`](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.6.4)
+with the `audit-capacity-unavailable` code without evaluating credentials or
+policy. Uncertain reservations remain charged until exact
+event-and-reservation reconciliation; neither age nor unused system headroom can
+make them reusable. Qualification independently shifts the entire generated
+stream first to unauthenticated and then to unauthorized candidates: only the
+partitioned requests reach classification, the remaining
+22,879,786/114,748,906 fail before classification, and no required audit event
+is sampled or dropped. From accounting-window initialization, one event and
+1,000 bytes inside the system partition are reserved exclusively for the first
+exhausted-state transition. Ordinary system admission can consume only the
+remaining 857,220/1,359,940 events and 857,220,000/1,359,940,000 bytes. The
+transition commits its dedicated event and pages; later capacity responses use
+a counter and bounded ordinary logs instead of an unbounded per-request audit
+stream.
+
+The reservation protocol's database work is not free or hidden inside an
+unproved existing transaction. Qualification must run each rejection class for
+24 hours through the selected PostgreSQL adapter at the profile's exact
+20/100-request-per-second edge ceiling. Every 738,058/3,701,578 authorized
+generated requests in the standard 24-hour profile run must reserve and release
+its provisional capacity. Concurrently, a complete prior-window uncertain
+partition of 466,934/2,341,814 reservations must reconcile 20/100 in each full
+second, then the final 14 in second 23,347/23,419. The prior-window scope
+preserves current-window admission while imposing the complete reconciliation
+surge on normal database load. The run must measure attempted reservations, classified event
+settlements, authorized releases, exact reconciliations, commit latency,
+`ReadIOPS`, `WriteIOPS`, and storage throughput. All resulting physical changes,
+including WAL, indexes, vacuum, and failed-attempt amplification, count against
+the existing rolling database changed-byte meter. The selected 50/500 GiB gp3
+volumes must remain within their included 3,000/12,000 IOPS and 125/500 MiB/s
+baselines. AWS documents those size-dependent baselines in its
+[RDS gp3 storage contract](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage).
+If the real-store run requires additional provisioned IOPS or throughput, the
+unchanged cost result fails and the worksheet must be repriced.
+
+The unchanged audit partitions sum exactly to 9/52 million events and 9/52 GB.
+At 500 audit records per object plus 4,464 timer flushes they require
+22,464/108,464 objects. The 10,056,268/49,897,468 compact records require
+14,521/54,362 objects at 1,000 per object plus the same flush envelope. Their
+36,985/162,826-object sums remain inside the 37,000/163,000 caps. Those caps
+continue to drive 111,000/489,000 S3 tier-1 requests across both regions,
+81,400/358,600 KMS requests including retry reserve, 208/1,040 GB retained per
+region, and the unchanged USD 990.36/USD 2,836.47 monthly totals.
 
 The recovery-probe result bucket is also versioned with explicit cleanup. Current
 objects expire after 30 days; a daily sweeper enumerates current versions,

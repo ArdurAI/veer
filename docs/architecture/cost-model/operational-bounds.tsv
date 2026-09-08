@@ -2,6 +2,34 @@ scope	metric	value	unit	note
 small	generated_api_requests_month	23346720	request	The fixed generated workload before recovery-probe API calls
 small	api_requests_month	23485104	request	The fixed 744-hour workload including intended duplicate and shutdown recovery-probe API calls
 small	api_requests_per_second	20	request-second	Permitted fixed-envelope request rate at the edge
+small	rejection_audit_database_load_requests_per_second	20	request-second	Real-store rejection qualification uses the exact profile edge rate rather than an accelerated batch
+small	rejection_audit_authorized_release_fixture_requests	738058	request	Every authorized generated request in the standard twenty-four-hour profile run releases its provisional reservation
+small	rejection_audit_reconciliation_fixture_uncertain_reservations	466934	reservation	One complete prior-window rejection partition is reconciled during the standard load run
+small	rejection_audit_reconciliation_requests_per_second	20	request-second	Prior-window exact reconciliation runs concurrently at the profile edge ceiling
+small	rejection_audit_reconciliation_duration_seconds	23347	second	Ceiling of the complete uncertain partition divided by twenty reconciliations per second
+small	database_gp3_included_iops	3000	IOPS	Included baseline for the selected fifty-GiB RDS PostgreSQL gp3 volume
+small	database_gp3_included_throughput_mib_per_second	125	MiB-second	Included baseline for the selected fifty-GiB RDS PostgreSQL gp3 volume
+small	audit_event_cap	9000000	event	Hard monthly audit-event ceiling across every non-borrowable partition
+small	audit_byte_cap	9000000000	byte	Hard monthly audit-record body ceiling before archive framing
+small	audit_success_cancel_events	3502005	event	Fifteen required API audit events per complete one-hundred-request generator cycle
+small	audit_rejection_partition_events	466934	event	Hard shared rejection-class boundary whose configured size equals two events per complete generator cycle
+small	audit_rejection_partition_bytes	466934000	byte	One-thousand-byte reservation for every shared rejection-partition event
+small	audit_provider_attempt_events	4129200	event	Required event for every fixed-envelope provider mutation attempt including retries
+small	audit_synthetic_events	44640	event	One required event for every winning recovery-probe synthetic write
+small	audit_system_event_headroom	857221	event	Complete non-borrowable system partition including the pre-reserved rejection-exhaustion transition slot
+small	audit_system_general_event_headroom	857220	event	Ordinary system events cannot consume the dedicated rejection-exhaustion transition slot
+small	audit_system_rejection_exhaustion_transition_events	1	event	One slot is pre-reserved for the first rejection-partition exhausted transition
+small	audit_system_byte_headroom	857221000	byte	Complete non-borrowable one-thousand-byte-average system partition
+small	audit_system_general_byte_headroom	857220000	byte	Ordinary system-event bytes excluding the dedicated rejection-exhaustion transition reserve
+small	audit_system_rejection_exhaustion_transition_bytes	1000	byte	One maximum-average event body is pre-reserved for the rejection-exhaustion transition
+small	compact_non_audit_records_month	10056268	record	Fixed compact plan authorization and operation record workload
+small	audit_archive_objects_month	22464	object	Dense audit objects plus one complete timer-flush envelope
+small	compact_non_audit_archive_objects_month	14521	object	Dense compact-record objects plus one complete timer-flush envelope
+small	rejection_mix_fixture_requests	23346720	request	Adversarial fixture shifts the complete generated stream to one rejection class
+small	rejection_mix_fixture_classified_events	466934	event	Only reserved requests may reach authentication or authorization classification
+small	rejection_mix_fixture_preclassification_503_requests	22879786	request	Excess shifted requests receive generic 503 before authentication or authorization
+small	rejection_mix_fixture_response_bytes	47814082560	byte	Every classified rejection and pre-classification 503 uses the two-KiB response envelope
+small	rejection_mix_fixture_dropped_required_events	0	event	No classified unauthenticated or unauthorized decision loses its required audit event
 small	alb_native_request_header_bytes	65536	byte	The ALB non-adjustable entire-request-header limit is the enforceable edge ceiling
 small	alb_accounted_request_header_bytes	65536	byte	The ALB processed-byte model includes the complete native header ceiling
 small	alb_native_request_line_bytes	16384	byte	The ALB non-adjustable request-line limit is a separate enforceable edge ceiling
@@ -68,6 +96,34 @@ small	archive_objects_per_minute	1	object-minute	Admission ceiling below the sin
 target	generated_api_requests_month	117090720	request	The fixed generated workload before recovery-probe API calls
 target	api_requests_month	117229104	request	The fixed 744-hour workload including intended duplicate and shutdown recovery-probe API calls
 target	api_requests_per_second	100	request-second	Permitted fixed-envelope request rate at the edge
+target	rejection_audit_database_load_requests_per_second	100	request-second	Real-store rejection qualification uses the exact profile edge rate rather than an accelerated batch
+target	rejection_audit_authorized_release_fixture_requests	3701578	request	Every authorized generated request in the standard twenty-four-hour profile run releases its provisional reservation
+target	rejection_audit_reconciliation_fixture_uncertain_reservations	2341814	reservation	One complete prior-window rejection partition is reconciled during the standard load run
+target	rejection_audit_reconciliation_requests_per_second	100	request-second	Prior-window exact reconciliation runs concurrently at the profile edge ceiling
+target	rejection_audit_reconciliation_duration_seconds	23419	second	Ceiling of the complete uncertain partition divided by one hundred reconciliations per second
+target	database_gp3_included_iops	12000	IOPS	Included striped baseline for the selected five-hundred-GiB RDS PostgreSQL gp3 volume
+target	database_gp3_included_throughput_mib_per_second	500	MiB-second	Included striped baseline for the selected five-hundred-GiB RDS PostgreSQL gp3 volume
+target	audit_event_cap	52000000	event	Hard monthly audit-event ceiling across every non-borrowable partition
+target	audit_byte_cap	52000000000	byte	Hard monthly audit-record body ceiling before archive framing
+target	audit_success_cancel_events	17563605	event	Fifteen required API audit events per complete one-hundred-request generator cycle
+target	audit_rejection_partition_events	2341814	event	Hard shared rejection-class boundary whose configured size equals two events per complete generator cycle
+target	audit_rejection_partition_bytes	2341814000	byte	One-thousand-byte reservation for every shared rejection-partition event
+target	audit_provider_attempt_events	30690000	event	Required event for every fixed-envelope provider mutation attempt including retries
+target	audit_synthetic_events	44640	event	One required event for every winning recovery-probe synthetic write
+target	audit_system_event_headroom	1359941	event	Complete non-borrowable system partition including the pre-reserved rejection-exhaustion transition slot
+target	audit_system_general_event_headroom	1359940	event	Ordinary system events cannot consume the dedicated rejection-exhaustion transition slot
+target	audit_system_rejection_exhaustion_transition_events	1	event	One slot is pre-reserved for the first rejection-partition exhausted transition
+target	audit_system_byte_headroom	1359941000	byte	Complete non-borrowable one-thousand-byte-average system partition
+target	audit_system_general_byte_headroom	1359940000	byte	Ordinary system-event bytes excluding the dedicated rejection-exhaustion transition reserve
+target	audit_system_rejection_exhaustion_transition_bytes	1000	byte	One maximum-average event body is pre-reserved for the rejection-exhaustion transition
+target	compact_non_audit_records_month	49897468	record	Fixed compact plan authorization and operation record workload
+target	audit_archive_objects_month	108464	object	Dense audit objects plus one complete timer-flush envelope
+target	compact_non_audit_archive_objects_month	54362	object	Dense compact-record objects plus one complete timer-flush envelope
+target	rejection_mix_fixture_requests	117090720	request	Adversarial fixture shifts the complete generated stream to one rejection class
+target	rejection_mix_fixture_classified_events	2341814	event	Only reserved requests may reach authentication or authorization classification
+target	rejection_mix_fixture_preclassification_503_requests	114748906	request	Excess shifted requests receive generic 503 before authentication or authorization
+target	rejection_mix_fixture_response_bytes	239801794560	byte	Every classified rejection and pre-classification 503 uses the two-KiB response envelope
+target	rejection_mix_fixture_dropped_required_events	0	event	No classified unauthenticated or unauthorized decision loses its required audit event
 target	alb_native_request_header_bytes	65536	byte	The ALB non-adjustable entire-request-header limit is the enforceable edge ceiling
 target	alb_accounted_request_header_bytes	65536	byte	The ALB processed-byte model includes the complete native header ceiling
 target	alb_native_request_line_bytes	16384	byte	The ALB non-adjustable request-line limit is a separate enforceable edge ceiling
@@ -132,6 +188,46 @@ target	full_reseed_manifest_cleanup_delete_requests	2120	request	Two thousand on
 target	full_reseed_manifest_storage_gb	0.28	GB-month	Eight GiB aggregate manifest-set bytes retained for at most one day in a thirty-one-day window
 target	archive_objects_per_minute	4	object-minute	Admission ceiling below the single active consumer's thirty-object-per-minute capacity
 shared	probe_schedule_identities	44640	schedule	One immutable identity for every minute in a 744-hour month
+shared	audit_event_max_bytes	16384	byte	Maximum canonical audit-event body before archive compression
+shared	audit_partition_average_bytes	1000	byte	Maximum average body bytes independently enforced for every audit partition
+shared	audit_rejection_event_max_bytes	1000	byte	Fixed rejection schema fits the complete pre-classification byte reservation
+shared	compact_non_audit_record_max_bytes	4096	byte	Maximum canonical body size for one compact non-audit record
+shared	compact_non_audit_average_bytes	400	byte	Maximum average canonical body bytes for the fixed compact non-audit stream
+shared	archive_audit_records_per_object	500	record	Maximum audit records after reserving framing expansion and encryption space
+shared	archive_compact_records_per_object	1000	record	Maximum compact non-audit records per archive object
+shared	archive_audit_reserved_bytes_per_object	196608	byte	One hundred ninety-two KiB reserved for framing compression expansion and encryption
+shared	archive_timer_flush_seconds	600	second	Oldest buffered record forces one stream object every ten minutes
+shared	rejection_audit_partition_shared	1	boolean	Unauthenticated and unauthorized decisions consume one shared partition in any mix
+shared	rejection_audit_capacity_inferred_from_runtime_mix	0	boolean	The hard absolute partition is never expanded or inferred from observed rejection proportions
+shared	rejection_audit_reserve_before_authentication	1	boolean	One event slot and maximum event bytes are reserved before credential evaluation
+shared	rejection_audit_reserve_before_authorization	1	boolean	The same reservation precedes policy evaluation
+shared	rejection_audit_event_byte_reservation_atomic	1	boolean	Event and byte capacity are reserved in one durable atomic operation
+shared	rejection_audit_event_settlement_atomic	1	boolean	The classified decision event and reservation settlement commit in one durable transaction
+shared	rejection_audit_database_load_seconds	86400	second	Real-store qualification runs each rejection class through a complete exact-rate day and partition exhaustion
+shared	rejection_audit_database_path_uses_runtime_adapter	1	boolean	Database qualification exercises the selected PostgreSQL adapter rather than a counter test double
+shared	rejection_audit_database_changed_bytes_metered	1	boolean	Reservation attempts settlements releases and reconciliations are included in the physical changed-byte meter
+shared	rejection_audit_additional_gp3_performance_allowed	0	boolean	Needing paid IOPS or throughput above the selected gp3 baseline fails the unchanged-cost qualification
+shared	rejection_audit_authorized_release_uses_standard_load	1	boolean	The complete authorized portion of the standard twenty-four-hour generated workload exercises release
+shared	rejection_audit_reconciliation_uses_prior_window	1	boolean	A full uncertain prior-window partition preserves current-window admission while its exact reconciliation is stressed
+shared	rejection_audit_reconciliation_concurrent_with_standard_load	1	boolean	The prior-window reconciliation surge overlaps the complete standard profile load
+shared	rejection_audit_reconciliation_final_second_reservations	14	reservation	Both profiles reconcile fourteen remaining reservations in their final partial second
+shared	rejection_audit_authorized_release_before_state	1	boolean	A fully authorized request releases the provisional rejection reservation before normal state work
+shared	rejection_audit_commit_before_response	1	boolean	A classified rejection commits its required event before its response
+shared	rejection_audit_missing_or_stale_ledger_fails_closed	1	boolean	Missing or stale capacity state returns generic pre-classification failure
+shared	rejection_audit_uncertain_reservation_reclaimed_by_age	0	boolean	Pending or uncertain reservations are never made reusable solely because time elapsed
+shared	rejection_audit_exact_reconciliation_required	1	boolean	Only exact event-and-reservation reconciliation can release uncertain capacity
+shared	rejection_audit_exhaustion_evaluates_authentication	0	boolean	Partition exhaustion stops before credential evaluation and creates no unauthenticated decision
+shared	rejection_audit_exhaustion_evaluates_authorization	0	boolean	Partition exhaustion stops before policy evaluation and creates no unauthorized decision
+shared	rejection_audit_exhaustion_status	503	status-code	Generic audit-capacity-unavailable response when reservation cannot succeed
+shared	rejection_audit_exhaustion_response_bytes	2048	byte	Maximum generic response body plus response headers
+shared	rejection_audit_classified_response_bytes	2048	byte	Maximum unauthenticated or unauthorized response body plus response headers
+shared	rejection_audit_exhaustion_transition_system_event	1	event	The first partition-exhausted transition emits one bounded system audit event and alert
+shared	rejection_audit_exhaustion_transition_slot_pre_reserved	1	boolean	The transition event and bytes are unavailable to ordinary system-event admission from window initialization
+shared	rejection_audit_exhaustion_request_events	0	event	Pre-classification capacity responses do not create per-request security audit obligations
+shared	rejection_audit_borrows_system_headroom	0	boolean	Rejection traffic cannot consume the non-borrowable system-event partition
+shared	rejection_audit_borrows_other_partitions	0	boolean	Rejection traffic cannot consume mutation provider synthetic or compact-record capacity
+shared	rejection_mix_fixture_all_unauthenticated	1	boolean	Qualification shifts the complete generated stream to unauthenticated candidates
+shared	rejection_mix_fixture_all_unauthorized	1	boolean	Qualification separately shifts the complete generated stream to unauthorized candidates
 shared	probe_duplicate_attempts	44640	attempt	One duplicate reserve for every intended identity
 shared	probe_shutdown_attempts	4464	attempt	Non-borrowable in-flight and group-deletion propagation reserve
 shared	probe_api_requests	138384	request	Two calls per intended identity plus one idempotent write for every duplicate and shutdown delivery

@@ -184,6 +184,11 @@ an explicit quota response; they must not cause silent data loss.
 | Billable database surplus CPU credits/month, vCPU-hours | 0 | 2,976 | 0 |
 | Primary-region standard alarm metrics/month | local | 64 | 64 |
 | Audit events/month | 100,000 | 9,000,000 | 52,000,000 |
+| Shared unauthenticated-or-unauthorized audit partition/month | local | 466,934 | 2,341,814 |
+| Non-borrowable system audit partition/month | local | 857,221 | 1,359,941 |
+| Ordinary system headroom plus rejection-exhaustion reserve/month | local | 857,220 + 1 | 1,359,940 + 1 |
+| Audit record body bytes/month, GB | 0.1 | 9 | 52 |
+| Full generated-stream rejection shift, classified audit/pre-classification 503 | local | 466,934/22,879,786 | 2,341,814/114,748,906 |
 | Compact non-audit archive records/month | 750,000 | 10,056,268 | 49,897,468 |
 | Archived audit and evidence bytes/31-day month, GB | 0.4 | 16 | 80 |
 | Archive objects written/month | 10,000 | 37,000 | 163,000 |
@@ -405,6 +410,16 @@ target result cannot substitute for the small profile:
    raw provider mutation attempt contributes its required per-attempt audit
    record. The 24-hour compact non-audit archive oracle is 324,388 small and
    1,609,588 target records, including 4,320 records from synthetic writes.
+   In two separate reset accounting windows, replace the complete monthly
+   generated stream first with unauthenticated candidates and then with
+   unauthorized candidates. Permit only 466,934/2,341,814 requests to reserve
+   capacity and reach classification. Require every classified rejection to
+   commit its audit event before response; require the remaining
+   22,879,786/114,748,906 requests to receive the same bounded generic `503`
+   `audit-capacity-unavailable` response before credentials or policy are
+   evaluated. Race reservations at the last slot, inject missing and stale
+   ledgers plus uncertain commits, and prove zero required-event loss and no
+   borrowing from system or other evidence partitions.
 3. In an isolated accounting environment, force queue retries and redeliveries,
    then hold an empty queue under long polling. Drive each queue-unit partition
    through 80%, 90%, and 100% with a deterministic fake and verify alert, poll
@@ -721,10 +736,15 @@ observes the request but before commit and is distinct from an accepted request
 to cancel an asynchronous provider operation.
 
 The percentages apply to complete 100-request cycles in the generated stream;
-the final 20 requests in a 744-hour accounting window are reads. The two audit-
-required rejection categories are the 1% unauthenticated and 1% unauthorized
-requests. An idempotent replay returns the original receipt and creates neither
-a new provider attempt nor another required audit event. An accepted operation
+the final 20 requests in a 744-hour accounting window are reads. The 1%
+unauthenticated plus 1% unauthorized mix is a deterministic qualification
+workload, not the production security-audit bound. Those classes instead share
+an independently enforced 466,934/2,341,814-event partition in any proportion.
+Its configured size equals two events per complete qualification cycle only to
+preserve the fixed profile envelope; runtime admission uses the absolute counter
+and never infers capacity from observed traffic proportions.
+An idempotent replay returns the original receipt and creates neither a new
+provider attempt nor another required audit event. An accepted operation
 cancellation always creates its API audit event; any resulting external cancel
 call is also counted inside the provider mutation-unit and per-attempt audit
 budgets.
@@ -1144,29 +1164,94 @@ Every externally attempted provider mutation, including a retry, emits one
 required audit record containing the operation and attempt identities, target,
 authorization context, and outcome. Applying the 45/15-minute steady/peak
 mutation schedules allows at most 4,129,200 small and 30,690,000 target provider
-records in a 744-hour month. The generated API stream's 17% required-audit share
-is exactly 10% successful mutations, 5% accepted cancellations, 1%
-unauthenticated requests, and 1% unauthorized requests: 3,968,939 small and
-19,905,419 target records over complete 100-request cycles. After 44,640
-synthetic writes, the combined totals are 8,142,779 and 50,640,059, leaving
-857,221 and 1,359,941 records for bounded system events inside the 9 million and
-52 million caps. The provider totals already include every retry, and a provider
-cancel attempt is included even though its accepted API cancellation has a
-separate audit record. Idempotent replays, invalid requests, stale conflicts,
-quota rejections, and request-context cancellations produce no external attempt
-and use bounded metrics or ordinary logs unless issue
+records in a 744-hour month. Fifteen required API events per complete generator
+cycle cover successful mutations and accepted cancellations: 3,502,005 small
+and 17,563,605 target. A separate shared rejection partition reserves two more
+events per cycle, 466,934 and 2,341,814, for unauthenticated and unauthorized
+decisions in any mix. After 44,640 synthetic writes, the five non-borrowable
+partitions are therefore:
+
+| Audit partition | Small | Target |
+| --- | ---: | ---: |
+| Successful mutations and accepted cancellations | 3,502,005 | 17,563,605 |
+| Shared unauthenticated or unauthorized rejection | 466,934 | 2,341,814 |
+| Provider mutation attempts including retries | 4,129,200 | 30,690,000 |
+| Winning recovery-probe synthetic writes | 44,640 | 44,640 |
+| System events: general headroom plus one rejection-exhaustion transition | 857,220 + 1 | 1,359,940 + 1 |
+| **Total** | **9,000,000** | **52,000,000** |
+
+The provider totals already include every retry, and a provider cancel attempt
+is included even though its accepted API cancellation has a separate audit
+record. From accounting-window initialization, one event and 1,000 bytes inside
+the system partition are reserved exclusively for the first rejection-
+exhaustion transition; ordinary system admission can consume only the remaining
+857,220/1,359,940 events and 857,220,000/1,359,940,000 bytes. The system-event
+partition is not available to rejection traffic, and rejection traffic cannot
+borrow mutation, provider, synthetic, or compact-record capacity. Idempotent
+replays, invalid requests, stale conflicts, quota
+rejections, and request-context cancellations produce no external attempt and
+use bounded metrics or ordinary logs unless issue
 [#14](https://github.com/ArdurAI/veer/issues/14) classifies one as a required
 security audit event.
 
+After edge size and syntax checks but before credential or policy evaluation,
+the API atomically reserves one event slot and 1,000 bytes from the shared
+rejection partition in a durable profile-scoped ledger. A fixed canonical
+rejection schema is at most 1,000 bytes. Both classified rejection responses and
+pre-classification capacity responses are at most 2 KiB including headers. An
+unauthenticated or unauthorized decision settles that reservation and durably
+commits the required event in one transaction before returning its rejection
+response. A request that passes both checks releases the provisional reservation
+before normal quota or state work. If capacity is
+exhausted, or the ledger is missing or stale, Veer returns the same at-most-2-KiB
+[`503 Service Unavailable`](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.6.4)
+response with the generic `audit-capacity-unavailable` code without evaluating
+credentials or policy. That path creates no authentication or authorization
+decision and thus no unauthenticated or unauthorized event to drop. Pending or
+uncertain reservations count against the complete fixed window and are never
+reclaimed by age; only exact reconciliation of the reservation and event may
+release them. The first transition into exhausted state commits the one bounded
+event pre-reserved inside the system partition and pages; subsequent capacity
+responses use a counter and ordinary bounded logs rather than creating an
+unbounded per-request audit stream.
+This intentionally sacrifices availability under a rejection flood rather than
+lose mandatory security evidence or expose a credential-validity oracle.
+
+The reservation protocol's database work is explicit rather than assumed to be
+free or folded into another transaction. In separate 24-hour qualification
+windows, each rejection class must traverse the selected PostgreSQL adapter at
+the profile's exact 20/100-request-per-second edge ceiling until after partition
+exhaustion. In the standard 24-hour profile run, all 738,058/3,701,578
+authorized generated requests must exercise the reservation-release path. At
+the same time, seed a complete prior-window uncertain partition of
+466,934/2,341,814 reservations. Reconcile 20/100 in each full second, then the
+final 14 in second 23,347/23,419. Using the prior window keeps current-window
+admission
+available while adding the complete worst-case reconciliation surge to the
+normal database load. The harness must record attempted reservations,
+classified event settlements, authorized releases, exact reconciliations,
+commit latency, `ReadIOPS`, `WriteIOPS`, and storage throughput. Every resulting
+physical change—including WAL, index, vacuum, and failed-attempt
+amplification—counts against the existing rolling database changed-byte meter.
+The selected 50/500 GiB gp3 volumes must stay within the included 3,000/12,000
+IOPS and 125/500 MiB/s baselines documented by the
+[Amazon RDS gp3 storage contract](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage).
+Needing additional provisioned IOPS or throughput fails the unchanged cost
+result and requires a replacement worksheet.
+
 Canonical audit events are at most 16 KiB before archive compression and must
-average no more than 1,000 bytes at the full event count. This allocates at most
-9 GB/month small and 52 GB/month target to audit records. After the compact
+average no more than 1,000 bytes independently inside each event partition. The
+rejection partition reserves 466,934,000/2,341,814,000 bytes, and the
+non-borrowable system partition reserves 857,221,000/1,359,941,000 bytes. The
+complete event ledger allocates at most 9 GB/month small and 52 GB/month target
+to audit records. After the compact
 non-audit records below, 2.98 GB and 8.04 GB remain inside the combined 16 GB and
 80 GB archive-ingress caps for framing and unused byte headroom; they do not
 authorize another record stream. Per-object recovery evidence is the embedded
 manifest already counted as framing. Recovery and qualification summaries are
-required system audit events and consume the remaining 857,221/1,359,941-event
-allowance above. The archive
+required system audit events and consume only the general
+857,220/1,359,940-event allowance above; the dedicated rejection-exhaustion
+slot is unavailable to them. The archive
 writer measures actual stored object bytes, including framing and encryption
 overhead. A 365-day retention interval can intersect 13 fixed 31-day accounting
 windows when writes are concentrated at their boundaries. Pricing all 13 full
@@ -1574,6 +1659,14 @@ validator S3, KMS, SQS, and DynamoDB clients. Every retry must first consume its
 explicit operation or attempt reservation. Equal 3,700/16,300 writer and validator retry partitions
 form the non-borrowable 10% reserve, raise the hard bounds to 81,400/358,600 KMS
 requests, and stop admission before another KMS call when exhausted.
+
+Because the event and byte totals do not increase, the corrected rejection
+boundary changes no object, regional storage, S3, KMS, or dollar ceiling. The
+verifier derives the 22,464/108,464 audit objects and 14,521/54,362 compact
+objects from their respective record partitions, proves their sum fits the
+37,000/163,000 object caps, and ties those caps to 111,000/489,000 cross-region
+S3 tier-1 requests, 81,400/358,600 KMS requests, 208/1,040 GB per retained
+region, and the unchanged USD 990.36/USD 2,836.47 totals.
 
 The developer profile reserves 0.1 GB and 100,000 records for audit plus 0.3 GB
 and 750,000 records for compact non-audit evidence. Dense packing needs at most
