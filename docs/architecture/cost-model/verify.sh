@@ -89,6 +89,137 @@ expect_bound_failure() {
   printf '%s\n' "operational bound negative fixture $fixture_name passed"
 }
 
+expect_input_failure() {
+  fixture_name=$1
+  fixture_profile=$2
+  fixture_item=$3
+  fixture_value=$4
+  expected_diagnostic=$5
+  fixture_file="$negative_dir/$fixture_name-inputs.tsv"
+  diagnostic_file="$negative_dir/$fixture_name.err"
+
+  LC_ALL=C awk -F '\t' -v OFS='\t' \
+    -v profile="$fixture_profile" \
+    -v item="$fixture_item" \
+    -v replacement="$fixture_value" '
+      NR == 1 { print; next }
+      $1 == profile && $2 == item { $4 = replacement; found = 1 }
+      { print }
+      END { if (!found) exit 1 }
+    ' "$script_dir/inputs.tsv" >"$fixture_file" ||
+    fail "cannot seed $fixture_name input fixture"
+
+  if LC_ALL=C awk -f "$script_dir/verify-operational-bounds.awk" \
+    "$script_dir/operational-bounds.tsv" "$fixture_file" \
+    >"$negative_dir/$fixture_name.out" 2>"$diagnostic_file"; then
+    fail "$fixture_name input fixture was accepted"
+  fi
+  grep -Fq "$expected_diagnostic" "$diagnostic_file" ||
+    fail "$fixture_name input fixture emitted an unexpected diagnostic"
+  printf '%s\n' "cost input negative fixture $fixture_name passed"
+}
+
+expect_bound_failure probe-artifact-retention shared probe_artifact_retention_seconds 2678400 \
+  'probe artifact retention must equal 30 days with cleanup inside one day'
+expect_bound_failure probe-artifact-current-max shared probe_artifact_current_versions_max 44639 \
+  'probe artifact class maxima must model lifecycle-dependent alternatives'
+expect_bound_failure probe-artifact-noncurrent-max shared probe_artifact_noncurrent_versions_max 1439 \
+  'probe artifact class maxima must model lifecycle-dependent alternatives'
+expect_bound_failure probe-artifact-class-alternatives shared probe_artifact_lifecycle_class_alternatives 0 \
+  'probe artifact class maxima must model lifecycle-dependent alternatives'
+expect_bound_failure probe-artifact-physical shared probe_artifact_physical_entries 46079 \
+  'probe artifact physical entries must include current noncurrent and marker versions'
+expect_bound_failure probe-artifact-list shared probe_artifact_cleanup_list_requests_month 1487 \
+  'probe artifact cleanup LIST budget must cover every physical entry and final empty proofs'
+expect_bound_failure probe-artifact-exact-delete shared probe_artifact_cleanup_exact_version_delete 0 \
+  'probe artifact cleanup must enumerate all version classes and delete exact versions'
+expect_bound_failure probe-artifact-cleanup-role-assumable shared probe_artifact_cleanup_role_assumable 0 \
+  'probe artifact cleanup requires an assumable exact-prefix least-privilege role'
+expect_bound_failure probe-artifact-cleanup-role-list shared probe_artifact_cleanup_role_lists_exact_prefix 0 \
+  'probe artifact cleanup requires an assumable exact-prefix least-privilege role'
+expect_bound_failure probe-artifact-cleanup-role-delete shared probe_artifact_cleanup_role_deletes_exact_versions 0 \
+  'probe artifact cleanup requires an assumable exact-prefix least-privilege role'
+expect_bound_failure probe-artifact-cleanup-role-other shared probe_artifact_cleanup_role_other_bucket_actions 1 \
+  'probe artifact cleanup requires an assumable exact-prefix least-privilege role'
+expect_input_failure probe-artifact-marker-cost target external_synthetic_artifact_marker_storage 0 \
+  'target probe artifact cost rows differ from the versioned cleanup contract'
+expect_bound_failure archive-adjacent-overlap shared archive_lifecycle_overlap_envelopes 1 \
+  'archive retention must reserve two adjacent cohorts and complete exact cleanup inside one day'
+expect_bound_failure archive-current-version-sweep shared archive_sweeper_lists_current_versions 0 \
+  'archive sweeper must prove Object Lock eligibility and delete every version class by exact identifier'
+expect_bound_failure archive-legal-hold-read shared archive_sweeper_gets_object_legal_hold 0 \
+  'archive sweeper must prove Object Lock eligibility and delete every version class by exact identifier'
+expect_bound_failure archive-fixture-delayed-current shared archive_recovery_fixture_delayed_lifecycle_current_versions 0 \
+  'archive recovery qualification must exercise both lifecycle-dependent version states'
+expect_bound_failure archive-fixture-post-lifecycle shared archive_recovery_fixture_post_lifecycle_version_classes 0 \
+  'archive recovery qualification must exercise both lifecycle-dependent version states'
+expect_bound_failure archive-physical-entries target archive_physical_entries_region 2444999 \
+  'target archive physical entries must include retained data and both adjacent marker cohorts'
+expect_bound_failure archive-cleanup-entries target archive_retention_delete_entries_region 651999 \
+  'target archive cleanup must list and delete both eligible data and marker cohorts'
+expect_bound_failure archive-object-lock-reads target archive_retention_object_lock_read_requests_region 651999 \
+  'target archive cleanup must read retention and legal hold for every eligible data version'
+expect_bound_failure archive-marker-storage target archive_delete_marker_storage_gb 0.16 \
+  'target archive marker storage must price both adjacent maximum-key cohorts'
+expect_input_failure archive-list-cost target archive_lifecycle_list_requests 652001 \
+  'target archive lifecycle cost rows differ from the physical-entry contract'
+expect_input_failure archive-object-lock-read-cost target recovery_archive_lifecycle_object_lock_read_requests 651999 \
+  'target archive lifecycle cost rows differ from the physical-entry contract'
+expect_bound_failure manifest-format shared full_reseed_manifest_inventory_format 0 \
+  'generated manifest must use the bounded nonversioned Inventory-format object-set contract'
+expect_bound_failure manifest-nonversioned-output shared full_reseed_manifest_output_versioned 1 \
+  'generated manifest must use the bounded nonversioned Inventory-format object-set contract'
+expect_bound_failure manifest-prewrite-enforcement shared full_reseed_manifest_prewrite_provider_enforcement 1 \
+  'generated manifest qualification must expose unbounded provider output before post-write validation'
+expect_bound_failure manifest-excess-residual shared full_reseed_manifest_excess_output_residual 0 \
+  'generated manifest qualification must expose unbounded provider output before post-write validation'
+expect_bound_failure manifest-validator-assumable shared full_reseed_manifest_validator_assumable 0 \
+  'generated manifest qualification requires an assumable exact-prefix least-privilege executor'
+expect_bound_failure manifest-validator-list-prefix shared full_reseed_manifest_validator_lists_exact_prefix 0 \
+  'generated manifest qualification requires an assumable exact-prefix least-privilege executor'
+expect_bound_failure manifest-validator-read-prefix shared full_reseed_manifest_validator_reads_exact_prefix 0 \
+  'generated manifest qualification requires an assumable exact-prefix least-privilege executor'
+expect_bound_failure manifest-validator-delete-prefix shared full_reseed_manifest_validator_deletes_exact_prefix 0 \
+  'generated manifest qualification requires an assumable exact-prefix least-privilege executor'
+expect_bound_failure manifest-validator-create-job shared full_reseed_manifest_validator_creates_jobs 1 \
+  'generated manifest qualification requires an assumable exact-prefix least-privilege executor'
+expect_bound_failure manifest-validator-pass-role shared full_reseed_manifest_validator_passes_roles 1 \
+  'generated manifest qualification requires an assumable exact-prefix least-privilege executor'
+expect_bound_failure manifest-confirmation-required shared full_reseed_job_confirmation_required 0 \
+  'generated manifest qualification requires signed evidence for exact-job status transitions'
+expect_bound_failure manifest-exact-job-status shared full_reseed_job_submitter_updates_exact_job_status 0 \
+  'generated manifest qualification requires signed evidence for exact-job status transitions'
+expect_bound_failure manifest-other-job-status shared full_reseed_job_submitter_updates_other_job_status 1 \
+  'generated manifest qualification requires signed evidence for exact-job status transitions'
+expect_bound_failure manifest-ready-before-validation shared full_reseed_job_ready_requires_signed_manifest_validation 0 \
+  'generated manifest qualification requires signed evidence for exact-job status transitions'
+expect_bound_failure manifest-cancel-before-rejection shared full_reseed_job_cancel_requires_signed_manifest_rejection 0 \
+  'generated manifest qualification requires signed evidence for exact-job status transitions'
+expect_bound_failure manifest-residual-cleanup shared full_reseed_manifest_residual_cleanup_after_rejection 0 \
+  'manifest rejection must permit only residual cleanup billable actions'
+expect_bound_failure manifest-post-rejection-work shared full_reseed_noncleanup_billable_action_after_manifest_rejection 1 \
+  'manifest rejection must permit only residual cleanup billable actions'
+expect_bound_failure manifest-data-objects target full_reseed_manifest_data_objects 2118999 \
+  'target generated manifest set must reserve one data object per scanned source plus three controls'
+expect_bound_failure manifest-object-set target full_reseed_manifest_objects 2119002 \
+  'target generated manifest set must reserve one data object per scanned source plus three controls'
+expect_bound_failure manifest-write-requests target full_reseed_manifest_write_requests 2119002 \
+  'target generated manifest requests must cover separate validation and consumption reads plus empty proof'
+expect_bound_failure manifest-validation-read-requests target full_reseed_manifest_validation_read_requests 2119002 \
+  'target generated manifest requests must cover separate validation and consumption reads plus empty proof'
+expect_bound_failure manifest-consumption-read-requests target full_reseed_manifest_consumption_read_requests 2119002 \
+  'target generated manifest requests must cover separate validation and consumption reads plus empty proof'
+expect_bound_failure manifest-total-read-requests target full_reseed_manifest_read_requests 4238005 \
+  'target generated manifest requests must cover separate validation and consumption reads plus empty proof'
+expect_bound_failure manifest-cleanup-list target full_reseed_manifest_cleanup_list_requests 2120 \
+  'target generated manifest requests must cover separate validation and consumption reads plus empty proof'
+expect_bound_failure manifest-storage target full_reseed_manifest_storage_gb 0.27 \
+  'target generated manifest storage must price eight GiB for one day'
+expect_input_failure manifest-validation-read-cost target full_reseed_manifest_validation_read 1 \
+  'target generated manifest cost rows differ from the bounded object-set contract'
+expect_input_failure manifest-consumption-read-cost target full_reseed_manifest_consumption_read 1 \
+  'target generated manifest cost rows differ from the bounded object-set contract'
+
 expect_bound_failure network target alb_accounted_request_header_bytes 0 \
   'target ALB header accounting must equal native header bound'
 expect_bound_failure network-native-header small alb_native_request_header_bytes 65535 \

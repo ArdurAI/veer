@@ -49,6 +49,21 @@ small	live_archive_validator_queue_transfer_gb	0.3334144	GB	Retry-inclusive eigh
 small	live_archive_validator_read_gb	47.0378496	GB	Baseline ingress plus every validation retry concentrated at the eight-MiB object maximum
 small	live_archive_validator_log_gb	0.824	GB	Twenty kilobytes per attempt plus ten MB of bounded service and lease logs
 small	live_archive_validator_log_storage_gb	1.648	GB-month	Two boundary-concentrated validator log envelopes at thirty-day retention
+small	archive_retained_data_versions_region	481000	version	Thirteen complete monthly data-object envelopes retained per archive region
+small	archive_physical_entries_region	555000	entry	Retained data versions plus delete markers from two adjacent expiration cohorts
+small	archive_retention_list_requests_region	148002	request	One conservative ListObjectVersions request per eligible data version and marker in two adjacent cohorts plus one final empty proof per signed cohort prefix
+small	archive_retention_delete_entries_region	148000	entry	Exact-version deletion of data versions and markers from two adjacent expiration cohorts
+small	archive_retention_object_lock_read_requests_region	148000	request	Retention and legal-hold metadata reads for every eligible data version in two adjacent cohorts
+small	archive_delete_marker_storage_gb	0.04	GB-month	Two adjacent cohorts of maximum 512-byte delete-marker keys rounded up to cents of decimal GB
+small	full_reseed_manifest_data_objects	481000	object	Qualified maximum of one CSV data object per scanned source object in the S3-generated inventory-format manifest set
+small	full_reseed_manifest_objects	481003	object	Three control objects plus the one-data-object-per-source qualification allowance
+small	full_reseed_manifest_write_requests	481003	request	One tier-one output write for every bounded generated-manifest object
+small	full_reseed_manifest_validation_read_requests	481003	request	One Veer tier-two validation read for every conforming generated-manifest object
+small	full_reseed_manifest_consumption_read_requests	481003	request	One S3 Batch Operations tier-two consumption read for every conforming generated-manifest object
+small	full_reseed_manifest_read_requests	962006	request	Validation and Batch consumption each read the complete conforming generated-manifest object set
+small	full_reseed_manifest_cleanup_list_requests	483	request	Four hundred eighty-two one-thousand-key pages plus a final empty proof
+small	full_reseed_manifest_cleanup_delete_requests	482	request	Four hundred eighty-two free multi-object delete requests remove the bounded manifest set
+small	full_reseed_manifest_storage_gb	0.28	GB-month	Eight GiB aggregate manifest-set bytes retained for at most one day in a thirty-one-day window
 small	archive_objects_per_minute	1	object-minute	Admission ceiling below the single active consumer's thirty-object-per-minute capacity
 target	generated_api_requests_month	117090720	request	The fixed generated workload before recovery-probe API calls
 target	api_requests_month	117229104	request	The fixed 744-hour workload including intended duplicate and shutdown recovery-probe API calls
@@ -100,6 +115,21 @@ target	live_archive_validator_queue_transfer_gb	1.4688256	GB	Retry-inclusive eig
 target	live_archive_validator_read_gb	216.7343104	GB	Baseline ingress plus every validation retry concentrated at the eight-MiB object maximum
 target	live_archive_validator_log_gb	3.596	GB	Twenty kilobytes per attempt plus ten MB of bounded service and lease logs
 target	live_archive_validator_log_storage_gb	7.192	GB-month	Two boundary-concentrated validator log envelopes at thirty-day retention
+target	archive_retained_data_versions_region	2119000	version	Thirteen complete monthly data-object envelopes retained per archive region
+target	archive_physical_entries_region	2445000	entry	Retained data versions plus delete markers from two adjacent expiration cohorts
+target	archive_retention_list_requests_region	652002	request	One conservative ListObjectVersions request per eligible data version and marker in two adjacent cohorts plus one final empty proof per signed cohort prefix
+target	archive_retention_delete_entries_region	652000	entry	Exact-version deletion of data versions and markers from two adjacent expiration cohorts
+target	archive_retention_object_lock_read_requests_region	652000	request	Retention and legal-hold metadata reads for every eligible data version in two adjacent cohorts
+target	archive_delete_marker_storage_gb	0.17	GB-month	Two adjacent cohorts of maximum 512-byte delete-marker keys rounded up to cents of decimal GB
+target	full_reseed_manifest_data_objects	2119000	object	Qualified maximum of one CSV data object per scanned source object in the S3-generated inventory-format manifest set
+target	full_reseed_manifest_objects	2119003	object	Three control objects plus the one-data-object-per-source qualification allowance
+target	full_reseed_manifest_write_requests	2119003	request	One tier-one output write for every bounded generated-manifest object
+target	full_reseed_manifest_validation_read_requests	2119003	request	One Veer tier-two validation read for every conforming generated-manifest object
+target	full_reseed_manifest_consumption_read_requests	2119003	request	One S3 Batch Operations tier-two consumption read for every conforming generated-manifest object
+target	full_reseed_manifest_read_requests	4238006	request	Validation and Batch consumption each read the complete conforming generated-manifest object set
+target	full_reseed_manifest_cleanup_list_requests	2121	request	Two thousand one hundred twenty one-thousand-key pages plus a final empty proof
+target	full_reseed_manifest_cleanup_delete_requests	2120	request	Two thousand one hundred twenty free multi-object delete requests remove the bounded manifest set
+target	full_reseed_manifest_storage_gb	0.28	GB-month	Eight GiB aggregate manifest-set bytes retained for at most one day in a thirty-one-day window
 target	archive_objects_per_minute	4	object-minute	Admission ceiling below the single active consumer's thirty-object-per-minute capacity
 shared	probe_schedule_identities	44640	schedule	One immutable identity for every minute in a 744-hour month
 shared	probe_duplicate_attempts	44640	attempt	One duplicate reserve for every intended identity
@@ -108,6 +138,25 @@ shared	probe_api_requests	138384	request	Two calls per intended identity plus on
 shared	probe_api_sdk_retries	0	attempt	Probe idempotent-write and read clients each make exactly one attempt
 shared	probe_short_response_bytes	2048	byte	One-KiB receipt or error body plus one-KiB response headers for a short replay or shutdown delivery
 shared	probe_group_delete_coverage	44640	schedule	Every identity belongs to the one deletable accounting-window group
+shared	probe_artifact_retention_seconds	2592000	second	Thirty-day semantic retention before exact-version cleanup eligibility
+shared	probe_artifact_cleanup_seconds	86400	second	Daily exact-version cleanup bounds data and marker overlap to one day
+shared	probe_artifact_encoded_bytes	1000000	byte	Maximum encrypted artifact body per winning probe identity
+shared	probe_artifact_key_bytes	512	byte	Maximum deterministic versioned result-object key and delete-marker key
+shared	probe_artifact_unexpired_current_versions	43200	version	Thirty days of one-per-minute unexpired current result versions
+shared	probe_artifact_cleanup_interval_data_versions	1440	version	One cleanup interval of expired data that is current before Lifecycle acts or noncurrent afterward
+shared	probe_artifact_current_versions_max	44640	version	Maximum current data versions when Lifecycle expiration is delayed through the cleanup interval
+shared	probe_artifact_noncurrent_versions_max	1440	version	Maximum noncurrent data versions when Lifecycle has created the cleanup-interval marker cohort
+shared	probe_artifact_delete_markers_max	1440	marker	Maximum cleanup-interval delete markers when Lifecycle has acted
+shared	probe_artifact_lifecycle_class_alternatives	1	boolean	Cleanup-interval data is current before Lifecycle acts or noncurrent with a marker afterward and class maxima are not summed
+shared	probe_artifact_physical_entries	46080	entry	Unexpired current data plus one cleanup-interval data cohort and at most one corresponding marker cohort
+shared	probe_artifact_cleanup_list_requests_month	1488	request	Thirty-one daily forty-eight-request exact version-list proofs
+shared	probe_artifact_cleanup_delete_requests_month	93	request	Thirty-one daily three-request free multi-object delete envelopes
+shared	probe_artifact_cleanup_lists_all_versions	1	boolean	Cleanup enumerates current versions noncurrent versions and delete markers
+shared	probe_artifact_cleanup_exact_version_delete	1	boolean	Cleanup deletes every eligible result entry by key and version identifier
+shared	probe_artifact_cleanup_role_assumable	1	boolean	The daily sweeper can assume a dedicated short-lived probe artifact cleanup role
+shared	probe_artifact_cleanup_role_lists_exact_prefix	1	boolean	The cleanup role receives s3 ListBucketVersions only with the exact result-prefix condition
+shared	probe_artifact_cleanup_role_deletes_exact_versions	1	boolean	The cleanup role receives s3 DeleteObjectVersion only beneath the exact result prefix
+shared	probe_artifact_cleanup_role_other_bucket_actions	0	action	The cleanup role receives no other result-bucket action and cannot access another prefix
 shared	probe_synchronous_lambda_invoke	1	boolean	Scheduler universal target pins Lambda Invoke to RequestResponse
 shared	probe_scheduler_universal_invoke_target	1	boolean	Scheduler uses the universal Lambda Invoke target rather than the asynchronous templated target
 shared	probe_scheduler_invocation_type_request_response	1	boolean	Universal Lambda Invoke sets InvocationType to RequestResponse
@@ -210,3 +259,37 @@ shared	live_archive_validator_source_to_complete_seconds	636	second	Four ordered
 shared	live_archive_validator_lease_renew_seconds	10	second	Each of two tasks makes at most one conditional lease write per interval
 shared	live_archive_validator_lease_seconds	30	second	Lease expiration bounds stale-leader authority
 shared	live_archive_validator_heartbeat_read_seconds	60	second	Primary admission checks the recovery lease heartbeat once per minute
+shared	archive_lifecycle_overlap_envelopes	2	envelope	Two adjacent boundary-concentrated expiration cohorts may coexist before the daily sweep
+shared	archive_delete_marker_key_bytes	512	byte	Maximum encoded archive key charged for every retained delete marker
+shared	archive_retention_cleanup_seconds	86400	second	Exact-version archive cleanup runs within one day of retention eligibility
+shared	archive_sweeper_lists_current_versions	1	boolean	The hard-bound sweeper enumerates eligible current data versions
+shared	archive_sweeper_lists_noncurrent_versions	1	boolean	The hard-bound sweeper enumerates eligible noncurrent data versions
+shared	archive_sweeper_lists_delete_markers	1	boolean	The hard-bound sweeper enumerates eligible delete markers
+shared	archive_sweeper_exact_version_delete	1	boolean	Every eligible archive entry is deleted with its exact key and version identifier
+shared	archive_sweeper_checks_object_lock	1	boolean	Retention expiry and absence of legal hold are proven before permanent deletion
+shared	archive_sweeper_gets_object_retention	1	boolean	Cleanup role can read the retention setting of an exact data version
+shared	archive_sweeper_gets_object_legal_hold	1	boolean	Cleanup role can read the legal-hold status of an exact data version
+shared	archive_recovery_fixture_delayed_lifecycle_current_versions	1	boolean	Qualification deletes retention-eligible current versions while Lifecycle expiration is delayed
+shared	archive_recovery_fixture_post_lifecycle_version_classes	1	boolean	Qualification separately deletes noncurrent versions and delete markers after Lifecycle expiration acts
+shared	full_reseed_manifest_inventory_format	1	boolean	Generated manifest output uses the S3 Inventory CSV 20211130 format
+shared	full_reseed_manifest_control_objects	3	object	Manifest JSON checksum and Hive-compatible symlink control objects are reserved
+shared	full_reseed_manifest_aggregate_bytes	8589934592	byte	Conforming control and data object set is qualified at no more than eight GiB
+shared	full_reseed_manifest_cleanup_seconds	86400	second	The dedicated manifest-output prefix is listed deleted and proved empty within one day
+shared	full_reseed_manifest_output_versioned	0	boolean	A dedicated nonversioned output bucket prevents hidden noncurrent manifest objects
+shared	full_reseed_manifest_list_page_size	1000	entry	Every cleanup page uses the maximum S3 object-list page size
+shared	full_reseed_manifest_delete_batch_size	1000	entry	Every cleanup request deletes at most the S3 multi-object API maximum
+shared	full_reseed_manifest_prewrite_provider_enforcement	0	boolean	S3 exposes no provider control that applies the Veer object or byte allowance before generated output is written
+shared	full_reseed_manifest_excess_output_residual	1	boolean	Provider-generated output beyond the qualification allowance is an explicit unbounded residual cost
+shared	full_reseed_manifest_validator_assumable	1	boolean	The recovery job submitter can assume a dedicated short-lived manifest qualification and cleanup role for the signed generation
+shared	full_reseed_manifest_validator_lists_exact_prefix	1	boolean	The manifest role receives s3 ListBucket only with the exact generated-output prefix condition
+shared	full_reseed_manifest_validator_reads_exact_prefix	1	boolean	The manifest role receives s3 GetObject only for objects under the exact generated-output prefix
+shared	full_reseed_manifest_validator_deletes_exact_prefix	1	boolean	The manifest role receives s3 DeleteObject only for objects under the exact generated-output prefix
+shared	full_reseed_manifest_validator_creates_jobs	0	boolean	The manifest role cannot create or update S3 Batch Operations jobs
+shared	full_reseed_manifest_validator_passes_roles	0	boolean	The manifest role cannot pass an IAM role
+shared	full_reseed_job_confirmation_required	1	boolean	The generated-manifest Batch Operations job remains suspended until post-generation qualification succeeds
+shared	full_reseed_job_submitter_updates_exact_job_status	1	boolean	The job submitter receives s3 UpdateJobStatus only for the exact job ARN returned by the signed recovery-generation CreateJob call
+shared	full_reseed_job_submitter_updates_other_job_status	0	boolean	The job submitter cannot update another S3 Batch Operations job
+shared	full_reseed_job_ready_requires_signed_manifest_validation	1	boolean	The submitter requests Ready only after the exact generated manifest set has a signed successful qualification result
+shared	full_reseed_job_cancel_requires_signed_manifest_rejection	1	boolean	The submitter requests Cancelled only after the exact generated manifest set has a signed rejection result
+shared	full_reseed_manifest_residual_cleanup_after_rejection	1	boolean	Exact-prefix LIST and DELETE compensation remains permitted and residual after generated output is rejected
+shared	full_reseed_noncleanup_billable_action_after_manifest_rejection	0	boolean	Replication and every other Veer-initiated billable action stop after generated output is rejected

@@ -216,16 +216,19 @@ an explicit quota response; they must not cause silent data loss.
 | Recovery-region live archive validator same-region reads/month, GB | 0 | 47.0378496 | 216.7343104 |
 | Recovery-region live archive validator log ingest/storage, GB/GB-month | 0 | 0.824/1.648 | 3.596/7.192 |
 | Retained current archive data versions/region, maximum | local | 481,000 | 2,119,000 |
-| Physical archive versions plus delete markers/region, maximum | local | 518,000 | 2,282,000 |
-| Retention-cleanup ListObjectVersions requests/month, both regions | 0 | 148,002 | 652,002 |
-| Delete-marker cleanup-overlap storage/region, GB-month | 0 | 0.02 | 0.09 |
+| Physical archive versions plus delete markers/region, maximum | local | 555,000 | 2,445,000 |
+| Retention-cleanup ListObjectVersions requests/month, both regions | 0 | 296,004 | 1,304,004 |
+| Retention-cleanup Object Lock metadata reads/month, both regions | 0 | 296,000 | 1,304,000 |
+| Delete-marker cleanup-overlap storage/region, GB-month | 0 | 0.04 | 0.17 |
 | Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,331,000 each |
 | Full-reseed KMS client-envelope decrypt requests | 0 | 530,000 | 2,331,000 |
 | Full-reseed cross-region transfer, GB | 0 | 229 | 1,144 |
 | Full-reseed S3 Batch Operations jobs | 0 | 1 | 1 |
 | Full-reseed S3 Batch object operations | 0 | 530,000 | 2,331,000 |
 | Full-reseed generated-manifest source objects scanned | 0 | 481,000 | 2,119,000 |
-| Full-reseed transient manifest objects | 0 | 1 | 1 |
+| Full-reseed transient manifest data/set objects, maximum | 0 | 481,000/481,003 | 2,119,000/2,119,003 |
+| Full-reseed transient manifest write/validation-read/consumption-read requests | 0 | 481,003/481,003/481,003 | 2,119,003/2,119,003/2,119,003 |
+| Full-reseed transient manifest cleanup LIST/DELETE requests | 0 | 483/482 | 2,121/2,120 |
 | Full-reseed transient manifest storage, GB-month | 0 | 0.28 | 0.28 |
 | Full-reseed candidate overlap storage, GB-month | 0 | 7.39 | 36.91 |
 | Full-reseed destination GET validation attempts | 0 | 530,000 | 2,331,000 |
@@ -444,7 +447,21 @@ target result cannot substitute for the small profile:
    job. Use one S3-generated manifest in a source-region recovery-control prefix,
    disable the completion report, and expire the manifest within 24 hours. Live
    CRR to the active generation continues while the temporary rule tails new
-   versions into the candidate inside the reseed retry reserve. Fetch every exact
+   versions into the candidate inside the reseed retry reserve. Before job
+   confirmation, have the recovery job submitter assume the dedicated manifest
+   role, enumerate the exact prefix, and read and authenticate every control and
+   data object. Deny an unassumed request, a different prefix, an object write,
+   job creation, and role passing. Count one complete Veer validation-read pass
+   and a separate complete Batch-consumption-read pass. After a signed successful
+   validation, require the submitter to call `UpdateJobStatus(Ready)` only on the
+   exact job ARN returned by its signed `CreateJob` request; deny a different
+   job ARN or a transition without the signed result. Inject provider output
+   beyond both qualification allowances; verify replication does not start,
+   a signed rejection result authorizes cancellation of the exact job, only
+   residual exact-prefix cleanup LIST and DELETE calls remain permitted, the
+   observed prefix is deleted and proved empty,
+   paging fires, and the excess provider writes, storage, and cleanup remain
+   reported as residual rather than fixed headroom. Fetch every exact
    destination object version with checksum mode enabled; verify the returned S3
    checksum; recompute SHA-256 over the exact serialized body; authenticate its
    embedded Veer manifest header, footer, signature, digest, sequence, and size;
@@ -474,13 +491,17 @@ target result cannot substitute for the small profile:
    generation.
 
    Also seed a complete boundary-concentrated accounting envelope at its
-   365-day expiry boundary in both active archive regions. Pause lifecycle only
-   for the bounded Batch window, re-enable the signed rules, and run the
-   retention sweeper. Verify exact-version deletion of every eligible
-   noncurrent version and delete marker, a final empty
-   `ListObjectVersions` result for the expired date prefix, preservation of
+   365-day expiry boundary in both active archive regions. Exercise both
+   lifecycle-dependent cleanup states. First pause Lifecycle only for the
+   bounded Batch window, then run the retention sweeper before eventual
+   expiration acts so the eligible cohorts remain current versions; require
+   their exact-version deletion after Object Lock qualification. Re-enable the
+   signed rules, reseed the same envelope, allow Lifecycle to create noncurrent
+   versions and delete markers, and require both classes to be removed. Verify a
+   final empty
+   `ListObjectVersions` result for each expired signed date prefix, preservation of
    every unexpired version, original replica age and Object Lock metadata, the
-   518,000/2,282,000 physical entry caps, and the 148,002/652,002 two-region
+   555,000/2,445,000 physical entry caps, and the 296,004/1,304,004 two-region
    LIST-request caps. Attempt exact-version deletion one second before
    `RetainUntilDate` and require S3 to return `403`; repeat at or after expiry
    and require cleanup to succeed without bypass permission. Drive the cleanup
@@ -655,7 +676,15 @@ target result cannot substitute for the small profile:
    confirm each replay returns the original receipt before the read, result
    metric, or artifact path. Then inject the non-borrowable 4,464-attempt
    shutdown race. Pre-create the deterministic artifact key and verify the
-   conditional PUT creates no new version. Inject an identity older than 60
+   conditional PUT creates no new version. Exercise both lifecycle-dependent
+   cleanup states: first seed 44,640 current data versions with expiration
+   delayed, then seed 43,200 unexpired current versions plus 1,440 expired
+   noncurrent versions and 1,440 delete markers after expiration acts. Require
+   the daily sweeper to enumerate every class and delete each eligible entry by
+   exact version identifier within 24 hours. Verify no more than 46,080 physical
+   entries, 1,488 monthly version-list requests including final empty proofs,
+   93 free multi-object deletes, or 0.00073728 GB-month of marker keys. Inject an
+   identity older than 60
    seconds and verify rejection before any API or artifact call. Count every
    delivery, including each short duplicate and shutdown attempt, against the
    93,744 invocation, 468,720 GB-second, and 14.0616 GB log ledgers. Count two
@@ -854,11 +883,28 @@ The object contains at most 0.001 GB of encrypted result evidence retained for
 multiply artifact writes.
 
 The result bucket is versioned and lifecycle-governed: current objects expire
-after thirty-one days, noncurrent versions expire after one day, and expired
-delete markers are removed after one day. The same retention envelope is
-enforced by an exact-version cleanup pass that lists every eligible version and
-marker by identifier before re-qualifying a window, so noncurrent retention
-cannot quietly accumulate.
+after 30 days. S3 expiration can create a delete marker while retaining the old
+data as a billable noncurrent version, so lifecycle is defense in depth rather
+than the storage bound. A daily exact-version sweeper lists current versions,
+noncurrent versions, and delete markers and deletes every eligible entry by key
+and version identifier before re-qualifying the next window. At one artifact per
+minute, 43,200 unexpired current data versions coexist with one 1,440-version
+cleanup cohort. If Lifecycle is delayed, all 44,640 data versions can still be
+current; after Lifecycle acts, the class state is at most 43,200 current, 1,440
+noncurrent, and 1,440 markers. These are mutually exclusive class alternatives,
+not simultaneous maxima. The larger physical state is 46,080 entries.
+Thirty-one daily sweeps reserve
+1,488 LIST requests (47 maximum 1,000-entry pages plus a final empty proof per
+sweep) and 93 free multi-object deletes. The data rows price 44.64 GB-month for
+30 current days plus one cleanup interval; one day of maximum 512-byte marker
+keys adds 0.00073728 GB-month.
+
+The probe role cannot sweep its own result objects. A separate daily-sweeper
+principal assumes a short-lived probe-artifact cleanup role that receives only
+`s3:ListBucketVersions` under the exact result-prefix condition and
+`s3:DeleteObjectVersion` beneath that prefix. It cannot read or write object
+bodies, change Lifecycle or bucket policy, operate on another prefix, or invoke
+the probe and launch-controller paths.
 
 The probe emits only `SuccessPercent`, `Duration`, and `Failed` from the bounded
 log event. Because
@@ -874,9 +920,11 @@ plus pager receipt is bounded to forty more.
 The Scheduler role may invoke only the probe function. The probe role's
 application path can access only a dedicated fixture, emit its exact log group,
 and write its deterministic schedule-identity key under the result prefix; it
-has no result-bucket delete or list permission. Its separate launch-controller
-statements permit only `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:StopTask`, and
-`ecs:RunTask` in the exact recovery cluster; `dynamodb:UpdateItem` on the exact
+has no result-bucket delete or list permission. The separate probe-artifact
+cleanup role above is the only sweeper authority. The probe role's separate
+launch-controller statements permit only `ecs:ListTasks`, `ecs:DescribeTasks`,
+`ecs:StopTask`, and `ecs:RunTask` in the exact recovery cluster;
+`dynamodb:UpdateItem` on the exact
 launch-control leading-key namespace; and `iam:PassRole` for the exact validator
 execution and task-role ARNs with `iam:PassedToService=ecs-tasks.amazonaws.com`.
 It obtains short-lived
@@ -1143,19 +1191,27 @@ checksum satisfies Object Lock's checksum-header upload prerequisite.
 
 Lifecycle is eventual, so it is defense in depth rather than the hard bound. An
 audited daily sweeper uses the signed date-partition retention ledger and exact
-version IDs to permanently delete eligible noncurrent versions and markers
-within 24 hours, then requires an empty `ListObjectVersions` response for that
-date prefix. A separate retention-sweeper role receives only
-`s3:ListBucketVersions`, `s3:GetObjectRetention`, and
+version IDs to permanently delete eligible current versions, noncurrent
+versions, and delete markers within 24 hours, then requires an empty
+`ListObjectVersions` response for that date prefix. Before deleting a data
+version it proves that Object Lock retention has expired and no legal hold is
+active. A separate retention-sweeper role receives only
+`s3:ListBucketVersions`, `s3:GetObjectRetention`, `s3:GetObjectLegalHold`, and
 `s3:DeleteObjectVersion` on the one signed expired date prefix. It has no
 governance-bypass, retention-write, legal-hold, object-write, bucket-delete,
 replication, or IAM permission; S3 itself rejects deletion of an unexpired data
-version. One boundary-concentrated
-monthly envelope may be simultaneously noncurrent and covered by delete markers,
-so physical data versions plus markers cap at 518,000/2,282,000 per region.
-Marker-key storage rounds up to 0.02/0.09 GB-month per region. Conservatively
-allowing one LIST response per noncurrent version and marker plus a final empty
-proof costs 74,001/326,001 requests per region, or 148,002/652,002 across both.
+version. Two adjacent boundary-concentrated monthly envelopes can be
+simultaneously eligible while represented by noncurrent versions and delete
+markers. Thirteen retained data envelopes plus those two marker envelopes cap
+physical entries at 555,000/2,445,000 per region. Marker-key storage rounds up
+to 0.04/0.17 GB-month per region. The eligible set contains both the data
+versions and markers from both cohorts. Conservatively allowing one LIST
+response per eligible entry plus one final empty proof for each signed cohort
+prefix costs 148,002/652,002 requests per region, or 296,004/1,304,004 across
+both.
+One `GetObjectRetention` and one `GetObjectLegalHold` request for each eligible
+data version costs another 148,000/652,000 metadata reads per region, or
+296,000/1,304,000 across both; delete markers require neither check.
 Each regional sweep commits one bounded signed summary audit event; it does not
 create per-version Veer records. Audit records are never sampled or dropped:
 exceeding the bound rejects or backpressures new work and surfaces a capacity
@@ -1534,11 +1590,37 @@ transfer as `1 * ingress`; none can drift independently. Live CRR handles every
 new version into the active recovery generation.
 A full reseed leaves that generation and its verified checkpoint intact while
 one S3 Batch Replication job copies retained versions into a fresh versioned
-candidate bucket through a temporary exact-prefix replication rule. The
-generated list is exactly one transient manifest object in a source-region
-recovery-control prefix, is excluded from the job's own source filter, is capped
-at 8 GiB, and expires within 24 hours. The manifest filter admits only unexpired
-current data versions from the signed date partitions; delete-marker replication
+candidate bucket through a temporary exact-prefix replication rule. S3 writes
+the generated list in
+[`S3InventoryReport_CSV_20211130`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_control_S3GeneratedManifestDescriptor.html)
+form to a dedicated,
+nonversioned source-region recovery-control bucket. The bounded set reserves
+`manifest.json`, `manifest.checksum`, `symlink.txt`, and at most one CSV data
+object per scanned source object: 481,003/2,119,003 total objects. AWS documents
+the
+[Inventory-format set](https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory-location.html)
+but not a generated-shard quota, so the one-data-object-per-source limit is an
+explicit Veer qualification allowance, not a provider guarantee. Before
+starting the replication operation, Veer lists the complete
+output prefix, validates the manifest checksum and every listed data object,
+and rejects a set whose cardinality or aggregate bytes exceed the allowance.
+S3 writes the generated output before Veer can perform those checks and exposes
+no pre-write control that enforces Veer's allowance. Provider-generated excess
+object writes, bytes, storage, and cleanup are therefore an explicit unbounded
+residual cost outside the fixed profile ceilings. Veer permits only one
+generator attempt and, on excess, stops before Batch replication or any other
+non-cleanup Veer-initiated billable action. The only permitted billable
+compensation is exact-prefix LIST and DELETE cleanup; those calls remain part of
+the unbounded residual. Veer cancels the suspended job, deletes the observed
+prefix, and pages for review. This limits subsequent work but cannot
+retroactively bound S3's output. For a conforming set, the job submitter uses
+`s3:UpdateJobStatus` on the exact created job ARN to request `Ready` only after
+the signed manifest-validation result. A signed manifest-rejection result is
+likewise required before it requests `Cancelled`. The prefix is excluded from
+the job's own source filter,
+contains at most 8 GiB, and is deleted and proved empty within 24 hours. The
+manifest filter admits only unexpired current data versions from the signed date
+partitions; delete-marker replication
 is disabled on the candidate rule, and noncurrent versions and markers are
 excluded. Lifecycle is paused on the source and candidate only for the
 maximum-24-hour Batch window, as AWS recommends for parity, then the signed
@@ -1554,10 +1636,16 @@ GETs; 530,000/2,331,000 KMS decrypts for client-envelope validation; and
 client ciphertext and therefore performs no KMS operation.
 Same-region validation reads at most the same 229/1,144 GB through an S3 gateway
 endpoint, so they add neither cross-region transfer nor NAT processing.
-Manifest generation scans
-481,000/2,119,000 source objects, one Batch Operations job is allowed, and its
-8 GiB artifact is 8.589934592 decimal GB and, for 24 hours in a 31-day window,
-rounds up to 0.28 GB-month plus one tier-one write. The
+Manifest generation scans 481,000/2,119,000 source objects and one Batch
+Operations job is allowed. For conforming output, the source-cardinality
+allowance plus three control objects prices 481,003/2,119,003 tier-one writes,
+the same number of Veer validation reads, and the same number again for Batch
+Operations consumption reads. Cleanup
+reserves 483/2,121 LIST requests—full 1,000-key pages plus one final empty
+proof—and 482/2,120 free multi-object deletes. The conforming set's 8 GiB
+aggregate allowance is 8.589934592 decimal GB and, for 24 hours in a 31-day
+window, rounds up to 0.28 GB-month. Provider-created excess before validation is
+the unbounded residual described above and is not represented as headroom. The
 source and destination GETs use pinned Tier-2 rates; the destination PUT uses
 Tier-1. Candidate overlap is capped at the full retry-inclusive transfer
 envelope for 24 hours, or 7.39/36.91 GB-month. The active copy remains
@@ -1595,7 +1683,15 @@ baseline. The Batch Operations role is separately trusted only by
 `batchoperations.s3.amazonaws.com`. It receives `s3:InitiateReplication` on
 source archive versions, replication-configuration and inventory reads, plus
 `s3:GetObject`, `s3:GetObjectVersion`, and `s3:PutObject` only on the exact
-recovery-control manifest prefix. The live-validator task role receives only
+recovery-control manifest prefix. A separate manifest qualification and cleanup
+role is trusted only for short-lived assumption by the recovery job submitter
+for the signed generation. It receives `s3:ListBucket` on the nonversioned
+recovery-control bucket only when the request's `s3:prefix` equals the exact
+generated-output prefix, plus `s3:GetObject` and `s3:DeleteObject` only on
+objects beneath that prefix. It cannot write an object, access another prefix,
+create or update a Batch Operations job, or pass a role. The job submitter
+assumes this role to enumerate and read the complete set before confirmation
+and to delete it after success or rejection. The live-validator task role receives only
 `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`, and
 `sqs:GetQueueAttributes` on the exact validation FIFO queue plus
 `sqs:SendMessage` on the exact dead-letter queue; it has no receive, delete, or
@@ -1645,7 +1741,11 @@ requires a signed state token showing either candidate abort or completed
 promotion, and every permanent delete explicitly supplies the governance-bypass
 header. Bucket policy denies that principal on the signed active-baseline bucket
 and prefix; it cannot alter retention or legal holds. The job submitter can
-create only tagged recovery jobs and pass only the Batch role. Source and destination
+create only tagged recovery jobs and pass only the Batch role. It receives
+`s3:UpdateJobStatus` only on the exact job ARN returned by its signed
+recovery-generation `CreateJob` call. It requests `Ready` only after signed
+manifest qualification succeeds, or `Cancelled` only after a signed rejection
+result; it cannot update another job. Source and destination
 versioning, ownership, replication status, and signed-digest verification are
 qualification gates. S3 Replication Time Control is not enabled or priced; the
 separate freshness oracle enforces Veer's accepted 30-minute bound. The workflow
@@ -1668,8 +1768,8 @@ rates, `us-east-1` primary resources, and `us-west-2` recovery storage.
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 986.71 | USD 1,000.00 | USD 13.29 |
-| Target-scale qualification | USD 2,820.37 | USD 2,850.00 | USD 29.63 |
+| Small production | USD 990.36 | USD 1,000.00 | USD 9.64 |
+| Target-scale qualification | USD 2,836.47 | USD 2,850.00 | USD 13.53 |
 
 The target ceiling is USD 2,850 so the ALB's separate provider-enforced 64 KiB
 header and 16 KiB request-line envelopes and durable live archive validator are priced instead of hidden in
@@ -1795,6 +1895,10 @@ the exercise continues.
 - Provider qualification uses a dedicated sandbox, resource quotas, expiry
   tags, and a verified teardown. It is budgeted separately from this
   always-on control-plane estimate.
+- S3 writes a generated Batch Operations manifest before Veer can validate its
+  object count and bytes. The worksheet prices only output that conforms to the
+  explicit Veer qualification allowance; provider-generated excess and its
+  cleanup are an unbounded residual cost outside the fixed profile ceilings.
 
 ## Alternatives considered
 
