@@ -80,10 +80,14 @@ flowchart TB
 
     subgraph RECOVERY["Recovery region: us-west-2"]
         BACKUP[(Encrypted replicated backups)]
+        VALIDATIONQ[(Encrypted archive-validation queue)]
+        VALIDATOR[Fenced archive validator]
         PROBE[External API synthetic]
     end
 
     OBJECTS -->|S3 managed CRR| BACKUP
+    DB -->|signed exact-version job via durable outbox| VALIDATIONQ
+    VALIDATIONQ -->|300-second delayed delivery| VALIDATOR
     PROBE -->|one-minute authenticated probe| EDGE
 ```
 
@@ -107,9 +111,10 @@ flowchart TB
   cleanup role described below, which can bypass retention solely on a tagged,
   non-authoritative candidate or retired bucket. S3 assumes a dedicated
   replication role scoped to read the selected source versions and their
-  retention/legal-hold metadata, replicate only the archive prefix, and encrypt
-  writes with the recovery-region key. Restore never grants provider authority
-  until credentials and policy are revalidated. The bucket and role
+  retention/legal-hold metadata and replicate only the archive prefix. Both
+  bucket defaults and policies require `AES256`, and CRR preserves the source
+  objects' SSE-S3 encryption without a provider-managed KMS key. Restore never
+  grants provider authority until credentials and policy are revalidated. The bucket and role
   prerequisites follow the [S3 replication requirements](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-requirements.html).
 - Third-party secrets that cannot be reissued are replicated by Secrets Manager
   into `us-west-2` under the recovery-region key and a separately scoped
@@ -140,10 +145,14 @@ an explicit quota response; they must not cause silent data loss.
 | Accepted desired-state mutations/minute, 15-minute peak, including synthetic | 12 | 121 | 601 |
 | New TLS connections/second | local | 20 | 100 |
 | Encoded server TLS handshake bytes/new connection, maximum | local | 8 KiB | 8 KiB |
-| Encoded request headers/new request, maximum | local | 1 KiB | 1 KiB |
+| ALB-native entire request-header limit/new request | local | 64 KiB | 64 KiB |
+| ALB-native request-line limit/new request | local | 16 KiB | 16 KiB |
 | Server TLS handshake bytes/month, GB | 0 | 14 | 70 |
+| Durably admitted HTTP response bytes/month, GB | 0 | 150 | 690 |
+| Billable internet egress/month, GB | 0 | 195 | 995 |
 | Active TLS connections, one-minute sample | local | 2,500 | 12,000 |
-| Load-balancer processed bytes/hour, GB | local | 0.5 | 4 |
+| Load-balancer processed bytes/hour, GB | local | 6.324512 | 33.12256 |
+| Billable load-balancer capacity | local | 7 LCU | 34 LCU |
 | Billable load-balancer rule evaluations/second | local | 500 | 4,000 |
 | Concurrent non-terminal operations | 10 | 100 | 1,000 |
 | Authoritative reconciliation lease duration | local | 60 sec | 60 sec |
@@ -179,14 +188,39 @@ an explicit quota response; they must not cause silent data loss.
 | Archived audit and evidence bytes/31-day month, GB | 0.4 | 16 | 80 |
 | Archive objects written/month | 10,000 | 37,000 | 163,000 |
 | Archive S3 tier-1 requests/month, both regions | 30,000 | 111,000 | 489,000 |
-| Archive KMS requests/month, both regions | 40,000 | 148,000 | 652,000 |
+| Archive KMS requests/month, both regions, including 10% retry reserve | 22,000 | 81,400 | 358,600 |
 | Normal archive cross-region transfer/month, GB | 0 | 16 | 80 |
+| Recovery-region live archive validator attempts/month | 0 | 40,700 | 179,300 |
+| Recovery-region live archive validator retry attempts/month | 0 | 3,700 | 16,300 |
+| Recovery-region live archive validator Fargate vCPU/GB hours/month | 0 | 375.104167/750.208333 | 375.104167/750.208333 |
+| Recovery-region live archive validator public-IPv4 hours/month | 0 | 1,500.416667 | 1,500.416667 |
+| Recovery-region live archive validator launch tokens/month | 0 | 745 | 745 |
+| Recovery-region live archive validator exact-version HEADs plus GETs/month | 0 | 81,400 | 358,600 |
+| Recovery-region live archive validator source-send retries/month | 0 | 3,700 | 16,300 |
+| Recovery-region live archive validator quarantine sends/month | 0 | 40,700 | 179,300 |
+| Recovery-region live archive validator DLQ repair jobs/month | 0 | 3,700 | 16,300 |
+| Recovery-region live archive validator DLQ empty/retried receives/month | 0 | 370 | 1,630 |
+| Recovery-region live archive validator DLQ redrive-send retries/month | 0 | 370 | 1,630 |
+| Recovery-region live archive validator DLQ receive/send/post-send-delete operations/month | 0 | 11,840 | 52,160 |
+| Recovery-region live archive validator queue message operations/month | 0 | 133,940 | 590,060 |
+| Recovery-region live archive validator queue poll requests/month | 0 | 2,678,400 | 2,678,400 |
+| Recovery-region live archive validator total FIFO request units/month | 0 | 2,812,340 | 3,268,460 |
+| Recovery-region live archive validator receipt-cleanup writes/month | 0 | 74,000 | 326,000 |
+| Recovery-region live archive validator pre-HEAD lease ConditionCheck read/write units/month | 0 | 81,400/81,400 | 358,600/358,600 |
+| Recovery-region live archive validator final-lease ConditionCheck read/write units/month | 0 | 81,400/81,400 | 358,600/358,600 |
+| Recovery-region live archive validator launch-guard conditional writes/month | 0 | 187,488 | 187,488 |
+| Recovery-region live archive validator launch-result conditional writes/month | 0 | 1,490 | 1,490 |
+| Recovery-region live archive validator state read/write units/month | 0 | 248,140/1,287,058 | 941,140/3,202,258 |
+| Recovery-region live archive validator state storage/month | 0 | 1 GB-month | 4.4 GB-month |
+| Recovery-region live archive validator cross-region message wire/month, GB | 0 | 0.3334144 | 1.4688256 |
+| Recovery-region live archive validator same-region reads/month, GB | 0 | 47.0378496 | 216.7343104 |
+| Recovery-region live archive validator log ingest/storage, GB/GB-month | 0 | 0.824/1.648 | 3.596/7.192 |
 | Retained current archive data versions/region, maximum | local | 481,000 | 2,119,000 |
 | Physical archive versions plus delete markers/region, maximum | local | 518,000 | 2,282,000 |
 | Retention-cleanup ListObjectVersions requests/month, both regions | 0 | 148,002 | 652,002 |
 | Delete-marker cleanup-overlap storage/region, GB-month | 0 | 0.02 | 0.09 |
 | Full-reseed source GET and destination PUT attempts | 0 | 530,000 each | 2,331,000 each |
-| Full-reseed KMS source-decrypt, destination-encrypt, and validation data-key/decrypt requests | 0 | 2,120,000 | 9,324,000 |
+| Full-reseed KMS client-envelope decrypt requests | 0 | 530,000 | 2,331,000 |
 | Full-reseed cross-region transfer, GB | 0 | 229 | 1,144 |
 | Full-reseed S3 Batch Operations jobs | 0 | 1 | 1 |
 | Full-reseed S3 Batch object operations | 0 | 530,000 | 2,331,000 |
@@ -211,7 +245,7 @@ an explicit quota response; they must not cause silent data loss.
 | Recovery-region Scheduler/Lambda delivery attempts/month | 0 | 93,744 | 93,744 |
 | Recovery-region duplicate-delivery reserve/month | 0 | 44,640 | 44,640 |
 | Recovery-region shutdown-race delivery reserve/month | 0 | 4,464 | 4,464 |
-| Recovery-region Lambda duration/month, GB-seconds | 0 | 937,440 | 937,440 |
+| Recovery-region probe Lambda duration/month, GB-seconds | 0 | 468,720 | 468,720 |
 | Retained recovery-probe identity claims, maximum | 0 | 46,080 | 46,080 |
 | Encoded recovery-probe identity claim, maximum | 0 | 256 bytes | 256 bytes |
 
@@ -454,6 +488,113 @@ target result cannot substitute for the small profile:
    Public CI uses a deterministic S3 service fake. An opt-in live fixture uses
    dedicated buckets, exact-prefix IAM, an exercise cost cap, and verified
    teardown.
+
+   Separately, drive the complete normal monthly archive envelope through the
+   primary archive outbox, the encrypted recovery-region FIFO validation queue,
+   and the two-task fenced Fargate validator. Send each signed exact-version job
+   through its stream group with a 300-second queue delay after its acknowledged
+   send. Require each successful send acknowledgement within 60 seconds of the
+   job becoming the head of its ordered outbox, and charge four sequential send
+   intervals for the target same-stream burst. Admit that burst only from an
+   empty stream outbox, reject every refill until all four sends are acknowledged
+   and checkpointed, and otherwise enforce at least 61 seconds between objects
+   on one stream. Inject duplicates and
+   retries through the 40,700/179,300 attempt budgets and their 3,700/16,300
+   retry partitions. Inject transient and uncertain source sends through a
+   separate 3,700/16,300 retry partition, and verify repeated sends retain the
+   exact signed deduplication identity and finish acknowledgement within 240
+   seconds of the durable first-send timestamp. After that deadline, prove no
+   repeated send occurs and the outbox remains durable. Exercise the
+   81,400/358,600 HEAD-plus-
+   GET budgets, the 40,700/179,300 all-attempt quarantine-send reserves, the
+   3,700/16,300 bounded repair jobs, the 370/1,630 non-borrowable empty/retried
+   DLQ receive and redrive-send budgets, the 11,840/52,160 complete
+   repair-before-delete DLQ reconciliation budgets, the 133,940/590,060
+   queue message-operation budgets, the application-enforced
+   2,678,400 monthly poll-request cap, the launch-inclusive 375.104167 vCPU-hours,
+   750.208333 GB-hours, 1,500.416667 public-IPv4 hours, and 745 service-wide
+   launch tokens. Rotate the signed desired task-definition digest while both old
+   tasks run; hang the normal API request and prove its failed sample commits at
+   the one-second sub-deadline while the serialized lifecycle owner retains four
+   seconds of the five-second invocation. Race adjacent Scheduler identities and
+   prove only the five-second claim owner may issue ECS calls, replay an
+   uncertain request, or persist results. Verify at most one non-retried
+   `StopTask` runs per probe, no desired-
+   revision launch until every obsolete task reaches `STOPPED`, and no more than
+   two non-stopped validator tasks at any time. Require the transition to reserve
+   both capacity-bucket tokens before the first stop; once both obsolete tasks
+   are `STOPPED`, prove the next worst-case delivered probe starts both
+   independently tokened `RunTask(count=1)` requests concurrently and persists
+   both ARNs within 125 seconds. Conditionally persist each returned ARN against
+   its claim, slot, and client token before treating that slot as populated.
+   Inject an uncertain response on one call plus a concurrent probe and prove
+   a later claim owner first reconciles an exact deterministic `startedBy` match
+   from `ListTasks`/`DescribeTasks`, then replays the affected byte-identical
+   request only before 3,000 seconds from its durable first-attempt timestamp.
+   Prove a matching discovered task is persisted without replay and that crossing
+   the deadline permits no new `RunTask`, leaves the slot unresolved, and closes
+   archive admission for audited repair. Prove
+   an unplanned one-slot loss starts only one `RunTask(count=1)` call. Spend the
+   two initial launch tokens and all 743 hourly refills strictly inside the
+   744-hour window; prove the hour-744 refill belongs only to the next window.
+   Verify that every token reserves the full 60-second Fargate and public-IPv4
+   minimum before launch, then prove a 746th launch is rejected
+   before any AWS work begins. Deny each required probe-role action in turn, substitute an
+   unapproved cluster, task family, launch-ledger key, or passed role, and prove
+   the launch fails closed. Exercise both the
+   81,400/358,600 pre-HEAD and
+   81,400/358,600 final-lease transactional read and write reserves, the
+   187,488 launch-guard and 1,490 launch-result conditional writes, the
+   248,140/941,140 total state
+   reads, the 74,000/326,000 receipt-cleanup writes, the
+   1,287,058/3,202,258 total state writes, the 1/4.4 GB-month state storage,
+   the
+   0.3334144/1.4688256 GB cross-region message-wire budgets, the
+   47.0378496/216.7343104 GB same-region read ledgers, the 0.824/3.596 GB
+   log-ingestion budgets, the
+   1.648/7.192 GB-month log-storage bounds, and the normal KMS retry partition.
+   Force a post-reservation failure, let the pending attempt expire, and prove a
+   higher fenced attempt generation can take it over while the stale generation
+   cannot commit. Separately pause the old leader through lease expiry, acquire
+   a higher lease generation on the standby, and prove both the old leader's
+   pre-HEAD reservation and its final three-action receipt/checkpoint/lease
+   transaction fail even while its attempt generation is still current. Prove
+   each accepted event signs its
+   content length, reserves every attempt, S3 request, KMS call, and body byte
+   before `HeadObject`, finishes in two seconds, requires
+   `ReplicationStatus=REPLICA` for the exact version, verifies the S3 checksum,
+   client-envelope GCM authentication, full-body digest, embedded signature,
+   and retention. Exercise two concurrent receive loops sharing the global
+   one-start-per-second token bucket and prove their worst-case complete-cycle
+   capacity exceeds the target rate plus its 10% reserve. Force SQS to return
+   only one member of the target four-object
+   same-stream burst per receive despite `MaxNumberOfMessages=10`; acknowledge
+   each predecessor's `DeleteMessage` inside the same two-second attempt
+   deadline, and prove the fourth object advances the signed recovery checkpoint
+   no later than 636 seconds after source commit on the successful first-attempt
+   path. A failed
+   attempt exercises the retry envelope but does not claim that success bound.
+   Drive every baseline object through the terminal path and every bounded retry
+   through a second terminal path, proving the 40,700/179,300 DLQ sends and
+   validation-queue deletes fit. For exactly 3,700/16,300 repair jobs, receive the
+   signed DLQ copy, acknowledge a send with a generation-specific deduplication
+   identity to the exact validation FIFO queue, and only then delete the DLQ
+   copy. Inject 370/1,630 empty or retried receives and the same number of
+   uncertain redrive sends; prove a send failure never permits delete, every
+   retry acknowledgement completes within 240 seconds of its durable first-send
+   timestamp, and retries inside the five-minute FIFO interval remain
+   idempotent. Cross the 240-second deadline and prove no additional send occurs,
+   the DLQ copy remains intact, and archive admission remains closed. At
+   archive expiry, verify both exact S3 versions are gone and no checkpoint
+   references the identity before conditionally deleting its receipt; exercise
+   all 74,000/326,000 cleanup writes, reject an early or referenced delete, and
+   prove the daily sweep holds state within 1/4.4 GB-month with a 2 KiB billed-
+   storage envelope per 1 KiB application receipt and without relying on
+   DynamoDB TTL timing. Reconcile provider-billed storage for the full fixture;
+   overhead above the envelope fails qualification.
+   Missing, stale, out-of-order, or exhausted
+   outbox, lease, queue, byte-ledger, receipt, or checkpoint state fails closed
+   before the next archive admission or billable retry.
 9. In an isolated accounting test, drive each cross-AZ byte partition through
    its 80%, 90%, and 100% thresholds and verify alert, admission-control, and
    qualification-failure behavior without sending equivalent billable traffic.
@@ -469,7 +610,13 @@ target result cannot substitute for the small profile:
     most 8 KiB and drive the 14/70 GB monthly handshake-byte counter through its
     80%, 90%, and 100% paths with synthetic accounting. Verify connection
     admission, processed bytes, billable rule evaluations, and every hourly LCU
-    dimension remain inside 1/5 LCUs.
+    dimension remain inside 7/34 LCUs. Send aggregate request headers at 65,535,
+    65,536, and 65,537 bytes and prove the ALB's native non-adjustable 64 KiB
+    limit accepts no larger header set. Independently send request lines at
+    16,383, 16,384, and 16,385 bytes and prove the separate native 16 KiB limit.
+    Reconcile every within-limit request at both complete allowances against
+    observed ALB `ProcessedBytes`; a
+    target-only application rejection does not qualify.
 12. In an isolated registry fixture, exercise deterministic metric name-and-
     dimension identities and create/delete churn below 90%, then restore signed
     snapshots at 80%, 90%, and 100% of the 50/500 monthly caps. At each state,
@@ -510,16 +657,25 @@ target result cannot substitute for the small profile:
    shutdown race. Pre-create the deterministic artifact key and verify the
    conditional PUT creates no new version. Inject an identity older than 60
    seconds and verify rejection before any API or artifact call. Count every
-   delivery, including a short duplicate, against the 93,744 invocation,
-   937,440 GB-second, and 14.0616 GB log ledgers. Fail the profile if any
-   quantity is exceeded. Drive intended, duplicate, shutdown, duration,
+   delivery, including each short duplicate and shutdown attempt, against the
+   93,744 invocation, 468,720 GB-second, and 14.0616 GB log ledgers. Count two
+   API calls for each of 44,640 winning identities and one idempotent write plus
+   at most 2,048 response bytes for each of the 49,104 duplicate and shutdown
+   deliveries: 138,384 API calls and 100,564,992 short-response bytes. Fail the
+   profile if any quantity is exceeded. Configure the idempotent-write and read
+   clients for one attempt with implicit SDK retries disabled; a transient or
+   uncertain result makes the interval unavailable. Drive intended, duplicate,
+   shutdown, duration,
    log-byte, artifact-byte, and artifact-request partitions through 80%, 90%,
-   and 100%; at duplicate-reserve exhaustion verify deletion of only the exact
-   schedule while the shutdown reserve absorbs in-flight deliveries. Inject the
-   documented 59-second Scheduler delay, prove each full invocation stops
-   within ten seconds, and prove the high-resolution alarm evaluates within ten
-   seconds and paging completes within forty more. A runtime, schedule, or
-   alarm change must repeat this gate.
+   and 100%. Place every identity in one dedicated accounting-window schedule
+   group; at duplicate-reserve exhaustion delete that group with the exact-group
+   circuit-breaker role, prove every remaining identity is removed, and let the
+   shutdown reserve absorb in-flight delivery and eventual deletion. Inject the
+   complete 60-second Scheduler precision window, prove each full invocation
+   stops within five seconds, bound EMF log ingestion and metric extraction or
+   missing-signal recognition to five more seconds, prove the high-resolution alarm
+   evaluates within ten seconds, and prove paging completes within forty more. A
+   runtime, schedule, metric, or alarm change must repeat this gate.
 17. Report every SLI and bounded capacity/cost dimension for the entire run and
    for each failure window; synthetic accounting results are labeled separately
    from measured wire bytes.
@@ -567,12 +723,26 @@ reports bucket counts by operation class so two runs cannot satisfy the same
 percentiles with different byte workloads.
 
 For a 744-hour hard billing month where each hourly 15-minute peak replaces
-steady traffic, the total API envelope is exactly 23,436,000 small and
-117,180,000 target requests. The synthetic supplies 89,280 calls, leaving
-23,346,720 and 117,090,720 generated calls for the fixed mix.
+steady traffic, the generated fixed mix supplies 23,346,720 small and
+117,090,720 target requests. Each of 44,640 winning synthetic identities makes
+one idempotent write and one read; the 44,640 duplicate and 4,464 shutdown
+deliveries each make the idempotent write before exiting. The synthetic
+therefore supplies 138,384 calls, producing exact total API envelopes of
+23,485,104 small and 117,229,104 target requests.
 At 70% read responses averaging 6.34 KiB, all other response bodies capped at 1
 KiB, and a maximum 1 KiB of response headers per request, HTTP response egress is
-137.70 GB small and 688.52 GB target. Each encoded server TLS handshake flight,
+137.70 GB small and 688.52 GB target before short replay responses. Reserving a
+1 KiB body and 1 KiB of headers for each duplicate and shutdown delivery adds
+100,564,992 bytes, producing fixed totals of 137.800564992 GB small and
+688.620564992 GB target. Before a handler writes headers or a body,
+it serializes the bounded response and atomically reserves the exact encoded
+bytes in a durable fixed-window ledger capped at 150/690 GB. The ledger includes
+quota responses and reserves their maximum envelope before admitting ordinary
+work; missing or stale state fails closed before a response can exceed the cap.
+The fixed workload is pre-reserved, while a larger read-page mix is rejected or
+deferred instead of borrowing from another response class.
+
+Each encoded server TLS handshake flight,
 including its certificate chain, is rejected at configuration time above 8 KiB.
 A durable edge meter reserves the encoded flight for each new connection and
 caps monthly server-to-client handshake bytes at 14/70 GB. Its 80% threshold
@@ -580,21 +750,30 @@ alerts and forces aggressive keep-alive reuse; at 90%, edge admission preserves
 existing connections and rejects new handshakes before the server flight; 100%
 fails qualification. Instantaneous 20/100-per-second burst buckets remain
 separate. A selected ingress that cannot expose and enforce both counters cannot
-qualify. Adding handshake and bounded outbound provider traffic yields
-179.59/991.64 GB, fitting the worksheet's 200/1,000 GB limits. Provider calls
-and cost-incurring cloud fixtures are capped and explicitly enabled; public CI
-uses deterministic fakes.
+qualify. The 150/690 GB response ledger plus 14/70 GB of handshakes and
+27.88/233.13 GB of provider requests yields 191.88/993.13 GB, fitting the
+worksheet's 195/995 GB limits. Provider calls and cost-incurring cloud fixtures
+are capped and explicitly enabled; public CI uses deterministic fakes.
 
 The reference Application Load Balancer terminates ECDSA P-256 or RSA-2048 TLS
-and uses container or IP targets without Target Optimizer. Under the
+and uses container or IP targets without Target Optimizer. Its
+[entire-request-header limit is a non-adjustable 64 KiB](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html),
+so that provider-enforced edge bound—not an application rejection—is the
+qualification ceiling. AWS WAF's `Headers` component defines which header keys
+and values a statement inspects, but its primary contract does not define an
+aggregate-header size gate; the reference therefore does not claim or price one.
+Arbitrary traffic above the admitted request-rate envelopes remains an explicit
+residual cost risk outside the permitted workload. Under the
 [AWS LCU definition](https://aws.amazon.com/elasticloadbalancing/faqs/), one LCU
 supports 25 new connections/second, 3,000 active connections/minute, 1 GB/hour,
 or 1,000 billable rule evaluations/second; the maximum dimension is charged.
-The same meter also enforces 1 KiB request- and response-header ceilings and
-includes both in the ALB processed-byte budget used by LCU admission.
-The small caps consume at most one LCU. Each target cap consumes at most four,
-while the worksheet prices five. Qualification reports connection reuse, new
-and active connections, processed bytes, rule evaluations, and `ConsumedLCUs`.
+After removing the former 1 KiB request-header allowance, the non-request-header
+processed-byte envelopes are 426,272,000 and 3,631,360,000 bytes/hour. Adding
+`20 * (65,536 + 16,384) * 3,600` and
+`100 * (65,536 + 16,384) * 3,600` yields exact caps of 6,324,512,000 and
+33,122,560,000 bytes/hour, so the worksheet prices 7 and 34 LCUs. Qualification
+reports connection reuse, new and active connections,
+processed bytes, rule evaluations, and `ConsumedLCUs`.
 
 ## Service indicators and objectives
 
@@ -622,41 +801,51 @@ not rounded incident duration.
 
 The production synthetic is a purpose-built Lambda probe in `us-west-2`, outside
 the primary failure boundary. EventBridge Scheduler creates one immutable
-schedule identity per minute with flexible windows disabled. Its documented
+schedule identity per minute with flexible windows disabled and places every
+identity for the accounting window in one dedicated schedule group. Its documented
 [60-second invocation precision](https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html)
 means a minute's target call can occur at any second in that minute. Target
-retries are set to zero under the
+delivery uses the Scheduler
+[universal Lambda `Invoke` target](https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-universal.html)
+with `InvocationType=RequestResponse`, which the
+[Lambda API defines as synchronous](https://docs.aws.amazon.com/lambda/latest/api/API_Invoke.html).
+The templated asynchronous Lambda target is forbidden, so no unbounded Lambda
+asynchronous queue exists between Scheduler delivery and probe execution.
+Scheduler retries are set to zero under the
 [`RetryPolicy` API](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_RetryPolicy.html),
 with `MaximumEventAgeInSeconds` set to 60, for 44,640 intended dispatches in a
-744-hour month; Lambda asynchronous retries are also zero under
-[`PutFunctionEventInvokeConfig`](https://docs.aws.amazon.com/lambda/latest/api/API_PutFunctionEventInvokeConfig.html).
-Because delivery is at least once, the budget separately reserves 44,640
-duplicate attempts—one for every intended identity—and a non-borrowable 4,464
+744-hour month. Because Scheduler delivery is at least once, the budget
+separately reserves 44,640 duplicate attempts—one for every intended
+identity—and a non-borrowable 4,464
 attempt shutdown race. Priced Scheduler target calls and Lambda invocations
 therefore each cap at 93,744.
 
 Every invocation emits one bounded attempt log before any API or artifact path
-and has a ten-second hard timeout with 1 GB of memory and at most 0.00015 GB of
+and has a five-second hard timeout with 1 GB of memory and at most 0.00015 GB of
 Embedded Metric Format logs. AWS/Lambda invocation usage and those logs are
 reconciled against the regional/profile/window attempt partitions. Invocation
-billing precedes function logic, which is why all 93,744 requests, 937,440
+billing precedes function logic, which is why all 93,744 requests, 468,720
 GB-seconds, and 14.0616 GB of logs are priced. At 80% of the duplicate reserve
 Veer pages on cost pressure. At 100%, a separate circuit-breaker role with only
-`scheduler:DeleteSchedule` on the exact probe schedule deletes it; it cannot
-create, update, or target any other schedule. The remaining 4,464 attempts are
-reserved for usage-metric delay, already in-flight work, and control-plane
-propagation. Exhaustion makes every missing interval unavailable and requires
-declarative restoration in the next reconciled window; a vendor runaway beyond
-the shutdown reserve is an explicit residual cost risk rather than hidden
-headroom.
+[`scheduler:DeleteScheduleGroup`](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_DeleteScheduleGroup.html)
+on the exact accounting-window group deletes
+all remaining identities. Group deletion is eventually consistent, so the
+remaining 4,464 attempts are reserved for usage-metric delay, already in-flight
+work, and control-plane propagation. The role cannot create or update a group or
+schedule, delete another group, or invoke a target. Exhaustion makes every
+missing interval unavailable and requires declarative restoration into a new
+signed group in the next reconciled window; a vendor runaway beyond the shutdown
+reserve is an explicit residual cost risk rather than hidden headroom.
 
 The probe rejects a scheduled timestamp older than 60 seconds, then performs
 its authenticated idempotent no-op write with the schedule identity as the
 idempotency key. Probe identity claims are retained for the complete fixed
 31-day accounting window plus 24 hours. Only the newly committed claim
 continues to the read and result path; a replay returns the original receipt
-and exits. At most 46,080 claims of 256 encoded bytes coexist across a window
-boundary, using 11,796,480 bytes inside the existing relational and
+and exits after that one write. Every duplicate or shutdown delivery therefore
+reserves one API request and a short response of at most 1 KiB of body plus 1
+KiB of headers. At most 46,080 claims of 256 encoded bytes coexist across a
+window boundary, using 11,796,480 bytes inside the existing relational and
 qualification-preload allocations. Each winning identity makes one
 non-retried conditional `PutObject` attempt with `If-None-Match: *` to its
 deterministic key in a versioned result bucket.
@@ -672,18 +861,30 @@ marker by identifier before re-qualifying a window, so noncurrent retention
 cannot quietly accumulate.
 
 The probe emits only `SuccessPercent`, `Duration`, and `Failed` from the bounded
-log event. Its one missing-or-failed-run alarm is high resolution: the second
-consecutive scheduled-minute failure emits the alarm signal, evaluation is
-bounded to ten seconds, and notification plus pager receipt is bounded to forty
-more.
+log event. Because
+[EMF extraction](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html)
+from CloudWatch Logs is asynchronous, the
+qualification contract measures log acceptance through metric extraction or
+missing-signal recognition and caps that interval at five seconds; AWS service
+documentation is not treated as a latency guarantee. Its one missing-or-failed-
+run alarm is high resolution: the second consecutive scheduled-minute failure
+emits the alarm signal, evaluation is bounded to ten seconds, and notification
+plus pager receipt is bounded to forty more.
 
-The Scheduler role may invoke only the probe function; the probe role can access
-only a dedicated fixture, emit its exact log group, and write its deterministic
-schedule-identity key under the result prefix; it has no result-bucket delete or
-list permission. It obtains short-lived
+The Scheduler role may invoke only the probe function. The probe role's
+application path can access only a dedicated fixture, emit its exact log group,
+and write its deterministic schedule-identity key under the result prefix; it
+has no result-bucket delete or list permission. Its separate launch-controller
+statements permit only `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:StopTask`, and
+`ecs:RunTask` in the exact recovery cluster; `dynamodb:UpdateItem` on the exact
+launch-control leading-key namespace; and `iam:PassRole` for the exact validator
+execution and task-role ARNs with `iam:PassedToService=ecs-tasks.amazonaws.com`.
+It obtains short-lived
 credentials through workload identity and never records tokens or response
-bodies. Artifact SDK retries are disabled: a failed write makes the interval
-unavailable rather than creating another billable attempt. Its read and write
+bodies. The idempotent-write, read, and artifact clients each permit exactly one
+attempt with implicit SDK retries disabled. A transient error or uncertain
+response makes the interval unavailable rather than creating another billable
+attempt. Its read and write
 calls count against the selected profile's API, load-balancer, and gross
 internet-egress budgets. The worksheet prices intended, duplicate, and shutdown
 Scheduler/Lambda attempts, their full timeout and log envelopes, one artifact
@@ -745,12 +946,15 @@ signal. Detection and declaration consume the same RTO. The external probe uses
 two consecutive failures; platform health signals must open an incident within
 the table's detection bound. For a regional failure immediately after a
 successful probe, the next scheduled minutes begin within 60 and 120 seconds
-of onset. Scheduler can delay each target call by at most another 59 seconds,
-and the ten-second function timeout therefore yields the two failed results
-before 130 and 190 seconds. High-resolution alarm evaluation takes at most ten
-seconds and notification plus pager receipt at most forty, keeping incident
-opening below 240 seconds. Missing the detection bound or the end-to-end RTO
-fails the objective.
+of onset. Scheduler's documented `:00` through `:59` invocation precision is
+conservatively reserved as a complete 60-second window so subsecond rounding is
+not a correctness dependency. The five-second function timeout therefore yields
+the two failed results no later than 125 and 185 seconds. EMF log ingestion and metric extraction, or missing-
+signal recognition, consumes at most five more seconds; high-resolution alarm
+evaluation consumes at most ten and notification plus pager receipt at most
+forty. The conservative worst-case arithmetic is `120 + 60 + 5 + 5 + 10 + 40 =
+240` seconds, meeting the inclusive hard 240-second objective. Missing any
+stage bound or the end-to-end RTO fails the objective.
 
 The logical-corruption objective covers these alpha classes, each checked at
 least every 15 minutes: a workspace-scoped desired-state row updated or deleted
@@ -816,6 +1020,7 @@ service claims.
 | Security audit events | 90 days queryable | 365 days immutable and encrypted | Shorter retention requires a reviewed security decision. |
 | HTTP idempotency records | Fixed non-sliding 24-hour semantic window from first successful reservation commit | None | PostgreSQL time before expiry replays; equality is expired, cleanup lag does not extend semantics, and unresolved reservations are not recycled by age. |
 | Recovery-probe identity claims | Fixed 31-day accounting window plus 24 hours | None | At most 46,080 claims of 256 encoded bytes prevent cross-window replay. |
+| Live archive validation receipts | While the exact archive version is retained, plus at most 24 hours | None | A daily exact-version sweep conditionally deletes each receipt only after both retained copies are gone and no signed checkpoint references it; DynamoDB TTL is defense in depth. |
 | Database point-in-time recovery | 35 days in primary region | 7 days replicated in recovery region | Monthly restore verification is required. |
 | Platform logs | 14 days small; 30 days target | None by default | Security events belong in the audit stream, not ordinary logs. |
 | Traces | 7 days | None by default | Accepted trace data is capped at 10 GiB/month small and 100 GiB/month target. Sampling must prioritize errors while shedding safely at the cap and redacting sensitive attributes. |
@@ -987,20 +1192,316 @@ and fails qualification before the 30-minute hard bound.
 Every Veer archive data object carries its own signed manifest header and footer
 inside the already reserved framing. Its digest, sequence, encoded size, and
 signature are duplicated in bounded S3 user metadata for indexing, but metadata
-is never accepted as proof of body integrity. The archive writer supplies an S3
-checksum supported by its selected single- or multipart-upload path, verifies
-the returned checksum metadata, and rejects a commit if S3 does not persist it.
-Recovery validation performs an exact-version
+is never accepted as proof of body integrity. Before upload, the writer obtains
+one unique data key with `kms:GenerateDataKey` from the primary member of an AWS
+KMS multi-Region key, encrypts the complete framed object with AES-256-GCM and a
+fresh 96-bit nonce, and binds the immutable stream identity, sequence, encoded
+key, and manifest digest as additional authenticated data. The ciphertext
+envelope carries the encrypted data key and encryption context; those fields are
+hints until authenticated by GCM and the embedded Veer signature. Both S3
+buckets additionally require SSE-S3, so S3 and CRR copy ciphertext without
+provider-managed KMS calls. AWS documents both
+[client-side envelope encryption](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingClientSideEncryption.html)
+and that a related
+[multi-Region replica key can decrypt the ciphertext](https://docs.aws.amazon.com/kms/latest/developerguide/mrk-how-it-works.html)
+in the recovery Region. The archive writer supplies an S3 checksum supported by
+its selected single- or multipart-upload path, verifies the returned checksum
+metadata, and rejects a commit if S3 does not persist it. Recovery validation
+performs an exact-version
 [`GetObject` with checksum mode enabled](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html),
-verifies the returned value according to S3's checksum type, recomputes Veer's
-full-body SHA-256 over the returned serialized bytes, and authenticates the
-embedded signature and digest. The relational
+verifies the returned value over the ciphertext according to S3's checksum type,
+decrypts the data key with the recovery member of the multi-Region key, opens the
+GCM envelope, recomputes Veer's full-body SHA-256 over the serialized plaintext,
+and authenticates the embedded signature and digest. The relational
 archive checkpoint stores the prefix, sequence, object
 digest, and signed stream root atomically with archive progress. Veer creates
 exactly zero standalone persistent manifest objects, so the monthly and retained
 archive object caps count every persistent S3 object. An implementation that
 needs a separate Veer manifest object must replace the worksheet before
 qualification.
+
+For normal live CRR, the archive writer commits the exact source bucket, key,
+version ID, content length, body digest, stream identity, sequence, and signed
+stream root to its relational outbox with the archive checkpoint. S3 replication
+[retains version IDs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html).
+One ordered dispatcher per stream will not send sequence `n+1` before SQS
+acknowledges `n`. Each successful send must be acknowledged within 60 seconds
+of becoming the head of that ordered outbox. It sends a signed message of at
+most 2 KiB to one encrypted
+FIFO SQS queue in `us-west-2`, uses the stream identity as `MessageGroupId`, and
+uses SHA-256 over the length-delimited bucket, key, and version ID as
+`MessageDeduplicationId`. The durable receipt key is the same 32-byte digest;
+the raw, signed three-part identity remains in the job, archive index, and
+reconciliation proof rather than the size-capped receipt. An S3 version ID is
+never treated as globally unique. The FIFO queue
+sets queue-level `DelaySeconds=300` because FIFO queues
+[do not support per-message delay](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-moving.html).
+Archive admission pre-reserves one send per object plus a non-borrowable 10%
+source-send retry partition. A timeout or transient failure spends a retry
+reservation before the dispatcher repeats the same signed job and
+`MessageDeduplicationId`, but the retry acknowledgement must complete within 240
+seconds of the durable first-send timestamp. After that deadline no repeated
+send is allowed and the outbox remains durable with archive admission closed;
+exhausted send retries likewise backpressure archive admission.
+The five-minute delay therefore begins after the send and never exposes a
+message before the accepted five-minute managed-CRR boundary. Failed, stale, or
+out-of-order outbox delivery backpressures archive admission.
+
+The explicit executor is two standalone Linux ARM Fargate tasks in `us-west-2`,
+each allocated 0.25 vCPU and 0.5 GB. They deliberately do not belong to an ECS
+service because AWS documents that a service
+[automatically replaces tasks below `desiredCount`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_CreateService.html),
+which would bypass a pre-launch budget. A 30-second DynamoDB fencing lease,
+renewed every ten seconds, admits exactly one active consumer; every state and
+billable-operation reservation carries the lease generation. The standby
+contests the same lease but cannot poll or validate without winning it. Each
+task uses a public subnet and one paid public IPv4 address only for outbound AWS
+API access, has no listener or inbound security-group rule, and permits outbound
+TLS only. S3 and DynamoDB use gateway endpoints, so body and state traffic does
+not cross a NAT gateway. Images and the desired task-definition revision are
+pinned by digest and signature.
+
+The independently scheduled recovery-probe Lambda is the only principal allowed
+to launch or stop validator tasks. Every invocation gives the normal API
+synthetic a one-second sub-deadline and commits its success or failure before
+validator lifecycle work; a hung API request therefore cannot consume the
+Lambda's complete five-second timeout, suppress, replace, or relabel the
+availability sample, or prevent the four-second lifecycle phase. It then
+[`ListTasks`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ListTasks.html)
+for the exact recovery cluster and task-definition family and
+[`DescribeTasks`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html)
+for the returned tasks plus every task ARN in the two launch-ledger slots. Only
+the probe identity holding the ledger's unexpired lifecycle claim may issue ECS
+calls or persist results. For an outstanding slot that has a durable client
+token but no task ARN, that owner first finds an exact deterministic `startedBy`
+match in the list/describe result and conditionally persists its ARN without a
+replay. With no match, it may replay the byte-identical `RunTask` request only
+before 3,000 seconds have elapsed from the durable first-attempt timestamp. At
+or after that deadline it issues no `RunTask`, leaves the slot unresolved,
+closes archive admission, and requires audited repair. No new token or
+deployment transition may bypass an outstanding slot. If any non-stopped task
+uses an obsolete task-definition digest, the
+Lambda issues at most one non-retried
+[`StopTask`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_StopTask.html)
+and ends only the lifecycle phase. Subsequent
+probes cannot launch the desired revision until every obsolete task reaches
+`STOPPED`. With no ECS service scheduler and no second launch principal, this
+drain-first rule keeps the combined old and new non-stopped task count at or
+below two; old-revision billing and lease contention therefore remain inside
+the two continuous task slots.
+
+The launch ledger is capped at 2 KiB and holds two slot records, exact request
+parameters, deterministic client tokens and `startedBy` identities, first-
+attempt timestamps, returned task ARNs, an expiring lifecycle claim, and a
+service-wide capacity-two token bucket that refills at
+most one token per 3,600 seconds. An initial empty topology atomically reserves
+both tokens. A signed desired-digest transition may not stop an old task until
+it has also atomically reserved both replacement slot tokens; insufficient
+capacity leaves the old topology running and closes archive admission. Once all
+obsolete tasks are `STOPPED`, the next lifecycle owner submits both pre-reserved
+desired slots concurrently in two independently tokened `RunTask(count=1)`
+calls. A one-minute schedule plus the documented 60-second delivery window and
+the five-second invocation bound put the worst-case successful first-attempt
+two-slot submission and ARN persistence at 125 seconds after the tasks become
+`STOPPED`. An unplanned single-slot loss reserves one token and uses one such
+call; bucket exhaustion leaves the slot missing and closes admission instead of
+creating an unpriced crash loop.
+
+Each invocation attempts one conditional DynamoDB `UpdateItem`. The condition
+requires the signed accounting-window identifier and no unexpired claim; the
+winner stores its probe identity in a five-second lifecycle claim, which outlives
+the four-second lifecycle phase and serializes new launches, uncertain-response
+replays, and result persistence. A launch reservation additionally requires
+fewer than 745 consumed tokens and sufficient bucket capacity, then stores the
+slot sequence, first-attempt timestamp, exact `RunTask` parameters, deterministic
+`clientToken`, and deterministic `startedBy` before any ECS call. The model
+prices two write units for all 93,744 intended,
+duplicate, and shutdown-race probe invocations because the item can occupy 2
+KiB and
+DynamoDB documents that even a
+[failed conditional write consumes write capacity](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html).
+
+Only after that durable update may the Lambda call
+[`RunTask`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html)
+with `count=1` for each slot. A two-slot bootstrap or transition starts both
+independently tokened calls concurrently inside the same lifecycle phase; an
+unplanned single-slot loss starts one. Each call stamps its ledger slot identity
+in `startedBy`. Implicit SDK retries are disabled. After an uncertain response,
+a later serialized owner persists an exact `startedBy` discovery match before
+considering replay. It may replay only the affected slot's stored token and
+byte-identical parameters before the 3,000-second deadline, and must obtain the
+original task ARN before advancing it. AWS documents that the
+[`RunTask` client-token TTL](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_Idempotency.html)
+is the lower of 24 hours and the task lifetime plus one hour; the 3,000-second
+cutoff remains below the shortest one-hour post-creation interval. Once the
+cutoff expires, discovery or audited repair is mandatory and replay is forbidden.
+After every successful or replayed response, the owner performs one claim-,
+slot-, and token-matching conditional update that stores that slot's returned ARN
+before the controller treats the task as present. A concurrent probe cannot own
+the claim; a stale owner cannot satisfy the result condition. The 745 two-unit
+result updates consume 1,490 additional write units.
+The probe role uses wildcard resources only for ECS list/describe actions that
+do not support resource-level permissions, with an exact `ecs:cluster`
+condition. `StopTask` is restricted to ledger-recorded tasks in the exact
+cluster and task family; `RunTask` is restricted to the signed task-definition
+family and exact cluster; `dynamodb:UpdateItem` is restricted to the launch-
+control leading key; and `iam:PassRole` names only the validator execution and
+task roles with `iam:PassedToService=ecs-tasks.amazonaws.com`. AWS documents
+these [cluster and task-family restrictions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-iam-bestpractices.html)
+and the need to
+[name each passed ECS role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/CWE_IAM_role.html).
+The role cannot create or update a service, start an unmanaged task, register a
+task definition, mutate the signed desired digest, or pass any other role. The
+deployment principal can update the signed desired digest but cannot stop or
+launch a task; replacement and deployment launches share this same guard.
+Exhaustion leaves a missing task missing and holds archive admission until a
+replacement worksheet is approved. The two initial bucket tokens plus 743
+hourly refill instants strictly inside the half-open 744-hour accounting window
+reserve at most 745 launches. The instant at hour 744 belongs only to the next
+window, and every token
+pre-reserves the full 60-second
+[Fargate vCPU and memory](https://aws.amazon.com/fargate/pricing/) and
+[public-IPv4](https://aws.amazon.com/vpc/pricing/) billing minimums.
+
+The active task uses two concurrent receive loops with 20-second SQS long polling,
+`MaxNumberOfMessages=10`, and an application token bucket that permits at most
+one aggregate `ReceiveMessage` start per second. Each loop is independent of
+batch processing, starts its next receive no later than one second after its
+prior response, and applies a 21-second HTTP response deadline. Missing that deadline
+or the inter-poll bound closes source archive admission until the recovery
+heartbeat is healthy again. AWS documents the
+[20-second long-poll maximum](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/best-practices-setting-up-long-polling.html),
+[ten-message receive maximum](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ReceiveMessage.html),
+and per-group
+[FIFO ordering](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-understanding-logic.html).
+The token bucket, rather than a managed-poller throughput statement, hard-caps
+polling at 2,678,400 requests in 744 hours. Even when each receive response
+contains only one message, each loop completes a full `1 + 21 + 2 = 24` second
+receive/validation cycle; together they provide five objects per minute, above
+the target four-object rate plus its 10% reserve. Archive admission allows at
+most one/four new objects per minute. A successful attempt deadline spans the receipt
+read through the acknowledged `DeleteMessage`; a missing acknowledgement fails
+the attempt rather than releasing the next same-group member. Within a batch it
+processes each message group in order and stops that group at the first failed
+sequence; messages from other groups remain independent. This preserves a
+contiguous checkpoint even when a batch contains more than one stream. The
+target profile permits one four-object same-stream burst only when that stream's
+ordered outbox is empty. No new object for that stream is admitted until the
+fourth send is acknowledged and its recovery checkpoint is complete; outside
+that burst, consecutive objects on one stream are at least 61 seconds apart,
+strictly slower than the 60-second dispatch service bound. Other streams remain
+independent. SQS may return fewer messages than `MaxNumberOfMessages`, so
+the fourth event cannot assume all four arrive in one receive. It reserves four
+complete one-second inter-poll, 21-second receive-response, and two-second
+validation cycles.
+
+Each attempt first performs a strongly consistent read of the receipt keyed by
+the 32-byte SHA-256 digest of the length-delimited bucket, key, and version ID.
+Before any S3 or KMS call, a three-action transaction
+requires either an absent receipt or the same signed job in pending state after
+its two-second attempt deadline. It creates or takes over the pending receipt
+with a strictly higher attempt generation, reserves the monthly attempt, two S3
+requests, one recovery KMS decrypt, and
+signed expected content length against the 47.0378496/216.7343104 GB body-read
+ledger, and `ConditionCheck`s the separate lease item for the current unexpired
+fencing generation. The task then performs an exact-version `HeadObject`, requires its returned
+`ContentLength` to equal the signed value, and requires
+[`ReplicationStatus=REPLICA`](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-status.html).
+It then performs the exact-version checksum-enabled GET, validates the returned
+S3 checksum, and parses the bounded envelope header to extract the encrypted
+data key before calling KMS `Decrypt`. Success requires GCM authentication, the
+full-body digest, and embedded signature, then atomically commits the receipt and the expected
+next signed stream checkpoint in a three-action transaction whose third action
+is a `ConditionCheck` against the separate lease item. That check requires the
+current generation and an expiry later than the transaction's signed time.
+A timed-out predecessor cannot commit after attempt takeover, and a paused old
+leader cannot reserve resources or commit after lease takeover, while a redelivery can use the next
+retry reservation instead of being blocked by the pending receipt. A rejected
+reservation issues no billable S3 or
+KMS call; a later failure conservatively spends the already-reserved attempt,
+request, KMS, and byte partitions. FIFO order and the fencing lease prevent a
+later sequence from advancing past a missing receipt. With every written item
+capped at 1 KiB, the budget reserves eight write request units per attempt: four
+for the two written reservation items and four for the two written commit items.
+It separately reserves two transactional read units and, conservatively, two
+transactional write units for each of the pre-HEAD and final lease
+`ConditionCheck`s on every attempt. AWS
+documents that
+[a canceled transaction still consumes the underlying write capacity](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html);
+[transactional operations perform two underlying reads or writes per item](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/read-write-operations.html).
+The table is single-region, on-demand, has no secondary indexes or streams, uses
+AWS-owned encryption, and retains at most one 1 KiB application-encoded receipt
+for each retained object version. DynamoDB documents at least
+[100 bytes of per-item storage overhead](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/CapacityUnitCalculations.html)
+and can add transaction metadata, so the worksheet prices a full 2 KiB billed-
+storage envelope per receipt. Qualification reconciles provider-billed storage
+for the complete fixture and fails rather than relying on a smaller overhead.
+After the daily archive sweeper has proved the exact version
+absent from both active archive regions and proved that no signed checkpoint
+references it, an exact conditional delete removes the digest-keyed receipt
+within 24 hours; the condition matches the signed stream, sequence, root,
+expiry, and identity digest from that proof. Because a shifted 31-day expiry interval can intersect
+two adjacent fixed admission windows, the sweep reserves one write per expired
+receipt across two complete envelopes, 74,000/326,000 writes. DynamoDB TTL may
+repeat the expiry timestamp only as defense in depth and is not the storage
+bound. Thirteen retained monthly envelopes plus one day of that two-envelope
+cleanup overlap occupy at most 0.990/4.362 decimal GB
+before bounded counters, fitting 1/4.4 GB-month. Two lease writes every ten
+seconds add 535,680 units, and one source-side heartbeat read per minute adds
+44,640 units. The 2 KiB launch controller additionally reserves two conditional
+write units for every 93,744 probe invocation, including duplicates and the
+shutdown race, plus two units to persist the returned ARN for each of 745
+launches. The no-free-tier caps are therefore 248,140/941,140 reads,
+1,287,058/3,202,258 writes, and 1/4.4 GB-month of storage.
+
+The 37,000/163,000 base attempts have a non-borrowable 3,700/16,300 retry
+partition. Each attempt, including the retry partition, reserves one terminal
+validation-queue delete and one acknowledged quarantine send, producing
+40,700/179,300 of each operation. `maxReceiveCount=1` quarantines an
+unacknowledged delivery after one receive. At most 3,700/16,300 signed DLQ jobs
+may consume the retry partition: the reconciliation role receives one, sends it
+back to the exact validation FIFO queue with the same stream group and a
+generation-specific deterministic deduplication identity, and deletes the DLQ
+copy only after `SendMessage` acknowledgement. Separate 370/1,630 partitions
+cover empty or explicitly retried DLQ receives and uncertain redrive sends. SQS
+suppresses a repeated deduplication identity only during its five-minute
+interval, so the first-send timestamp is durable and an uncertain source or
+redrive retry must finish, including acknowledgement, within 240 seconds. Once
+that deadline passes, the dispatcher issues no second send, preserves the
+outbox or DLQ copy, and keeps archive admission closed for audited repair.
+Implicit SDK retries are zero. Work beyond the repair partition remains durable
+in the DLQ while archive admission stays closed. Exhausting any
+attempt, byte, KMS, queue, or state partition
+closes archive admission before the next S3 or KMS call. The executor produces
+81,400/358,600 HEAD-plus-GET requests. The 3,700/16,300 source-send retry
+partition plus validation deletes, 40,700/179,300 quarantine sends, and
+11,840/52,160 repair-before-delete DLQ operations raises queue message
+operations to 133,940/590,060. Adding the
+application-capped validation-queue receives yields 2,812,340/3,268,460
+FIFO request units. Two continuous task slots plus 745 one-minute launch
+reserves consume 375.104167 vCPU-hours, 750.208333 GB-hours, and
+1,500.416667 public-IPv4 hours
+per profile. Each attempt is capped at two seconds, logs at
+20 KB, and the service/lease path at another 10 MB, producing 0.824/3.596 GB of
+ingestion. Thirty-day retention prices two boundary-concentrated envelopes, or
+1.648/7.192 GB-month. Before each HEAD, the signed `ContentLength` reservation
+enforces the 47.0378496/216.7343104 GB same-region body-read ceiling. It contains
+the complete 16/80 GB baseline ingress plus every 3,700/16,300 retry
+concentrated at the 8 MiB maximum object size. Each baseline or retry send has
+an 8 KiB complete-wire cap, so the retry-inclusive cross-region envelope is
+0.3334144/1.4688256 GB
+of cross-region transfer inside the existing 20/100 GB private-node other-
+service NAT partition. The worst split-delivery path is
+`4 * 60 + 300 + 4 * (1 + 21 + 2) = 636` seconds: four ordered acknowledged
+sends, queue delay, and one
+complete inter-poll, receive-response, validation, final transaction, and
+successful `DeleteMessage` acknowledgement cycle for each member of the four-object
+same-stream burst. It therefore completes no later than 636 seconds after source
+commit.
+This is the successful first-attempt bound, not an AWS availability guarantee;
+a miss or retry makes the interval unavailable and holds new archive admission.
+Missing or stale outbox, lease heartbeat, queue, receipt, byte ledger, or
+checkpoint state does the same.
 
 At 1,000 records per object plus no more than 4,464 timer flushes per stream,
 the fixed non-audit workload requires at most 14,521 and 54,362 objects. Audit
@@ -1009,18 +1510,28 @@ expansion, and encryption, so at most 500 maximum-size 16 KiB records share an
 object. Including timer flushes, audit requires at most 22,464 and 108,464
 objects. The combined worst cases are therefore 36,985 and 162,826, fitting
 monthly caps of 37,000 and 163,000. Each profile budgets three S3 tier-1 requests
-and four KMS requests per monthly object across primary write, recovery
-replication, retries, manifest/list work, and validation.
+and two base KMS requests per monthly object: one primary `GenerateDataKey` and
+one recovery validation `Decrypt`. S3 and CRR operate only on client-encrypted
+ciphertext under SSE-S3, so provider-managed work cannot consume the KMS ledger.
+Automatic SDK retries are disabled for the writer, outbox dispatcher, and
+validator S3, KMS, SQS, and DynamoDB clients. Every retry must first consume its
+explicit operation or attempt reservation. Equal 3,700/16,300 writer and validator retry partitions
+form the non-borrowable 10% reserve, raise the hard bounds to 81,400/358,600 KMS
+requests, and stop admission before another KMS call when exhausted.
 
 The developer profile reserves 0.1 GB and 100,000 records for audit plus 0.3 GB
 and 750,000 records for compact non-audit evidence. Dense packing needs at most
 200 and 750 objects respectively; adding one 4,464-object timer-flush allowance
 for each of the two streams yields 9,878 objects inside its 10,000-object local
-cap. Its 30,000 request and 40,000 envelope-operation counters preserve the same
-three/four-per-object qualification contract without creating cloud charges.
+cap. Its 30,000 request and 22,000 envelope-operation counters preserve the same
+three/two-per-object qualification contract plus a 10% retry reserve without
+creating cloud charges.
 
 Thirteen retained envelopes contain at most 481,000/2,119,000 objects per
-region. Live CRR handles every new version into the active recovery generation.
+region. The verifier pins normal archive ingress to 16/80 GB per month, derives
+both regional 13-month storage rows as `13 * ingress`, and derives normal CRR
+transfer as `1 * ingress`; none can drift independently. Live CRR handles every
+new version into the active recovery generation.
 A full reseed leaves that generation and its verified checkpoint intact while
 one S3 Batch Replication job copies retained versions into a fresh versioned
 candidate bucket through a temporary exact-prefix replication rule. The
@@ -1038,9 +1549,9 @@ independently authenticates every destination body as described above.
 The reseed reserves at least 10% headroom shared by bounded retries and the live
 candidate tail, rounding the small allowance up: 530,000/2,331,000 S3 Batch
 object operations, source GETs, destination PUTs, and destination validation
-GETs; 2,120,000/9,324,000 KMS operations for source decrypt, destination
-encrypt, and validation `GenerateDataKey` plus decrypt; and 229/1,144 GB
-cross-region transfer.
+GETs; 530,000/2,331,000 KMS decrypts for client-envelope validation; and
+229/1,144 GB cross-region transfer. S3 Batch Replication copies SSE-S3-wrapped
+client ciphertext and therefore performs no KMS operation.
 Same-region validation reads at most the same 229/1,144 GB through an S3 gateway
 endpoint, so they add neither cross-region transfer nor NAT processing.
 Manifest generation scans
@@ -1068,9 +1579,15 @@ S3 replication configuration exposes one bucket-level
 for all rules. That role is trusted only by `s3.amazonaws.com` and normally has
 only source version-for-replication reads, active-destination replication
 actions, `s3:GetObjectRetention` and `s3:GetObjectLegalHold` on the source
-archive prefix, and KMS decrypt/encrypt on the exact archive prefixes and keys.
-Before the temporary candidate rule is enabled, declarative infrastructure adds only
-the candidate bucket/prefix and candidate-key statements. Abort removes those
+archive prefix. It has no KMS permission because both buckets require SSE-S3
+around the client-encrypted ciphertext.
+The primary archive-writer role receives `kms:GenerateDataKey` but not
+`kms:Decrypt` on the primary member of the exact archive multi-Region key, plus
+the already bounded versioned-write actions on its date prefix. Bucket defaults
+require SSE-S3, and bucket policy requires TLS and denies any explicitly
+requested server-side encryption mode other than `AES256` for archive data.
+Before the temporary candidate rule is enabled, declarative infrastructure adds
+only the candidate bucket/prefix statements. Abort removes those
 changes and verifies the prior signed baseline is restored. Promotion signs the
 candidate rule and statements as the new baseline before removing the former
 active rule and grants; the final configuration and policy must match that new
@@ -1078,9 +1595,49 @@ baseline. The Batch Operations role is separately trusted only by
 `batchoperations.s3.amazonaws.com`. It receives `s3:InitiateReplication` on
 source archive versions, replication-configuration and inventory reads, plus
 `s3:GetObject`, `s3:GetObjectVersion`, and `s3:PutObject` only on the exact
-recovery-control manifest prefix. A separate validator role receives only
+recovery-control manifest prefix. The live-validator task role receives only
+`sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`, and
+`sqs:GetQueueAttributes` on the exact validation FIFO queue plus
+`sqs:SendMessage` on the exact dead-letter queue; it has no receive, delete, or
+visibility permission on the dead-letter queue. It receives
+`s3:GetObjectVersion` and `s3:GetObjectRetention` on the exact active recovery
+prefix; `kms:Decrypt` on the recovery member of the archive multi-Region key; and
+`dynamodb:GetItem`, `dynamodb:UpdateItem`, and
+`dynamodb:TransactWriteItems` on the exact state table. The separate task
+execution role can pull only the digest-pinned validator image and write only
+the exact bounded log group. Both queues use SQS-managed server-side encryption
+and deny non-TLS access. Explicit quarantine sends, retry reservations, and
+bounded `maxReceiveCount` move failed work to the dead-letter queue, page, and
+hold archive admission until reconciliation. The primary outbox dispatcher
+receives only `sqs:SendMessage` on the exact validation queue and
+`dynamodb:GetItem` on the exact recovery heartbeat item; the queue resource
+policy admits only that role. A separate reconciliation role receives and
+deletes on the exact dead-letter queue and sends only to the exact validation
+FIFO queue; SQS-managed encryption requires no KMS grant. It authenticates the
+signed job, preserves `MessageGroupId`, derives a deterministic deduplication ID
+from the complete object identity and repair generation, and disables implicit
+SDK retries. It records the first-send timestamp; a failed or uncertain redrive
+send may be retried only if acknowledgement completes within 240 seconds of that
+attempt, safely inside SQS FIFO's documented
+[five-minute deduplication interval](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html).
+Afterward it leaves the DLQ receipt undeleted and issues no second send. Its
+3,700/16,300 job cap, 370/1,630 receive-retry partition, and
+370/1,630 redrive-send retry partition consume at most 11,840/52,160 requests;
+exhaustion preserves the DLQ copy and keeps archive admission closed. A separate
+receipt-cleanup role receives only
+`dynamodb:DeleteItem` on the exact state table, constrained to the validation-
+receipt leading-key namespace. Its session requires the signed daily sweep proof
+that both exact archive versions are absent and the current signed checkpoint
+has advanced beyond the receipt. Each conditional delete matches the exact
+identity digest, stream sequence, root, and expiry from that proof. The
+role cannot read, update, transact, or touch lease and accounting items. The
+validator role cannot list a bucket, write or
+delete an object, receive or delete a dead-letter message, send to the
+validation queue, alter retention, change ECS desired count, or assume the
+Batch role. A separate Batch
+validator role receives only
 `s3:GetObjectVersion` and `s3:GetObjectRetention` on the exact candidate prefix
-and `kms:GenerateDataKey` plus `kms:Decrypt` on the candidate key. A cleanup role receives
+and `kms:Decrypt` on the recovery member of the archive multi-Region key. A cleanup role receives
 `s3:ListBucketVersions` with the exact-prefix condition,
 `s3:DeleteObjectVersion`, `s3:BypassGovernanceRetention` on that prefix, and
 `s3:DeleteBucket` only for the tagged candidate or retired bucket. Its session
@@ -1104,20 +1661,23 @@ requires it. Any increase requires a security, storage, and monthly-cost review.
 ## Monthly cost boundary
 
 The reproducible worksheet is in
-[`cost-model/`](cost-model/README.md). Its checked-in 2026-08-31 price snapshot
-uses a hard 744-hour month, on-demand public rates, `us-east-1` primary
-resources, and `us-west-2` recovery storage.
+[`cost-model/`](cost-model/README.md). Its checked-in immutable offers were
+retrieved through 2026-09-08 and use a hard 744-hour month, on-demand public
+rates, `us-east-1` primary resources, and `us-west-2` recovery storage.
 
 | Profile | Reference estimate/month | Accepted ceiling/month | Headroom |
 | --- | ---: | ---: | ---: |
 | Developer | USD 0.00 cloud infrastructure | USD 0.00 | USD 0.00 |
-| Small production | USD 938.91 | USD 1,000.00 | USD 61.09 |
-| Target-scale qualification | USD 2,648.53 | USD 2,650.00 | USD 1.47 |
+| Small production | USD 986.71 | USD 1,000.00 | USD 13.29 |
+| Target-scale qualification | USD 2,820.37 | USD 2,850.00 | USD 29.63 |
 
-The target reference leaves only the narrow headroom reported above after
-conservatively pricing all retained backup data, the external synthetic, and
-request allowances. No additional recurring target resource may be added
-without reducing another input or approving a replacement ADR.
+The target ceiling is USD 2,850 so the ALB's separate provider-enforced 64 KiB
+header and 16 KiB request-line envelopes and durable live archive validator are priced instead of hidden in
+prior headroom.
+The reference leaves only the reported headroom after conservatively pricing all
+retained backup data, the external synthetic, and request allowances. No
+additional recurring target resource may be added without reducing another
+input or approving a replacement ADR.
 
 These figures cover the Veer control plane only. They exclude taxes, support,
 discount programs, CI minutes, developer workstations, domain registration,
@@ -1201,14 +1761,31 @@ the exercise continues.
 - Directional cross-AZ bytes are measured without netting against the
   200/2,000 GB monthly caps and their queue, database/service, and failure
   reserves. The 80% alert and 90% admission guard preserve recovery headroom.
+- Every fixed-envelope request is accounted at the ALB's separate native 64 KiB
+  entire-request-header and 16 KiB request-line limits. The resulting processed-
+  byte dimension prices 7/34 LCUs without depending on a target-side rejection. The response path
+  separately reserves exact encoded bytes against 150/690 GB durable monthly
+  ledgers, so a changed response mix cannot exceed the 195/995 GB internet-
+  egress caps.
+- Normal archive KMS accounting reserves 10% beyond the two application-
+  controlled client-envelope operations per object; native S3 work performs no
+  KMS calls. A two-task, single-fenced-leader recovery validator has explicit
+  attempt, Fargate, IPv4, FIFO-request, cross-region message-wire, exact-version
+  HEAD-plus-GET, body-byte-ledger, log-ingestion/storage, receipt reclamation,
+  IAM, attempt-and-lease fencing, ordering, and 636-second split-delivery
+  source-to-completion bounds; it cannot borrow from full-reseed
+  allowances.
 - The recovery-region synthetic's intended, duplicate, and shutdown delivery
   partitions, Lambda invocations and duration, log/output bytes, single
-  artifact attempt, and retention are hard limits. Scheduler and Lambda retries
-  are disabled; duplicate immutable schedule identities exit after the
-  idempotent write and before read, result metric, or artifact work. Duplicate
-  exhaustion deletes only the exact schedule and reserves 10% for shutdown
-  races. Missing runs page operators and count as failed availability intervals
-  so a broken monitor cannot hide a regional outage.
+  artifact attempt, and retention are hard limits. Scheduler invokes Lambda
+  synchronously and disables target retries; duplicate immutable schedule
+  identities exit after the
+  idempotent write and before read, result metric, or artifact work. Every
+  identity belongs to one accounting-window group; duplicate exhaustion deletes
+  that complete group and reserves 10% for in-flight and eventual-deletion
+  races. EMF publication or missing-signal recognition is explicitly inside the
+  inclusive 240-second detection path. Missing runs page operators and count as failed
+  availability intervals so a broken monitor cannot hide a regional outage.
 - A production profile uses one NAT path per active Availability Zone to avoid
   a cross-zone egress dependency. Developer deployments use no managed NAT.
 - Queue consumers use long polling and batching where correctness permits.

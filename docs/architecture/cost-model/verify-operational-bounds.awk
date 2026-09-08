@@ -1,0 +1,683 @@
+BEGIN {
+    FS = "\t"
+    error_count = 0
+}
+
+function fail(message) {
+    print "operational-bounds: " message > "/dev/stderr"
+    error_count++
+}
+
+function is_amount(value) {
+    return value ~ /^[0-9]+([.][0-9]+)?$/
+}
+
+function bound(scope, metric, key) {
+    key = scope SUBSEP metric
+    if (!(key in bounds)) {
+        fail("missing " scope "/" metric)
+        return 0
+    }
+    return bounds[key]
+}
+
+function input(profile, item, key) {
+    key = profile SUBSEP item
+    if (!(key in inputs)) {
+        fail("missing cost input " profile "/" item)
+        return 0
+    }
+    return inputs[key]
+}
+
+function differs(left, right) {
+    return (left - right > 0.000001 || right - left > 0.000001)
+}
+
+function ceil(value) {
+    return value == int(value) ? value : int(value) + 1
+}
+
+FILENAME == ARGV[1] {
+    if (FNR == 1) {
+        if ($0 != "scope\tmetric\tvalue\tunit\tnote") {
+            fail("unexpected operational bounds header")
+        }
+        next
+    }
+    if (NF != 5) {
+        fail("operational bound row must contain five tab-separated fields")
+        next
+    }
+    key = $1 SUBSEP $2
+    if (key in bounds) {
+        fail("duplicate operational bound " $1 "/" $2)
+    }
+    if (!is_amount($3)) {
+        fail("operational bound value must be a non-negative decimal")
+    }
+    bounds[key] = $3 + 0
+    next
+}
+
+FILENAME == ARGV[2] {
+    if (FNR == 1) {
+        if ($0 != "profile\titem\tcategory\tquantity\tunit\tunit_rate_usd\tsource_id\tnote") {
+            fail("unexpected cost inputs header")
+        }
+        next
+    }
+    if (NF != 8) {
+        fail("cost input row must contain eight tab-separated fields")
+        next
+    }
+    inputs[$1 SUBSEP $2] = $4 + 0
+    next
+}
+
+{
+    fail("unexpected verifier input " FILENAME)
+}
+
+END {
+    profiles[1] = "small"
+    profiles[2] = "target"
+
+    intended = bound("shared", "probe_schedule_identities")
+    duplicate = bound("shared", "probe_duplicate_attempts")
+    shutdown = bound("shared", "probe_shutdown_attempts")
+    if (intended != 744 * 60) {
+        fail("probe schedule must contain one identity per minute in a 744-hour month")
+    }
+    if (intended != int(intended) || duplicate != int(duplicate) || shutdown != int(shutdown)) {
+        fail("probe intended, duplicate, and shutdown attempt counts must be integers")
+    }
+    if (duplicate != intended) {
+        fail("probe duplicate reserve must equal one attempt per schedule identity")
+    }
+    if (shutdown != intended / 10) {
+        fail("probe shutdown reserve must equal 10 percent of schedule identities")
+    }
+    if (bound("shared", "probe_synchronous_lambda_invoke") != 1) {
+        fail("probe Scheduler target must invoke Lambda synchronously")
+    }
+    if (bound("shared", "probe_scheduler_universal_invoke_target") != 1) {
+        fail("probe Scheduler must use the universal Lambda Invoke target")
+    }
+    if (bound("shared", "probe_scheduler_invocation_type_request_response") != 1) {
+        fail("probe Scheduler Lambda Invoke must use RequestResponse")
+    }
+    if (bound("shared", "probe_scheduler_maximum_retry_attempts") != 0) {
+        fail("probe Scheduler target retries must be disabled")
+    }
+    if (bound("shared", "probe_scheduler_maximum_event_age_seconds") != 60) {
+        fail("probe Scheduler maximum event age must equal 60 seconds")
+    }
+    if (bound("shared", "probe_api_before_launch_control") != 1) {
+        fail("probe must record the API synthetic before validator lifecycle control")
+    }
+    probe_api_deadline_seconds = bound("shared", "probe_api_deadline_seconds")
+    probe_lifecycle_reserve_seconds = bound("shared", "probe_lifecycle_reserve_seconds")
+    if (probe_api_deadline_seconds != 1 || probe_lifecycle_reserve_seconds != 4 || \
+        probe_api_deadline_seconds + probe_lifecycle_reserve_seconds != \
+        bound("shared", "probe_timeout_seconds")) {
+        fail("probe must reserve one second for the API result and four seconds for lifecycle control")
+    }
+    total_probe_attempts = intended + duplicate + shutdown
+    probe_api_requests = intended * 2 + duplicate + shutdown
+    if (bound("shared", "probe_api_requests") != probe_api_requests) {
+        fail("probe API request budget must include intended, duplicate, and shutdown writes")
+    }
+    if (bound("shared", "probe_api_sdk_retries") != 0) {
+        fail("probe API clients must disable implicit SDK retries")
+    }
+    if (bound("shared", "probe_short_response_bytes") != 2048) {
+        fail("probe short-response envelope must equal 2048 bytes")
+    }
+    delete_coverage = bound("shared", "probe_group_delete_coverage")
+    if (delete_coverage < intended) {
+        fail("probe group deletion does not cover every schedule identity")
+    }
+
+    if (bound("shared", "probe_second_schedule_start_seconds") != 120) {
+        fail("probe second schedule start must equal 120 seconds")
+    }
+    if (bound("shared", "scheduler_delivery_delay_seconds") != 60) {
+        fail("Scheduler delivery delay must reserve the full 60-second precision window")
+    }
+    if (bound("shared", "probe_timeout_seconds") != 5) {
+        fail("probe timeout must equal 5 seconds")
+    }
+    if (bound("shared", "emf_publish_extract_seconds") != 5) {
+        fail("EMF publish and extraction budget must equal 5 seconds")
+    }
+    if (bound("shared", "alarm_evaluation_seconds") != 10) {
+        fail("alarm evaluation budget must equal 10 seconds")
+    }
+    if (bound("shared", "pager_receipt_seconds") != 40) {
+        fail("pager receipt budget must equal 40 seconds")
+    }
+    detection_seconds = \
+        bound("shared", "probe_second_schedule_start_seconds") + \
+        bound("shared", "scheduler_delivery_delay_seconds") + \
+        bound("shared", "probe_timeout_seconds") + \
+        bound("shared", "emf_publish_extract_seconds") + \
+        bound("shared", "alarm_evaluation_seconds") + \
+        bound("shared", "pager_receipt_seconds")
+    detection_objective = bound("shared", "regional_detection_objective_seconds")
+    if (detection_objective != 240) {
+        fail("regional detection objective must equal 240 seconds")
+    }
+    if (detection_seconds > 240) {
+        fail("regional detection budget must not exceed 240 seconds")
+    }
+
+    if (bound("shared", "live_archive_validator_task_count") != 2 || \
+        bound("shared", "live_archive_validator_active_leaders") != 1) {
+        fail("live archive validator must have two tasks and exactly one fenced leader")
+    }
+    if (bound("shared", "live_archive_validator_ecs_service_scheduler") != 0 || \
+        bound("shared", "live_archive_validator_probe_launch_controller") != 1) {
+        fail("live archive validator must use probe-controlled standalone tasks")
+    }
+    if (bound("shared", "live_archive_validator_stop_obsolete_before_launch") != 1 || \
+        bound("shared", "live_archive_validator_max_stop_tasks_per_probe") != 1 || \
+        bound("shared", "live_archive_validator_stop_task_sdk_retries") != 0) {
+        fail("live archive validator must drain obsolete tasks without overlap or implicit retry")
+    }
+    if (bound("shared", "live_archive_validator_run_task_count") != 1 || \
+        bound("shared", "live_archive_validator_two_slot_run_task_calls") != 2 || \
+        bound("shared", "live_archive_validator_single_slot_run_task_calls") != 1 || \
+        bound("shared", "live_archive_validator_run_task_client_token") != 1) {
+        fail("live archive validator must use independent idempotent RunTask requests for each one-slot or two-slot fill")
+    }
+    client_token_min_ttl_seconds = bound("shared", "live_archive_validator_run_task_client_token_min_ttl_seconds")
+    replay_deadline_seconds = bound("shared", "live_archive_validator_run_task_replay_deadline_seconds")
+    if (bound("shared", "live_archive_validator_run_task_started_by") != 1 || \
+        bound("shared", "live_archive_validator_run_task_discovery_before_replay") != 1 || \
+        client_token_min_ttl_seconds != 3600 || replay_deadline_seconds != 3000 || \
+        replay_deadline_seconds >= client_token_min_ttl_seconds) {
+        fail("live archive validator must reconcile startedBy before replay and stop before the shortest client-token lifetime")
+    }
+    if (bound("shared", "live_archive_validator_run_task_sdk_retries") != 0) {
+        fail("live archive validator must retry RunTask only through its durable client token")
+    }
+    if (bound("shared", "live_archive_validator_run_task_response_arn_persisted") != 1 || \
+        bound("shared", "live_archive_validator_two_slot_calls_parallel") != 1) {
+        fail("live archive validator must concurrently launch and independently persist both reserved slots")
+    }
+    if (bound("shared", "live_archive_validator_probe_ecs_list_tasks") != 1 || \
+        bound("shared", "live_archive_validator_probe_ecs_describe_tasks") != 1 || \
+        bound("shared", "live_archive_validator_probe_ecs_stop_task") != 1 || \
+        bound("shared", "live_archive_validator_probe_ecs_run_task") != 1 || \
+        bound("shared", "live_archive_validator_probe_ecs_other_actions") != 0 || \
+        bound("shared", "live_archive_validator_probe_ecs_cluster_condition") != 1 || \
+        bound("shared", "live_archive_validator_probe_ecs_task_family_condition") != 1 || \
+        bound("shared", "live_archive_validator_probe_dynamodb_update_item") != 1 || \
+        bound("shared", "live_archive_validator_probe_dynamodb_other_actions") != 0 || \
+        bound("shared", "live_archive_validator_probe_launch_leading_key") != 1 || \
+        bound("shared", "live_archive_validator_probe_pass_execution_role") != 1 || \
+        bound("shared", "live_archive_validator_probe_pass_task_role") != 1 || \
+        bound("shared", "live_archive_validator_probe_pass_other_roles") != 0 || \
+        bound("shared", "live_archive_validator_probe_passed_to_ecs") != 1) {
+        fail("live archive validator probe role must have the exact guarded launch permissions")
+    }
+    launch_ledger_item_bytes = bound("shared", "live_archive_validator_launch_ledger_item_bytes")
+    if (launch_ledger_item_bytes != 2048) {
+        fail("live archive validator launch ledger must fit two DynamoDB write request units")
+    }
+    lifecycle_claim_seconds = bound("shared", "live_archive_validator_launch_control_claim_seconds")
+    if (bound("shared", "live_archive_validator_restart_guard") != 1 || \
+        bound("shared", "live_archive_validator_launch_control_serialized") != 1 || \
+        lifecycle_claim_seconds != 5 || \
+        lifecycle_claim_seconds <= probe_lifecycle_reserve_seconds) {
+        fail("live archive validator replacement and replay must use one serialized expiring lifecycle claim")
+    }
+    launch_bucket_capacity = bound("shared", "live_archive_validator_launch_bucket_capacity")
+    launch_refill_seconds = bound("shared", "live_archive_validator_launch_token_refill_seconds")
+    launch_window_end_exclusive = bound("shared", "live_archive_validator_launch_window_end_exclusive")
+    launches = bound("shared", "live_archive_validator_launches_month")
+    topology_fill_seconds = bound("shared", "live_archive_validator_topology_fill_seconds")
+    restart_minimum_seconds = bound("shared", "live_archive_validator_restart_minimum_billing_seconds")
+    if (launch_bucket_capacity != 2 || launch_refill_seconds != 3600 || \
+        launch_window_end_exclusive != 1 || \
+        launches != launch_bucket_capacity + int((744 * 3600 - 1) / launch_refill_seconds)) {
+        fail("live archive validator launch reserve must use two initial tokens plus only refills strictly inside the window")
+    }
+    control_schedule_seconds = bound("shared", "live_archive_validator_control_schedule_seconds")
+    if (control_schedule_seconds != 60 || \
+        topology_fill_seconds != control_schedule_seconds + \
+        bound("shared", "scheduler_delivery_delay_seconds") + \
+        bound("shared", "probe_timeout_seconds")) {
+        fail("live archive validator topology fill must include schedule period delivery jitter and one invocation")
+    }
+    if (restart_minimum_seconds != 60) {
+        fail("live archive validator replacement must reserve the 60-second billing minimum")
+    }
+    if (bound("shared", "live_archive_validator_fifo_enabled") != 1 || \
+        bound("shared", "live_archive_validator_receipt_key_components") != 3) {
+        fail("live archive validator must preserve FIFO order and use the complete object identity")
+    }
+    if (bound("shared", "live_archive_validator_receipt_identity_digest_bytes") != 32) {
+        fail("live archive validator receipt identity digest must equal 32 bytes")
+    }
+    if (bound("shared", "live_archive_validator_receipt_identity_sha256") != 1) {
+        fail("live archive validator receipt identity must use SHA-256")
+    }
+    if (bound("shared", "live_archive_validator_batch_size") != 10) {
+        fail("live archive validator FIFO batch size must equal ten")
+    }
+    if (bound("shared", "live_archive_validator_signed_content_length") != 1) {
+        fail("live archive validator job must sign the expected content length")
+    }
+    if (bound("shared", "live_archive_validator_pre_head_reservation") != 1) {
+        fail("live archive validator must reserve billable budgets before HEAD")
+    }
+    if (bound("shared", "live_archive_validator_pending_takeover") != 1) {
+        fail("live archive validator must fence takeover of expired pending receipts")
+    }
+    if (bound("shared", "live_archive_validator_final_lease_fence") != 1) {
+        fail("live archive validator final transaction must check the live lease generation")
+    }
+    if (bound("shared", "live_archive_validator_sdk_retries") != 0) {
+        fail("live archive validator must disable implicit SDK retries")
+    }
+    if (bound("shared", "live_archive_validator_dlq_sdk_retries") != 0) {
+        fail("live archive validator DLQ reconciliation must disable implicit SDK retries")
+    }
+    if (bound("shared", "live_archive_validator_max_receive_count") != 1) {
+        fail("live archive validator must quarantine an unacknowledged delivery after one receive")
+    }
+    if (bound("shared", "live_archive_validator_dlq_repair_before_delete") != 1 || \
+        bound("shared", "live_archive_validator_dlq_send_validation_permission") != 1) {
+        fail("live archive validator DLQ reconciliation must acknowledge redrive before delete")
+    }
+    fifo_dedup_seconds = bound("shared", "live_archive_validator_fifo_dedup_seconds")
+    uncertain_send_retry_seconds = bound("shared", "live_archive_validator_uncertain_send_retry_seconds")
+    if (fifo_dedup_seconds != 300 || uncertain_send_retry_seconds != 240 || \
+        uncertain_send_retry_seconds >= fifo_dedup_seconds) {
+        fail("live archive validator uncertain FIFO sends must finish retry before the five-minute deduplication interval")
+    }
+    if (bound("shared", "live_archive_validator_attempt_includes_delete_ack") != 1) {
+        fail("live archive validator attempt deadline must include DeleteMessage acknowledgement")
+    }
+    if (bound("shared", "live_archive_validator_receipt_cleanup_enabled") != 1) {
+        fail("live archive validator must deterministically reclaim expired receipts")
+    }
+    if (bound("shared", "live_archive_validator_receipt_cleanup_seconds") != 86400) {
+        fail("live archive validator receipt cleanup must complete within 24 hours")
+    }
+    receipt_encoded_bytes = bound("shared", "live_archive_validator_receipt_encoded_bytes")
+    item_storage_overhead_bytes = bound("shared", "dynamodb_base_item_storage_overhead_bytes")
+    receipt_storage_envelope_bytes = bound("shared", "live_archive_validator_receipt_storage_envelope_bytes")
+    if (receipt_encoded_bytes != 1024) {
+        fail("live archive validator receipt encoding must remain capped at 1024 bytes")
+    }
+    if (item_storage_overhead_bytes != 100) {
+        fail("DynamoDB base item storage overhead must equal 100 bytes")
+    }
+    if (receipt_storage_envelope_bytes != 2048 || \
+        receipt_encoded_bytes + item_storage_overhead_bytes > receipt_storage_envelope_bytes) {
+        fail("live archive validator receipt storage must reserve a 2048-byte billed envelope")
+    }
+    polls_per_second = bound("shared", "live_archive_validator_polls_per_second")
+    if (polls_per_second != 1) {
+        fail("live archive validator must permit exactly one poll start per second")
+    }
+    receive_loop_count = bound("shared", "live_archive_validator_receive_loop_count")
+    if (receive_loop_count != 2) {
+        fail("live archive validator must run exactly two concurrent receive loops")
+    }
+    if (bound("shared", "live_archive_validator_max_inter_poll_seconds") != 1) {
+        fail("live archive validator maximum inter-poll gap must equal one second")
+    }
+    if (bound("shared", "live_archive_validator_long_poll_seconds") != 20) {
+        fail("live archive validator long-poll wait must equal 20 seconds")
+    }
+    if (bound("shared", "live_archive_validator_receive_response_seconds") != 21) {
+        fail("live archive validator receive-response deadline must equal 21 seconds")
+    }
+    if (bound("shared", "live_archive_validator_lease_renew_seconds") != 10 || \
+        bound("shared", "live_archive_validator_lease_seconds") != 30) {
+        fail("live archive validator lease and renewal must equal 30 and 10 seconds")
+    }
+
+    for (profile_index = 1; profile_index <= 2; profile_index++) {
+        profile = profiles[profile_index]
+        generated_api_requests = bound(profile, "generated_api_requests_month")
+        expected_generated_api_requests = profile == "small" ? 23346720 : 117090720
+        if (generated_api_requests != expected_generated_api_requests) {
+            fail(profile " generated API workload differs from the fixed schedule")
+        }
+        if (bound(profile, "api_requests_month") != generated_api_requests + probe_api_requests) {
+            fail(profile " API envelope omits intended, duplicate, or shutdown probe calls")
+        }
+        request_rate = bound(profile, "api_requests_per_second")
+        native_headers = bound(profile, "alb_native_request_header_bytes")
+        accounted_headers = bound(profile, "alb_accounted_request_header_bytes")
+        native_request_line = bound(profile, "alb_native_request_line_bytes")
+        accounted_request_line = bound(profile, "alb_accounted_request_line_bytes")
+        if (native_headers != 65536) {
+            fail(profile " native ALB request-header bound must equal 65536 bytes")
+        }
+        if (accounted_headers != native_headers) {
+            fail(profile " ALB header accounting must equal native header bound")
+        }
+        if (native_request_line != 16384) {
+            fail(profile " native ALB request-line bound must equal 16384 bytes")
+        }
+        if (accounted_request_line != native_request_line) {
+            fail(profile " ALB request-line accounting must equal native request-line bound")
+        }
+        non_header_processed = bound(profile, "alb_non_request_header_processed_bytes_hour")
+        processed = non_header_processed + \
+            (accounted_headers + accounted_request_line) * request_rate * 3600
+        if (differs(processed, bound(profile, "alb_processed_bytes_hour"))) {
+            fail(profile " ALB processed-byte cap omits native-limit request headers or request lines")
+        }
+        lcus = bound(profile, "alb_lcus")
+        if (lcus != ceil(processed / 1000000000)) {
+            fail(profile " ALB LCU bound must equal the processed-byte ceiling")
+        }
+        if (input(profile, "load_balancer_capacity") != lcus * 744) {
+            fail(profile " ALB LCU-hour quantity is inconsistent with the operational cap")
+        }
+
+        fixed_response_base = bound(profile, "fixed_response_egress_base_bytes")
+        expected_fixed_response_base = profile == "small" ? 137700000000 : 688520000000
+        if (fixed_response_base != expected_fixed_response_base) {
+            fail(profile " base fixed-response workload differs from the fixed schedule")
+        }
+        fixed_response = bound(profile, "fixed_response_egress_bytes")
+        if (fixed_response != fixed_response_base + \
+            (duplicate + shutdown) * bound("shared", "probe_short_response_bytes")) {
+            fail(profile " fixed response envelope omits duplicate or shutdown probe responses")
+        }
+        response = bound(profile, "response_egress_month_bytes")
+        handshake = bound(profile, "handshake_egress_month_bytes")
+        provider = bound(profile, "provider_egress_month_bytes")
+        internet = bound(profile, "internet_egress_month_bytes")
+        expected_response = profile == "small" ? 150000000000 : 690000000000
+        expected_handshake = profile == "small" ? 14000000000 : 70000000000
+        expected_provider = profile == "small" ? 27880000000 : 233130000000
+        if (response != expected_response) {
+            fail(profile " response egress ledger must equal its documented fixed cap")
+        }
+        if (handshake != expected_handshake) {
+            fail(profile " handshake egress ledger must equal its documented fixed cap")
+        }
+        if (provider != expected_provider) {
+            fail(profile " provider-request egress ledger must equal its documented fixed cap")
+        }
+        if (fixed_response > response) {
+            fail(profile " fixed response workload exceeds its durable egress ledger")
+        }
+        if (response + handshake + provider > internet) {
+            fail(profile " response, handshake, and provider egress exceed internet egress")
+        }
+        if (differs(input(profile, "internet_egress") * 1000000000, internet)) {
+            fail(profile " billable internet egress row is inconsistent with the operational cap")
+        }
+
+        objects = bound(profile, "archive_objects_month")
+        kms_per_object = bound(profile, "archive_kms_base_requests_per_object")
+        if (kms_per_object != 2) {
+            fail(profile " normal archive KMS base must contain exactly two application-controlled requests per object")
+        }
+        kms_base = objects * kms_per_object
+        kms_retry = bound(profile, "archive_kms_retry_requests")
+        kms_total = bound(profile, "archive_kms_total_requests")
+        if (kms_retry != kms_base / 10) {
+            fail(profile " normal archive KMS retry reserve must equal 10 percent")
+        }
+        if (kms_total != kms_base + kms_retry) {
+            fail(profile " normal archive KMS request partitions do not sum to the total")
+        }
+        if (input(profile, "archive_kms_requests") != kms_total) {
+            fail(profile " priced archive KMS requests differ from the operational total")
+        }
+
+        validator_attempts = bound(profile, "live_archive_validator_attempts")
+        validator_retries = bound(profile, "live_archive_validator_retry_attempts")
+        if (validator_attempts < objects + objects / 10) {
+            fail(profile " live archive validator lacks 10 percent attempt reserve")
+        }
+        if (validator_retries < objects / 10) {
+            fail(profile " live archive validator retry partition is below 10 percent")
+        }
+        if (kms_retry != validator_retries * 2) {
+            fail(profile " normal archive KMS retry reserve must split equally between writer and validator")
+        }
+        if (validator_attempts != objects + validator_retries) {
+            fail(profile " live archive validator attempt partitions do not sum to the total")
+        }
+        if (bound(profile, "live_archive_validator_get_requests") != validator_attempts * 2) {
+            fail(profile " live archive validator GET budget omits HEAD or body reads")
+        }
+        queue_send_retries = bound(profile, "live_archive_validator_queue_send_retry_requests")
+        if (queue_send_retries != objects / 10) {
+            fail(profile " source outbox send retry reserve must equal 10 percent of archive objects")
+        }
+        queue_send_attempts = objects + queue_send_retries
+        queue_quarantine_requests = bound(profile, "live_archive_validator_queue_quarantine_requests")
+        if (queue_quarantine_requests != validator_attempts) {
+            fail(profile " live archive validator must reserve one quarantine send per validation attempt")
+        }
+        dlq_repair_jobs = bound(profile, "live_archive_validator_dlq_repair_jobs")
+        if (dlq_repair_jobs != validator_retries) {
+            fail(profile " live archive validator DLQ repair jobs must equal the validation retry partition")
+        }
+        dlq_receive_retries = bound(profile, "live_archive_validator_dlq_receive_retry_requests")
+        if (dlq_receive_retries != dlq_repair_jobs / 10) {
+            fail(profile " live archive validator DLQ receive retry reserve must equal 10 percent of repair jobs")
+        }
+        dlq_redrive_send_retries = bound(profile, "live_archive_validator_dlq_redrive_send_retry_requests")
+        if (dlq_redrive_send_retries != dlq_repair_jobs / 10) {
+            fail(profile " live archive validator DLQ redrive send retry reserve must equal 10 percent of repair jobs")
+        }
+        dlq_reconciliation_requests = bound(profile, "live_archive_validator_dlq_reconciliation_requests")
+        if (dlq_reconciliation_requests != dlq_repair_jobs * 3 + \
+            dlq_receive_retries + dlq_redrive_send_retries) {
+            fail(profile " live archive validator must reserve repair receives sends post-send deletes and explicit retries")
+        }
+        queue_message_requests = bound(profile, "live_archive_validator_queue_message_requests")
+        if (queue_message_requests != queue_send_attempts + validator_attempts + \
+            queue_quarantine_requests + dlq_reconciliation_requests) {
+            fail(profile " live archive validator queue budget omits sends, validation deletes, quarantine sends, or repair-before-delete DLQ reconciliation")
+        }
+        queue_poll_requests = polls_per_second * 744 * 3600
+        if (bound(profile, "live_archive_validator_queue_poll_requests") != queue_poll_requests) {
+            fail(profile " live archive validator queue poll budget differs from the application-enforced maximum")
+        }
+        queue_requests = bound(profile, "live_archive_validator_queue_requests")
+        if (queue_requests != queue_message_requests + queue_poll_requests) {
+            fail(profile " live archive validator queue total omits message or poll requests")
+        }
+        send_wire_bytes = bound("shared", "live_archive_validator_send_wire_bytes")
+        if (send_wire_bytes != 8192 || differs(bound(profile, "live_archive_validator_queue_transfer_gb") * 1000000000, \
+            queue_send_attempts * send_wire_bytes)) {
+            fail(profile " live archive validator cross-region wire omits retry-inclusive source sends")
+        }
+        task_count = bound("shared", "live_archive_validator_task_count")
+        task_vcpu = bound("shared", "live_archive_validator_task_vcpu")
+        task_memory = bound("shared", "live_archive_validator_task_memory_gb")
+        restart_hours = launches * restart_minimum_seconds / 3600
+        if (differs(bound(profile, "live_archive_validator_fargate_vcpu_hours"), \
+                task_count * task_vcpu * 744 + restart_hours * task_vcpu) || \
+            differs(bound(profile, "live_archive_validator_fargate_memory_hours"), \
+                task_count * task_memory * 744 + restart_hours * task_memory) || \
+            differs(bound(profile, "live_archive_validator_public_ipv4_hours"), \
+                task_count * 744 + restart_hours)) {
+            fail(profile " live archive validator compute or address hours omit bounded replacement launches")
+        }
+        attempt_seconds = bound("shared", "live_archive_validator_attempt_seconds")
+        receive_cycle_seconds = \
+            bound("shared", "live_archive_validator_max_inter_poll_seconds") + \
+            bound("shared", "live_archive_validator_receive_response_seconds") + \
+            attempt_seconds
+        object_rate = bound(profile, "archive_objects_per_minute")
+        expected_object_rate = profile == "small" ? 1 : 4
+        if (object_rate * 1.1 >= receive_loop_count * 60 / receive_cycle_seconds) {
+            fail(profile " archive object admission rate exhausts worst-case receive-cycle capacity")
+        }
+        if (objects > object_rate * 744 * 60) {
+            fail(profile " monthly archive object cap exceeds its minute admission ceiling")
+        }
+        if (object_rate != expected_object_rate) {
+            fail(profile " archive object admission rate must equal its fixed integer envelope")
+        }
+        state_reads = bound(profile, "live_archive_validator_state_read_units")
+        state_writes = bound(profile, "live_archive_validator_state_write_units")
+        reservation_lease_condition_reads = bound(profile, "live_archive_validator_reservation_lease_condition_read_units")
+        reservation_lease_condition_writes = bound(profile, "live_archive_validator_reservation_lease_condition_write_units")
+        final_lease_condition_reads = bound(profile, "live_archive_validator_final_lease_condition_read_units")
+        final_lease_condition_writes = bound(profile, "live_archive_validator_final_lease_condition_write_units")
+        if (reservation_lease_condition_reads != validator_attempts * 2 || \
+            reservation_lease_condition_writes != validator_attempts * 2) {
+            fail(profile " live archive validator pre-HEAD reservation must reserve transactional lease-condition capacity")
+        }
+        if (final_lease_condition_reads != validator_attempts * 2 || \
+            final_lease_condition_writes != validator_attempts * 2) {
+            fail(profile " live archive validator final commit must reserve transactional lease-condition capacity")
+        }
+        receipt_cleanup_writes = bound(profile, "live_archive_validator_receipt_cleanup_writes")
+        if (receipt_cleanup_writes != objects * 2) {
+            fail(profile " live archive validator receipt cleanup must reserve two boundary-concentrated expiry envelopes")
+        }
+        launch_guard_writes = bound(profile, "live_archive_validator_launch_guard_write_units")
+        launch_item_write_units = ceil(launch_ledger_item_bytes / 1024)
+        if (launch_guard_writes != total_probe_attempts * launch_item_write_units) {
+            fail(profile " live archive validator launch guard must price every probe invocation")
+        }
+        launch_result_writes = bound(profile, "live_archive_validator_launch_result_write_units")
+        if (launch_result_writes != launches * launch_item_write_units) {
+            fail(profile " live archive validator must price task-ARN persistence for every launch")
+        }
+        heartbeat_reads = 744 * 3600 / bound("shared", "live_archive_validator_heartbeat_read_seconds")
+        lease_writes = task_count * 744 * 3600 / bound("shared", "live_archive_validator_lease_renew_seconds")
+        if (state_reads != validator_attempts + reservation_lease_condition_reads + \
+            final_lease_condition_reads + heartbeat_reads || \
+            state_writes != validator_attempts * 8 + reservation_lease_condition_writes + \
+            final_lease_condition_writes + \
+            launch_guard_writes + launch_result_writes + lease_writes + receipt_cleanup_writes) {
+            fail(profile " live archive validator state units omit receipt, heartbeat, transaction, launch, lease, or cleanup operations")
+        }
+        retained_receipts = objects * 13
+        cleanup_overlap_receipts = objects * 2 / 31
+        state_storage_bytes = bound(profile, "live_archive_validator_state_storage_gb") * 1000000000
+        if (state_storage_bytes < \
+            (retained_receipts + cleanup_overlap_receipts) * receipt_storage_envelope_bytes) {
+            fail(profile " live archive validator state storage omits retained receipts or cleanup overlap")
+        }
+        max_object_bytes = bound("shared", "live_archive_validator_max_object_bytes")
+        if (max_object_bytes != 8388608) {
+            fail("live archive validator maximum object size must equal 8 MiB")
+        }
+        archive_ingress_gb = bound(profile, "archive_ingress_gb")
+        expected_archive_ingress_gb = profile == "small" ? 16 : 80
+        if (archive_ingress_gb != expected_archive_ingress_gb) {
+            fail(profile " archive ingress must equal its fixed storage and transfer envelope")
+        }
+        if (input(profile, "object_archive") != archive_ingress_gb * 13 || \
+            input(profile, "recovery_object_archive") != archive_ingress_gb * 13 || \
+            input(profile, "normal_recovery_object_transfer") != archive_ingress_gb) {
+            fail(profile " archive storage or normal replication transfer differs from ingress")
+        }
+        validator_read_bytes = archive_ingress_gb * 1000000000 + \
+            validator_retries * max_object_bytes
+        if (differs(bound(profile, "live_archive_validator_read_gb") * 1000000000, \
+            validator_read_bytes)) {
+            fail(profile " live archive validator read budget must reserve every retry at maximum object size")
+        }
+        log_gb = bound(profile, "live_archive_validator_log_gb")
+        log_storage_gb = bound(profile, "live_archive_validator_log_storage_gb")
+        if (differs(log_gb, validator_attempts * 0.00002 + 0.01) || \
+            differs(log_storage_gb, log_gb * 2)) {
+            fail(profile " live archive validator log ingestion or boundary-overlap storage is under-reserved")
+        }
+        if (input(profile, "live_archive_validator_get_requests") != bound(profile, "live_archive_validator_get_requests") || \
+            differs(input(profile, "live_archive_validator_queue_requests") * 1000000, queue_requests) || \
+            input(profile, "live_archive_validator_fargate_vcpu") != bound(profile, "live_archive_validator_fargate_vcpu_hours") || \
+            input(profile, "live_archive_validator_fargate_memory") != bound(profile, "live_archive_validator_fargate_memory_hours") || \
+            input(profile, "live_archive_validator_public_ipv4") != bound(profile, "live_archive_validator_public_ipv4_hours") || \
+            input(profile, "live_archive_validator_state_reads") != state_reads || \
+            input(profile, "live_archive_validator_state_writes") != state_writes || \
+            input(profile, "live_archive_validator_state_storage") != bound(profile, "live_archive_validator_state_storage_gb") || \
+            differs(input(profile, "live_archive_validator_queue_transfer"), bound(profile, "live_archive_validator_queue_transfer_gb")) || \
+            input(profile, "live_archive_validator_log_ingestion") != log_gb || \
+            input(profile, "live_archive_validator_log_storage") != log_storage_gb) {
+            fail(profile " live archive validator cost rows differ from the operational contract")
+        }
+
+        if (input(profile, "external_synthetic_schedule_invocations") != total_probe_attempts || \
+            input(profile, "external_synthetic_lambda_requests") != total_probe_attempts) {
+            fail(profile " probe request rows omit intended, duplicate, or shutdown attempts")
+        }
+        if (input(profile, "external_synthetic_lambda_duration") != \
+            total_probe_attempts * bound("shared", "probe_timeout_seconds")) {
+            fail(profile " probe duration row is inconsistent with the hard timeout")
+        }
+    }
+
+    if (bound("shared", "live_archive_validator_queue_delay_seconds") != 300) {
+        fail("validator queue delay must equal 300 seconds")
+    }
+    if (bound("shared", "managed_crr_stage_seconds") != 300) {
+        fail("managed-CRR stage must equal 300 seconds")
+    }
+    if (bound("shared", "live_archive_validator_queue_delay_seconds") != \
+        bound("shared", "managed_crr_stage_seconds")) {
+        fail("validator queue delay must start after and equal the managed-CRR stage")
+    }
+    receive_cycles = bound("shared", "live_archive_validator_receive_cycles")
+    queued_predecessors = bound("shared", "live_archive_validator_queued_predecessors")
+    same_stream_burst = bound("shared", "live_archive_validator_same_stream_burst_objects")
+    if (queued_predecessors != int(queued_predecessors) || \
+        receive_cycles != int(receive_cycles) || \
+        same_stream_burst != int(same_stream_burst)) {
+        fail("validator predecessor, receive-cycle, and burst bounds must be integers")
+    }
+    if (queued_predecessors != \
+        bound("target", "archive_objects_per_minute") - 1) {
+        fail("validator queued-predecessor budget must cover the target same-stream burst")
+    }
+    if (receive_cycles != queued_predecessors + 1) {
+        fail("validator receive-cycle budget must cover every split same-stream delivery")
+    }
+    outbox_dispatch_seconds = bound("shared", "live_archive_validator_outbox_dispatch_seconds")
+    if (outbox_dispatch_seconds != 60) {
+        fail("validator ordered outbox dispatch budget must equal 60 seconds")
+    }
+    if (bound("shared", "live_archive_validator_attempt_seconds") != 2) {
+        fail("validator attempt budget must equal 2 seconds")
+    }
+    per_stream_min_interval = bound("shared", "live_archive_validator_per_stream_min_interval_seconds")
+    if (per_stream_min_interval <= outbox_dispatch_seconds) {
+        fail("validator per-stream admission interval must exceed ordered outbox dispatch time")
+    }
+    if (same_stream_burst != queued_predecessors + 1) {
+        fail("validator same-stream burst must equal the modeled predecessor envelope")
+    }
+    if (bound("shared", "live_archive_validator_same_stream_burst_blocks_refill") != 1) {
+        fail("validator same-stream burst must block refill until acknowledged and checkpointed")
+    }
+    source_to_complete = \
+        (queued_predecessors + 1) * \
+            outbox_dispatch_seconds + \
+        bound("shared", "live_archive_validator_queue_delay_seconds") + \
+        receive_cycles * ( \
+            bound("shared", "live_archive_validator_max_inter_poll_seconds") + \
+            bound("shared", "live_archive_validator_receive_response_seconds") + \
+            bound("shared", "live_archive_validator_attempt_seconds"))
+    if (source_to_complete > 636) {
+        fail("validator source-to-completion timing budget exceeds 636 seconds")
+    }
+    if (source_to_complete != bound("shared", "live_archive_validator_source_to_complete_seconds")) {
+        fail("validator source-to-completion timing budget is inconsistent")
+    }
+
+    if (error_count > 0) {
+        exit 1
+    }
+    printf "veer-operational-bounds status=passed profiles=2 detection_seconds=%d\n", detection_seconds
+}
