@@ -119,6 +119,161 @@ expect_input_failure() {
   printf '%s\n' "cost input negative fixture $fixture_name passed"
 }
 
+expect_bound_failure audit-event-max-bytes shared audit_event_max_bytes 16383 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure audit-average-bytes shared audit_partition_average_bytes 999 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure audit-rejection-max-bytes shared audit_rejection_event_max_bytes 1001 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure compact-record-max-bytes shared compact_non_audit_record_max_bytes 4095 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure compact-average-bytes shared compact_non_audit_average_bytes 401 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure audit-records-per-object shared archive_audit_records_per_object 501 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure compact-records-per-object shared archive_compact_records_per_object 1001 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure audit-reserved-object-bytes shared archive_audit_reserved_bytes_per_object 196607 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure archive-timer-flush shared archive_timer_flush_seconds 601 \
+  'audit bytes and archive packing must equal the fixed evidence envelope'
+expect_bound_failure rejection-partition-shared shared rejection_audit_partition_shared 0 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-runtime-mix-inference shared rejection_audit_capacity_inferred_from_runtime_mix 1 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-before-authentication shared rejection_audit_reserve_before_authentication 0 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-before-authorization shared rejection_audit_reserve_before_authorization 0 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-atomic-capacity shared rejection_audit_event_byte_reservation_atomic 0 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-atomic-settlement shared rejection_audit_event_settlement_atomic 0 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-database-duration shared rejection_audit_database_load_seconds 86399 \
+  'rejection audit database effects must be physically qualified without extra RDS performance cost'
+expect_bound_failure rejection-database-runtime-adapter shared rejection_audit_database_path_uses_runtime_adapter 0 \
+  'rejection audit database effects must be physically qualified without extra RDS performance cost'
+expect_bound_failure rejection-database-changed-bytes shared rejection_audit_database_changed_bytes_metered 0 \
+  'rejection audit database effects must be physically qualified without extra RDS performance cost'
+expect_bound_failure rejection-database-extra-performance shared rejection_audit_additional_gp3_performance_allowed 1 \
+  'rejection audit database effects must be physically qualified without extra RDS performance cost'
+expect_bound_failure rejection-release-standard-load shared rejection_audit_authorized_release_uses_standard_load 0 \
+  'rejection release and reconciliation database loads must be exact and concurrent'
+expect_bound_failure rejection-reconciliation-prior-window shared rejection_audit_reconciliation_uses_prior_window 0 \
+  'rejection release and reconciliation database loads must be exact and concurrent'
+expect_bound_failure rejection-reconciliation-concurrent shared rejection_audit_reconciliation_concurrent_with_standard_load 0 \
+  'rejection release and reconciliation database loads must be exact and concurrent'
+expect_bound_failure rejection-reconciliation-final-second shared rejection_audit_reconciliation_final_second_reservations 13 \
+  'small rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-authorized-release shared rejection_audit_authorized_release_before_state 0 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-commit-before-response shared rejection_audit_commit_before_response 0 \
+  'rejection audit capacity must be reserved atomically before classification'
+expect_bound_failure rejection-stale-ledger shared rejection_audit_missing_or_stale_ledger_fails_closed 0 \
+  'rejection audit reservations must fail closed until exact reconciliation'
+expect_bound_failure rejection-age-reclaim shared rejection_audit_uncertain_reservation_reclaimed_by_age 1 \
+  'rejection audit reservations must fail closed until exact reconciliation'
+expect_bound_failure rejection-exact-reconciliation shared rejection_audit_exact_reconciliation_required 0 \
+  'rejection audit reservations must fail closed until exact reconciliation'
+expect_bound_failure rejection-exhaustion-authentication shared rejection_audit_exhaustion_evaluates_authentication 1 \
+  'rejection partition exhaustion must return a bounded generic pre-classification response'
+expect_bound_failure rejection-exhaustion-authorization shared rejection_audit_exhaustion_evaluates_authorization 1 \
+  'rejection partition exhaustion must return a bounded generic pre-classification response'
+expect_bound_failure rejection-exhaustion-status shared rejection_audit_exhaustion_status 429 \
+  'rejection partition exhaustion must return a bounded generic pre-classification response'
+expect_bound_failure rejection-exhaustion-response shared rejection_audit_exhaustion_response_bytes 2049 \
+  'rejection partition exhaustion must return a bounded generic pre-classification response'
+expect_bound_failure rejection-classified-response shared rejection_audit_classified_response_bytes 2049 \
+  'classified rejection responses must fit the bounded response envelope'
+expect_bound_failure rejection-exhaustion-transition shared rejection_audit_exhaustion_transition_system_event 0 \
+  'rejection exhaustion must audit its state transition without per-request event growth'
+expect_bound_failure rejection-exhaustion-transition-reserve shared rejection_audit_exhaustion_transition_slot_pre_reserved 0 \
+  'rejection exhaustion must audit its state transition without per-request event growth'
+expect_bound_failure rejection-exhaustion-request-events shared rejection_audit_exhaustion_request_events 1 \
+  'rejection exhaustion must audit its state transition without per-request event growth'
+expect_bound_failure rejection-borrows-system shared rejection_audit_borrows_system_headroom 1 \
+  'rejection audit capacity must not borrow another evidence partition'
+expect_bound_failure rejection-borrows-other shared rejection_audit_borrows_other_partitions 1 \
+  'rejection audit capacity must not borrow another evidence partition'
+expect_bound_failure rejection-fixture-unauthenticated shared rejection_mix_fixture_all_unauthenticated 0 \
+  'rejection qualification must shift the complete generated stream to both rejection classes'
+expect_bound_failure rejection-fixture-unauthorized shared rejection_mix_fixture_all_unauthorized 0 \
+  'rejection qualification must shift the complete generated stream to both rejection classes'
+expect_bound_failure rejection-database-rate-small small rejection_audit_database_load_requests_per_second 19 \
+  'small rejection database load must use the edge rate and included gp3 baseline'
+expect_bound_failure rejection-database-iops-small small database_gp3_included_iops 2999 \
+  'small rejection database load must use the edge rate and included gp3 baseline'
+expect_bound_failure rejection-database-throughput-small small database_gp3_included_throughput_mib_per_second 124 \
+  'small rejection database load must use the edge rate and included gp3 baseline'
+expect_bound_failure rejection-release-workload-small small rejection_audit_authorized_release_fixture_requests 738057 \
+  'small rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-reconciliation-workload-small small rejection_audit_reconciliation_fixture_uncertain_reservations 466933 \
+  'small rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-reconciliation-rate-small small rejection_audit_reconciliation_requests_per_second 19 \
+  'small rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-reconciliation-duration-small small rejection_audit_reconciliation_duration_seconds 23346 \
+  'small rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-database-rate-target target rejection_audit_database_load_requests_per_second 99 \
+  'target rejection database load must use the edge rate and included gp3 baseline'
+expect_bound_failure rejection-database-iops-target target database_gp3_included_iops 11999 \
+  'target rejection database load must use the edge rate and included gp3 baseline'
+expect_bound_failure rejection-database-throughput-target target database_gp3_included_throughput_mib_per_second 499 \
+  'target rejection database load must use the edge rate and included gp3 baseline'
+expect_bound_failure rejection-release-workload-target target rejection_audit_authorized_release_fixture_requests 3701577 \
+  'target rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-reconciliation-workload-target target rejection_audit_reconciliation_fixture_uncertain_reservations 2341813 \
+  'target rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-reconciliation-rate-target target rejection_audit_reconciliation_requests_per_second 99 \
+  'target rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-reconciliation-duration-target target rejection_audit_reconciliation_duration_seconds 23418 \
+  'target rejection release and reconciliation workloads must equal the exact profile schedule'
+expect_bound_failure rejection-event-cap small audit_event_cap 8999999 \
+  'small audit event cap differs from the published profile ceiling'
+expect_bound_failure rejection-success-cancel-events target audit_success_cancel_events 17563604 \
+  'target audit event partitions do not sum to the fixed cap'
+expect_bound_failure rejection-partition-events target audit_rejection_partition_events 2341813 \
+  'target audit event partitions do not sum to the fixed cap'
+expect_bound_failure rejection-provider-events small audit_provider_attempt_events 4129199 \
+  'small audit event partitions do not sum to the fixed cap'
+expect_bound_failure rejection-synthetic-events target audit_synthetic_events 44639 \
+  'target audit event partitions do not sum to the fixed cap'
+expect_bound_failure rejection-system-events small audit_system_event_headroom 857220 \
+  'small audit event partitions do not sum to the fixed cap'
+expect_bound_failure rejection-general-system-events small audit_system_general_event_headroom 857221 \
+  'small system headroom must pre-reserve the rejection exhaustion transition'
+expect_bound_failure rejection-transition-system-events target audit_system_rejection_exhaustion_transition_events 0 \
+  'target system headroom must pre-reserve the rejection exhaustion transition'
+expect_bound_failure rejection-audit-byte-cap target audit_byte_cap 51999999999 \
+  'target audit byte partitions do not match their event ceilings'
+expect_bound_failure rejection-partition-bytes small audit_rejection_partition_bytes 466933999 \
+  'small audit byte partitions do not match their event ceilings'
+expect_bound_failure rejection-system-bytes target audit_system_byte_headroom 1359940999 \
+  'target audit byte partitions do not match their event ceilings'
+expect_bound_failure rejection-general-system-bytes target audit_system_general_byte_headroom 1359941000 \
+  'target system bytes must pre-reserve the rejection exhaustion transition'
+expect_bound_failure rejection-transition-system-bytes small audit_system_rejection_exhaustion_transition_bytes 999 \
+  'small system bytes must pre-reserve the rejection exhaustion transition'
+expect_bound_failure rejection-fixture-requests small rejection_mix_fixture_requests 23346719 \
+  'small full rejection-mix fixture must fail closed without audit loss'
+expect_bound_failure rejection-fixture-classified target rejection_mix_fixture_classified_events 2341813 \
+  'target full rejection-mix fixture must fail closed without audit loss'
+expect_bound_failure rejection-fixture-preclassification small rejection_mix_fixture_preclassification_503_requests 22879785 \
+  'small full rejection-mix fixture must fail closed without audit loss'
+expect_bound_failure rejection-fixture-response target rejection_mix_fixture_response_bytes 239801794559 \
+  'target full rejection-mix fixture must fail closed without audit loss'
+expect_bound_failure rejection-fixture-dropped target rejection_mix_fixture_dropped_required_events 1 \
+  'target full rejection-mix fixture must fail closed without audit loss'
+expect_bound_failure compact-record-workload small compact_non_audit_records_month 10056267 \
+  'small compact non-audit record workload differs from the fixed schedule'
+expect_bound_failure audit-archive-objects target audit_archive_objects_month 108463 \
+  'target archive object cap omits audit compact-record or timer-flush objects'
+expect_bound_failure compact-archive-objects small compact_non_audit_archive_objects_month 14520 \
+  'small archive object cap omits audit compact-record or timer-flush objects'
+expect_input_failure archive-s3-primary-requests small primary_archive_requests 55499 \
+  'small priced archive S3 requests must reserve three tier-one calls per object across both regions'
+expect_input_failure archive-s3-recovery-requests target recovery_archive_requests 244499 \
+  'target priced archive S3 requests must reserve three tier-one calls per object across both regions'
+
 expect_bound_failure probe-artifact-retention shared probe_artifact_retention_seconds 2678400 \
   'probe artifact retention must equal 30 days with cleanup inside one day'
 expect_bound_failure probe-artifact-current-max shared probe_artifact_current_versions_max 44639 \

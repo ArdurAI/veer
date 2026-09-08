@@ -453,6 +453,71 @@ END {
         fail("manifest rejection must permit only residual cleanup billable actions")
     }
 
+    audit_event_max_bytes = bound("shared", "audit_event_max_bytes")
+    audit_average_bytes = bound("shared", "audit_partition_average_bytes")
+    rejection_event_max_bytes = bound("shared", "audit_rejection_event_max_bytes")
+    compact_record_max_bytes = bound("shared", "compact_non_audit_record_max_bytes")
+    compact_average_bytes = bound("shared", "compact_non_audit_average_bytes")
+    audit_records_per_object = bound("shared", "archive_audit_records_per_object")
+    compact_records_per_object = bound("shared", "archive_compact_records_per_object")
+    audit_reserved_bytes = bound("shared", "archive_audit_reserved_bytes_per_object")
+    archive_flush_seconds = bound("shared", "archive_timer_flush_seconds")
+    if (audit_event_max_bytes != 16384 || audit_average_bytes != 1000 || \
+        rejection_event_max_bytes != 1000 || compact_record_max_bytes != 4096 || \
+        compact_average_bytes != 400 || audit_reserved_bytes != 196608 || \
+        audit_records_per_object != 500 || compact_records_per_object != 1000 || \
+        archive_flush_seconds != 600) {
+        fail("audit bytes and archive packing must equal the fixed evidence envelope")
+    }
+    if (bound("shared", "rejection_audit_partition_shared") != 1 || \
+        bound("shared", "rejection_audit_capacity_inferred_from_runtime_mix") != 0 || \
+        bound("shared", "rejection_audit_reserve_before_authentication") != 1 || \
+        bound("shared", "rejection_audit_reserve_before_authorization") != 1 || \
+        bound("shared", "rejection_audit_event_byte_reservation_atomic") != 1 || \
+        bound("shared", "rejection_audit_event_settlement_atomic") != 1 || \
+        bound("shared", "rejection_audit_authorized_release_before_state") != 1 || \
+        bound("shared", "rejection_audit_commit_before_response") != 1) {
+        fail("rejection audit capacity must be reserved atomically before classification")
+    }
+    if (bound("shared", "rejection_audit_database_load_seconds") != 86400 || \
+        bound("shared", "rejection_audit_database_path_uses_runtime_adapter") != 1 || \
+        bound("shared", "rejection_audit_database_changed_bytes_metered") != 1 || \
+        bound("shared", "rejection_audit_additional_gp3_performance_allowed") != 0) {
+        fail("rejection audit database effects must be physically qualified without extra RDS performance cost")
+    }
+    if (bound("shared", "rejection_audit_authorized_release_uses_standard_load") != 1 || \
+        bound("shared", "rejection_audit_reconciliation_uses_prior_window") != 1 || \
+        bound("shared", "rejection_audit_reconciliation_concurrent_with_standard_load") != 1) {
+        fail("rejection release and reconciliation database loads must be exact and concurrent")
+    }
+    if (bound("shared", "rejection_audit_missing_or_stale_ledger_fails_closed") != 1 || \
+        bound("shared", "rejection_audit_uncertain_reservation_reclaimed_by_age") != 0 || \
+        bound("shared", "rejection_audit_exact_reconciliation_required") != 1) {
+        fail("rejection audit reservations must fail closed until exact reconciliation")
+    }
+    if (bound("shared", "rejection_audit_exhaustion_evaluates_authentication") != 0 || \
+        bound("shared", "rejection_audit_exhaustion_evaluates_authorization") != 0 || \
+        bound("shared", "rejection_audit_exhaustion_status") != 503 || \
+        bound("shared", "rejection_audit_exhaustion_response_bytes") != 2048) {
+        fail("rejection partition exhaustion must return a bounded generic pre-classification response")
+    }
+    if (bound("shared", "rejection_audit_classified_response_bytes") != 2048) {
+        fail("classified rejection responses must fit the bounded response envelope")
+    }
+    if (bound("shared", "rejection_audit_exhaustion_transition_system_event") != 1 || \
+        bound("shared", "rejection_audit_exhaustion_transition_slot_pre_reserved") != 1 || \
+        bound("shared", "rejection_audit_exhaustion_request_events") != 0) {
+        fail("rejection exhaustion must audit its state transition without per-request event growth")
+    }
+    if (bound("shared", "rejection_audit_borrows_system_headroom") != 0 || \
+        bound("shared", "rejection_audit_borrows_other_partitions") != 0) {
+        fail("rejection audit capacity must not borrow another evidence partition")
+    }
+    if (bound("shared", "rejection_mix_fixture_all_unauthenticated") != 1 || \
+        bound("shared", "rejection_mix_fixture_all_unauthorized") != 1) {
+        fail("rejection qualification must shift the complete generated stream to both rejection classes")
+    }
+
     for (profile_index = 1; profile_index <= 2; profile_index++) {
         profile = profiles[profile_index]
         generated_api_requests = bound(profile, "generated_api_requests_month")
@@ -463,7 +528,112 @@ END {
         if (bound(profile, "api_requests_month") != generated_api_requests + probe_api_requests) {
             fail(profile " API envelope omits intended, duplicate, or shutdown probe calls")
         }
+        complete_request_cycles = int(generated_api_requests / 100)
+        if (generated_api_requests != complete_request_cycles * 100 + 20) {
+            fail(profile " generated API workload must contain complete cycles plus twenty final reads")
+        }
+        audit_event_cap = bound(profile, "audit_event_cap")
+        expected_audit_event_cap = profile == "small" ? 9000000 : 52000000
+        if (audit_event_cap != expected_audit_event_cap) {
+            fail(profile " audit event cap differs from the published profile ceiling")
+        }
+        success_cancel_events = complete_request_cycles * 15
+        rejection_events = complete_request_cycles * 2
+        provider_attempt_events = profile == "small" ? 4129200 : 30690000
+        synthetic_events = intended
+        system_event_headroom = audit_event_cap - success_cancel_events - \
+            rejection_events - provider_attempt_events - synthetic_events
+        rejection_exhaustion_transition_events = \
+            bound("shared", "rejection_audit_exhaustion_transition_system_event")
+        general_system_event_headroom = \
+            system_event_headroom - rejection_exhaustion_transition_events
+        if (bound(profile, "audit_success_cancel_events") != success_cancel_events || \
+            bound(profile, "audit_rejection_partition_events") != rejection_events || \
+            bound(profile, "audit_provider_attempt_events") != provider_attempt_events || \
+            bound(profile, "audit_synthetic_events") != synthetic_events || \
+            bound(profile, "audit_system_event_headroom") != system_event_headroom) {
+            fail(profile " audit event partitions do not sum to the fixed cap")
+        }
+        if (bound(profile, "audit_system_general_event_headroom") != \
+                general_system_event_headroom || \
+            bound(profile, "audit_system_rejection_exhaustion_transition_events") != \
+                rejection_exhaustion_transition_events) {
+            fail(profile " system headroom must pre-reserve the rejection exhaustion transition")
+        }
+        audit_byte_cap = bound(profile, "audit_byte_cap")
+        if (audit_byte_cap != audit_event_cap * audit_average_bytes || \
+            bound(profile, "audit_rejection_partition_bytes") != \
+                rejection_events * rejection_event_max_bytes || \
+            bound(profile, "audit_system_byte_headroom") != \
+                system_event_headroom * audit_average_bytes) {
+            fail(profile " audit byte partitions do not match their event ceilings")
+        }
+        if (bound(profile, "audit_system_general_byte_headroom") != \
+                general_system_event_headroom * audit_average_bytes || \
+            bound(profile, "audit_system_rejection_exhaustion_transition_bytes") != \
+                rejection_exhaustion_transition_events * audit_average_bytes || \
+            bound(profile, "audit_system_general_byte_headroom") + \
+                bound(profile, "audit_system_rejection_exhaustion_transition_bytes") != \
+                bound(profile, "audit_system_byte_headroom")) {
+            fail(profile " system bytes must pre-reserve the rejection exhaustion transition")
+        }
+        rejection_fixture_requests = bound(profile, "rejection_mix_fixture_requests")
+        rejection_fixture_classified = bound(profile, "rejection_mix_fixture_classified_events")
+        rejection_fixture_preclassification = \
+            bound(profile, "rejection_mix_fixture_preclassification_503_requests")
+        rejection_fixture_response_bytes = \
+            rejection_fixture_classified * \
+                bound("shared", "rejection_audit_classified_response_bytes") + \
+            rejection_fixture_preclassification * \
+                bound("shared", "rejection_audit_exhaustion_response_bytes")
+        if (rejection_fixture_requests != generated_api_requests || \
+            rejection_fixture_classified != rejection_events || \
+            rejection_fixture_preclassification != \
+                rejection_fixture_requests - rejection_fixture_classified || \
+            bound(profile, "rejection_mix_fixture_response_bytes") != \
+                rejection_fixture_response_bytes || \
+            bound(profile, "rejection_mix_fixture_dropped_required_events") != 0) {
+            fail(profile " full rejection-mix fixture must fail closed without audit loss")
+        }
+        compact_non_audit_records = bound(profile, "compact_non_audit_records_month")
+        expected_compact_non_audit_records = \
+            profile == "small" ? 10056268 : 49897468
+        if (compact_non_audit_records != expected_compact_non_audit_records) {
+            fail(profile " compact non-audit record workload differs from the fixed schedule")
+        }
         request_rate = bound(profile, "api_requests_per_second")
+        rejection_database_rate = \
+            bound(profile, "rejection_audit_database_load_requests_per_second")
+        database_storage = input(profile, "database_storage")
+        database_gp3_iops = bound(profile, "database_gp3_included_iops")
+        database_gp3_throughput = \
+            bound(profile, "database_gp3_included_throughput_mib_per_second")
+        expected_database_gp3_iops = database_storage < 400 ? 3000 : 12000
+        expected_database_gp3_throughput = database_storage < 400 ? 125 : 500
+        if (rejection_database_rate != request_rate || \
+            database_gp3_iops != expected_database_gp3_iops || \
+            database_gp3_throughput != expected_database_gp3_throughput) {
+            fail(profile " rejection database load must use the edge rate and included gp3 baseline")
+        }
+        daily_generated_api_requests = generated_api_requests / 31
+        daily_complete_request_cycles = int(daily_generated_api_requests / 100)
+        expected_authorized_release_requests = daily_generated_api_requests - \
+            daily_complete_request_cycles * 2
+        reconciliation_reservations = \
+            bound(profile, "rejection_audit_reconciliation_fixture_uncertain_reservations")
+        reconciliation_rate = \
+            bound(profile, "rejection_audit_reconciliation_requests_per_second")
+        if (daily_generated_api_requests != int(daily_generated_api_requests) || \
+            bound(profile, "rejection_audit_authorized_release_fixture_requests") != \
+                expected_authorized_release_requests || \
+            reconciliation_reservations != rejection_events || \
+            reconciliation_rate != request_rate || \
+            bound(profile, "rejection_audit_reconciliation_duration_seconds") != \
+                ceil(reconciliation_reservations / reconciliation_rate) || \
+            reconciliation_reservations % reconciliation_rate != \
+                bound("shared", "rejection_audit_reconciliation_final_second_reservations")) {
+            fail(profile " rejection release and reconciliation workloads must equal the exact profile schedule")
+        }
         native_headers = bound(profile, "alb_native_request_header_bytes")
         accounted_headers = bound(profile, "alb_accounted_request_header_bytes")
         native_request_line = bound(profile, "alb_native_request_line_bytes")
@@ -523,6 +693,9 @@ END {
         if (fixed_response > response) {
             fail(profile " fixed response workload exceeds its durable egress ledger")
         }
+        if (rejection_fixture_response_bytes > response) {
+            fail(profile " full rejection-mix responses exceed the durable egress ledger")
+        }
         if (response + handshake + provider > internet) {
             fail(profile " response, handshake, and provider egress exceed internet egress")
         }
@@ -531,6 +704,22 @@ END {
         }
 
         objects = bound(profile, "archive_objects_month")
+        archive_flush_objects = ceil(744 * 3600 / archive_flush_seconds)
+        audit_archive_objects = ceil(audit_event_cap / audit_records_per_object) + \
+            archive_flush_objects
+        compact_archive_objects = \
+            ceil(compact_non_audit_records / compact_records_per_object) + \
+            archive_flush_objects
+        if (bound(profile, "audit_archive_objects_month") != audit_archive_objects || \
+            bound(profile, "compact_non_audit_archive_objects_month") != \
+                compact_archive_objects || \
+            audit_archive_objects + compact_archive_objects > objects) {
+            fail(profile " archive object cap omits audit compact-record or timer-flush objects")
+        }
+        if (input(profile, "primary_archive_requests") * 2 != objects * 3 || \
+            input(profile, "recovery_archive_requests") * 2 != objects * 3) {
+            fail(profile " priced archive S3 requests must reserve three tier-one calls per object across both regions")
+        }
         kms_per_object = bound(profile, "archive_kms_base_requests_per_object")
         if (kms_per_object != 2) {
             fail(profile " normal archive KMS base must contain exactly two application-controlled requests per object")
@@ -684,6 +873,12 @@ END {
         if (max_object_bytes != 8388608) {
             fail("live archive validator maximum object size must equal 8 MiB")
         }
+        if (audit_records_per_object * audit_event_max_bytes + audit_reserved_bytes != \
+                max_object_bytes || \
+            compact_records_per_object * compact_record_max_bytes + \
+                audit_reserved_bytes > max_object_bytes) {
+            fail(profile " archive packing must fit maximum-size records and reserved framing")
+        }
         archive_ingress_gb = bound(profile, "archive_ingress_gb")
         expected_archive_ingress_gb = profile == "small" ? 16 : 80
         if (archive_ingress_gb != expected_archive_ingress_gb) {
@@ -693,6 +888,10 @@ END {
             input(profile, "recovery_object_archive") != archive_ingress_gb * 13 || \
             input(profile, "normal_recovery_object_transfer") != archive_ingress_gb) {
             fail(profile " archive storage or normal replication transfer differs from ingress")
+        }
+        if (audit_byte_cap + compact_non_audit_records * compact_average_bytes > \
+            archive_ingress_gb * 1000000000) {
+            fail(profile " audit and compact-record bytes exceed archive ingress")
         }
         archive_retained_data_versions = objects * 13
         archive_physical_entries = archive_retained_data_versions + \
