@@ -5,8 +5,9 @@ This offline worksheet supports
 source, and ceiling reviewable without AWS credentials or network access.
 
 The model is a design comparison, not a quote. It prices a Veer control plane
-in `us-east-1` with recovery data in `us-west-2` as of 2026-08-31. Actual bills
-vary with usage, negotiated discounts, taxes, support plans, and price changes.
+in `us-east-1` with recovery data in `us-west-2` from immutable offers retrieved
+through 2026-09-08. Actual bills vary with usage, negotiated discounts, taxes,
+support plans, and price changes.
 
 ## Verify
 
@@ -18,9 +19,12 @@ docs/architecture/cost-model/verify.sh
 
 The command validates the worksheet schema and source references, recalculates
 monthly totals with the system `awk`, compares them with
-[`expected.tsv`](expected.tsv), verifies that the ADR's monthly-cost table
-matches those reviewed results, and fails if a profile exceeds its ceiling. It
-does not contact AWS or read environment credentials.
+[`expected.tsv`](expected.tsv), verifies that the ADR 0001 and dependent ADR
+0002 monthly-cost tables match those reviewed results, and checks the executable relationships in
+[`operational-bounds.tsv`](operational-bounds.tsv). Seeded negative fixtures
+must reject broken network, egress, KMS-retry, live-validator, schedule-shutdown,
+and regional-detection bounds. The command fails if a profile exceeds its
+ceiling. It does not contact AWS or read environment credentials.
 
 ## Files
 
@@ -29,8 +33,12 @@ does not contact AWS or read environment credentials.
 - [`profiles.tsv`](profiles.tsv) records accepted profile ceilings.
 - [`inputs.tsv`](inputs.tsv) contains quantities and unit rates. Quantities
   already include resource count where the unit is hourly.
+- [`operational-bounds.tsv`](operational-bounds.tsv) records enforceable budget
+  inputs that must remain synchronized with billable worksheet rows.
 - [`calculate.awk`](calculate.awk) validates and calculates deterministic
   output.
+- [`verify-operational-bounds.awk`](verify-operational-bounds.awk) checks the
+  cross-row admission, retry, shutdown, and detection invariants.
 - [`expected.tsv`](expected.tsv) is the reviewed result checked by verification.
 
 ## Reference topology assumptions
@@ -57,18 +65,20 @@ does not contact AWS or read environment credentials.
 | Aggregate encoded queue body byte limit | 40 GB | 200 GB |
 | New TLS connections/second | 20 | 100 |
 | Encoded server TLS handshake bytes/new connection | 8 KiB | 8 KiB |
-| Encoded request headers/new request | 1 KiB | 1 KiB |
+| ALB-native entire request-header limit/new request | 64 KiB | 64 KiB |
+| ALB-native request-line limit/new request | 16 KiB | 16 KiB |
 | Server TLS handshake bytes/month | 14 GB | 70 GB |
+| Durably admitted HTTP response bytes/month | 150 GB | 690 GB |
 | Active TLS connections, one-minute sample | 2,500 | 12,000 |
-| ALB processed bytes/hour | 0.5 GB | 4 GB |
+| ALB processed bytes/hour | 6.324512 GB | 33.12256 GB |
 | Billable rule evaluations/second | 500 | 4,000 |
-| Billable ALB capacity | 1 LCU | 5 LCU |
+| Billable ALB capacity | 7 LCU | 34 LCU |
 | Provider total units/minute, steady/15-minute peak | 120/250 | 1,200/1,500 |
 | Derived provider traffic through NAT | 111.54 GB | 932.51 GB |
 | Telemetry/queue/other AWS-service NAT wire caps | 81/80/20 GB | 806/400/100 GB |
 | Billable NAT processed data | 300 GB | 2,250 GB |
-| Derived client, handshake, and provider-request egress | 179.59 GB | 991.64 GB |
-| Billable internet egress with no free allowance | 200 GB | 1,000 GB |
+| Response-ledger, handshake, and provider-request egress cap | 191.88 GB | 993.13 GB |
+| Billable internet egress with no free allowance | 195 GB | 995 GB |
 | Billable directional cross-AZ transfer | 200 GB | 2,000 GB |
 | CloudWatch log ingestion | 50 GiB | 500 GiB |
 | Retained CloudWatch log storage, uncompressed plus framing | 135 GB | 1,343 GB |
@@ -78,16 +88,41 @@ does not contact AWS or read environment credentials.
 | Stored archive ingress per 31-day month | 16 GB | 80 GB |
 | Archive objects written/month | 37,000 | 163,000 |
 | Normal S3 tier-1 archive requests, both regions | 111,000 | 489,000 |
-| Normal KMS archive requests, both regions | 148,000 | 652,000 |
+| Normal KMS archive requests, both regions, including 10% retries | 81,400 | 358,600 |
 | Encrypted primary archive/object storage | 208 GB | 1,040 GB |
 | Encrypted recovery archive/object storage | 208 GB | 1,040 GB |
 | Normal archive cross-region transfer | 16 GB | 80 GB |
+| Live archive validator attempts | 40,700 | 179,300 |
+| Live archive validator retry attempts | 3,700 | 16,300 |
+| Live archive validator Fargate vCPU/GB hours | 375.104167/750.208333 | 375.104167/750.208333 |
+| Live archive validator public-IPv4 hours | 1,500.416667 | 1,500.416667 |
+| Live archive validator launch tokens | 745 | 745 |
+| Live archive validator exact-version HEADs plus GETs | 81,400 | 358,600 |
+| Live archive validator source-send retries | 3,700 | 16,300 |
+| Live archive validator quarantine sends | 40,700 | 179,300 |
+| Live archive validator DLQ repair jobs | 3,700 | 16,300 |
+| Live archive validator DLQ empty/retried receives | 370 | 1,630 |
+| Live archive validator DLQ redrive-send retries | 370 | 1,630 |
+| Live archive validator DLQ receive/send/post-send-delete operations | 11,840 | 52,160 |
+| Live archive validator queue message operations | 133,940 | 590,060 |
+| Live archive validator queue poll requests | 2,678,400 | 2,678,400 |
+| Live archive validator total FIFO request units | 2,812,340 | 3,268,460 |
+| Live archive validator receipt-cleanup writes | 74,000 | 326,000 |
+| Live archive validator pre-HEAD lease ConditionCheck reads/writes | 81,400/81,400 units | 358,600/358,600 units |
+| Live archive validator final-lease ConditionCheck reads/writes | 81,400/81,400 units | 358,600/358,600 units |
+| Live archive validator launch-guard conditional writes | 187,488 | 187,488 |
+| Live archive validator launch-result conditional writes | 1,490 | 1,490 |
+| Live archive validator state reads/writes | 248,140/1,287,058 units | 941,140/3,202,258 units |
+| Live archive validator state storage | 1 GB-month | 4.4 GB-month |
+| Live archive validator cross-region message wire | 0.3334144 GB | 1.4688256 GB |
+| Live archive validator same-region reads | 47.0378496 GB | 216.7343104 GB |
+| Live archive validator log ingestion/storage | 0.824/1.648 GB | 3.596/7.192 GB |
 | Retained current archive data versions per region | 481,000 | 2,119,000 |
 | Physical archive versions plus delete markers per region | 518,000 | 2,282,000 |
 | Retention-cleanup ListObjectVersions requests, both regions | 148,002 | 652,002 |
 | Delete-marker cleanup-overlap storage per region | 0.02 GB-month | 0.09 GB-month |
 | Full-reseed source GET/destination PUT attempts | 530,000 each | 2,331,000 each |
-| Full-reseed KMS source-decrypt/destination-encrypt/validation-data-key-and-decrypt requests | 2,120,000 | 9,324,000 |
+| Full-reseed KMS client-envelope decrypt requests | 530,000 | 2,331,000 |
 | Full-reseed cross-region transfer | 229 GB | 1,144 GB |
 | Full-reseed S3 Batch Operations jobs | 1 | 1 |
 | Full-reseed S3 Batch object operations | 530,000 | 2,331,000 |
@@ -105,7 +140,7 @@ does not contact AWS or read environment credentials.
 | Duplicate/shutdown-race delivery reserves | 44,640/4,464 | 44,640/4,464 |
 | Retained recovery-probe identity claims | 46,080 | 46,080 |
 | Encoded recovery-probe identity claim | 256 bytes | 256 bytes |
-| Probe Lambda duration | 937,440 GB-seconds | 937,440 GB-seconds |
+| Probe Lambda duration | 468,720 GB-seconds | 468,720 GB-seconds |
 | Probe logs/artifacts retained 30 days | 14.0616/44.64 GB | 14.0616/44.64 GB |
 | Probe artifact PUT attempts | 44,640 | 44,640 |
 
@@ -190,10 +225,14 @@ byte caps; threshold and concurrent-collector qualification verifies sampling,
 dropped-byte observability, seven-day expiry, and inclusion in the telemetry
 wire budget.
 
-ALB limits use the maximum of the four AWS LCU dimensions. Small remains below
-one LCU at 20 new and 2,500 active TLS connections, 0.5 GB/hour, and 500
-billable rule evaluations/second. Target caps each dimension at four LCUs and
-prices five. See the
+ALB limits use the maximum of the four AWS LCU dimensions. The provider's
+[non-adjustable 64 KiB entire-request-header and separate 16 KiB request-line limits](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html)
+are the enforceable edge bounds. The prior non-request-header envelopes are
+426,272,000/3,631,360,000 bytes/hour; adding both full native allowances at
+20/100 requests per second yields 6,324,512,000/33,122,560,000 bytes/hour and
+therefore 7/34 billed LCUs. The reference does not claim that AWS WAF's
+all-headers inspection is an aggregate-header size gate because the primary WAF
+contract does not make that guarantee. See the
 [AWS LCU definition](https://aws.amazon.com/elasticloadbalancing/faqs/).
 
 Backup storage conservatively applies no included allocation. A durable byte
@@ -211,17 +250,162 @@ per object to reserve 192 KiB for framing, compression expansion, and
 encryption. Audit and compact non-audit multiplicity includes both transitions
 for every non-interruptible cancellation and three compact records for every
 synthetic write. It yields monthly maxima of 36,985/162,826 objects inside
-37,000/163,000 caps, 111,000/489,000 normal S3 requests across both regions, and
-148,000/652,000 normal KMS requests. Every data object embeds its signed Veer
-manifest in reserved framing, and the stream root is relational state; there are
-zero separate persistent Veer manifest objects.
+37,000/163,000 caps and 111,000/489,000 normal S3 requests across both regions.
+Two application-controlled KMS calls per object consume 74,000/326,000 base
+requests: one primary `GenerateDataKey` and one recovery validation `Decrypt`.
+A separate 10% retry reserve, split equally between writer and validator,
+raises the hard bounds to 81,400/358,600. The
+writer encrypts a unique per-object AES-256-GCM client envelope under a KMS
+multi-Region key; both S3 buckets require SSE-S3 around that ciphertext. Native
+S3 and CRR work therefore cannot consume the KMS ledger. Every data object
+embeds its signed Veer manifest in reserved framing, and the stream root is
+relational state; there are zero separate persistent Veer manifest objects.
 
-Thirteen retained envelopes cap each region at 481,000/2,119,000 objects. S3
-CRR continues copying new versions into the active generation while one S3 Batch
+Normal live CRR uses the durable archive outbox to send signed bucket, key,
+version, content-length, stream, and sequence jobs to an encrypted FIFO SQS
+queue in `us-west-2`. Ordered per-stream sends and `MessageGroupId` preserve
+sequence; SHA-256 over the length-delimited bucket/key/version tuple is both the
+deduplication identity and fixed 32-byte durable receipt key. The raw, signed
+tuple remains in the job, archive index, and reconciliation proof rather than
+the size-capped receipt. Archive admission pre-reserves one baseline
+send plus a 10% retry partition, and every attempt has an enforced 8 KiB
+complete-wire cap. Each successful send acknowledgement is bounded to 60 seconds
+after its job becomes the head of the ordered outbox. The FIFO queue then applies
+a 300-second queue-level delay, so a message is never visible before the complete
+accepted CRR boundary.
+
+Two always-on 0.25-vCPU/0.5-GB ARM Fargate tasks use a 30-second DynamoDB
+fencing lease; one leader polls while the other remains hot. Two concurrent
+loops keep batch processing off the receive path, each uses a 20-second long
+poll and 21-second response deadline, and each starts its next receive within
+one second. A shared token bucket permits at most one aggregate
+`ReceiveMessage` start per second, capping polling at 2,678,400 requests per
+744-hour month. Because SQS can split the four
+same-stream objects across four receives, the timing bounds reserve four full
+inter-poll, receive-response, execution, final-transaction, and acknowledged-
+delete cycles. The source-to-completion
+budget is `4 * 60 + 300 + 4 * (1 + 21 + 2) = 636` seconds. This charges four
+sequential acknowledged sends as well as four receive cycles and is a successful
+first-attempt bound; a retry makes the interval unavailable and closes archive
+admission. The four-object same-stream burst is admitted only from an empty
+stream outbox and blocks refill until its fourth send is acknowledged and
+checkpointed; otherwise one stream waits at least 61 seconds between objects.
+The two-second deadline ends only after `DeleteMessage` is acknowledged. Even
+with one message per receive, each loop's worst complete cycle is 24 seconds;
+the two loops therefore provide five messages per minute, above the target
+four-object rate plus its 10% reserve. The validators are standalone tasks,
+because an [ECS service replaces tasks below `desiredCount`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_CreateService.html)
+outside an application budget. The existing one-minute recovery-probe Lambda is
+the only `StopTask` and `RunTask` principal, but every invocation completes and
+records the normal API synthetic under a one-second sub-deadline before its
+four-second lifecycle phase. The 2 KiB launch ledger holds two slot records,
+byte-exact request parameters, client tokens, deterministic `startedBy`
+identities, first-attempt timestamps, returned task ARNs, a five-second exclusive
+lifecycle claim, and a service-wide capacity-two bucket that refills one
+token/hour.
+A desired-digest transition reserves both tokens before stopping an old task;
+insufficient capacity leaves the old topology running and closes admission. It
+stops at most one obsolete task per invocation and launches nothing until all
+obsolete tasks reach `STOPPED`; the combined old/new non-stopped count therefore
+never exceeds the two continuous slots. The next lifecycle owner concurrently
+starts two independently tokened
+[`RunTask(count=1)`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html)
+calls, bounded through ARN persistence at 125 seconds after the obsolete tasks
+stop after accounting for the one-minute schedule, full 60-second delivery
+window, and five-second invocation. An unplanned one-slot loss starts one call.
+Each request has a deterministic
+[idempotent client token](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_Idempotency.html)
+and stamps the slot identity in `startedBy`.
+The owner conditionally persists each response ARN against its claim, slot, and
+token before that slot is populated. An uncertain response can be replayed only
+by a later claim owner after `ListTasks`/`DescribeTasks` finds no exact
+`startedBy` match, using the affected slot's byte-identical request and only
+before 3,000 seconds from its durable first-attempt timestamp. A match is
+persisted without replay; at or after the deadline, no new `RunTask` is issued,
+the slot remains unresolved, and archive admission closes for audited repair.
+The probe role has only the four required ECS actions in the exact recovery
+cluster, `UpdateItem` on the launch-control key, and `PassRole` for the two exact
+validator roles conditioned on `ecs-tasks.amazonaws.com`.
+The two initial tokens plus 743 hourly refills strictly inside the half-open
+744-hour window permit at most 745 launches; the refill at hour 744 belongs to
+the next window. The
+guard prices two conditional write units for every 93,744 probe attempt and two
+result-write units per launch, and pre-reserves every 60-second
+[Fargate](https://aws.amazon.com/fargate/pricing/) and
+[public-IPv4](https://aws.amazon.com/vpc/pricing/) minimum, and fails archive
+admission closed at exhaustion. The resulting two continuous task slots plus
+launch reserve cost 375.104167 vCPU-hours, 750.208333 GB-hours, and 1,500.416667
+public-IPv4 hours.
+
+Before any S3 or KMS call, each attempt atomically reserves two S3 requests, one
+KMS decrypt, the signed expected content length, and a composite pending receipt,
+while a third action checks the separate current, unexpired lease generation.
+An expired pending receipt for the same signed job can be taken over with a
+higher attempt generation. The validator then performs one exact-version HEAD
+that requires `REPLICA` and the signed content length, then performs the
+checksum-enabled GET and validates its S3 checksum. Only after parsing the
+bounded ciphertext envelope can it extract and decrypt the encrypted data key;
+GCM, full-body digest, and embedded-signature validation follow. The final
+three-action transaction writes the receipt and next
+per-stream checkpoint in a single-region on-demand DynamoDB table and performs
+a `ConditionCheck` on the separate current, unexpired lease item. The
+[DynamoDB transaction contract](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html)
+charges the underlying transactional capacity even on a canceled condition. The
+model reserves eight receipt/checkpoint write units plus two read and two write
+units for each of the pre-HEAD and final lease checks per attempt. A daily
+exact-version sweep conditionally deletes a digest-keyed receipt only after both archive
+copies are gone and no signed checkpoint references it. Because one shifted
+31-day expiry interval can intersect two fixed admission windows, the model
+reserves 74,000/326,000 cleanup writes. The launch guard additionally prices one
+2 KiB conditional update as two write units for all 93,744 probe invocations
+because failed conditions still consume write capacity, plus two units to
+persist the returned task ARN for each of 745 launches. With lease contention and source heartbeat
+checks, the complete state ceilings are 248,140/941,140 reads and
+1,287,058/3,202,258 writes; DynamoDB TTL is only defense in depth. Each 1 KiB
+application receipt prices a 2 KiB billed-storage envelope for DynamoDB's
+documented 100-byte base overhead plus transaction metadata. Thirteen retained
+monthly envelopes plus one cleanup day for two boundary envelopes require at
+most 0.990/4.362 decimal GB before bounded counters, inside the 1/4.4 GB-month
+caps. Qualification reconciles provider-billed storage and fails if the 2 KiB
+envelope is insufficient. The 10% validation retry
+partition is 3,700/16,300 attempts. A separate 3,700/16,300 source-send retry
+partition and one terminal delete plus quarantine send per baseline or retry
+attempt reserve 40,700/179,300 of each operation. At most 3,700/16,300 signed
+DLQ jobs are redriven into the validation retry partition. The reconciliation
+role can receive/delete only on the DLQ and send only to the validation FIFO;
+it preserves the stream group and derives a deterministic deduplication ID from
+the complete object identity plus repair generation. Each repair reserves
+a DLQ receive, validation-queue send, and DLQ delete only after send
+acknowledgement; separate 370/1,630 partitions cover empty/retried receives and
+uncertain sends. The durable first-send timestamp permits a source or redrive
+retry only when its acknowledgement completes within 240 seconds, inside SQS
+FIFO's five-minute deduplication interval; afterward no repeated send occurs and
+the outbox or DLQ copy remains durable with admission closed. This produces
+11,840/52,160 repair-before-delete requests and
+2,812,340/3,268,460 complete FIFO request units. Exhaustion preserves the DLQ
+copy and keeps archive admission closed; implicit reconciliation SDK retries
+are disabled.
+At an enforced 8 KiB per baseline or retry send, it also reserves
+0.3334144/1.4688256 GB of cross-region wire. The path otherwise prices
+81,400/358,600 S3 requests, 0.824/3.596 GB of log ingestion, two retained
+boundary envelopes at 1.648/7.192 GB-month, and 47.0378496/216.7343104 GB of
+ledger-enforced same-region reads. The read envelope contains the complete
+baseline ingress plus every retry at the 8 MiB object maximum. This transfer
+remains inside the existing private-node other-service NAT cap.
+Implicit SDK retries are disabled for the writer, outbox dispatcher, validator,
+and DLQ reconciliation; every retry must consume an explicit operation or
+attempt reserve.
+
+Thirteen retained envelopes cap each region at 481,000/2,119,000 objects. The
+verifier pins normal archive ingress to 16/80 GB per month, derives each
+region's storage as `13 * ingress`, and derives normal CRR transfer as
+`1 * ingress`; these three cost roots cannot drift independently. S3 CRR
+continues copying new versions into the active generation while one S3 Batch
 Replication job builds a fresh candidate generation from retained versions. The
 full reseed prices 530,000/2,331,000 Batch object operations, source GET
 attempts, destination PUT attempts, and destination validation GET attempts;
-four KMS requests per attempt; 229/1,144 GB transferred; and a generated-
+one client-envelope KMS decrypt per destination validation; 229/1,144 GB
+transferred; and a generated-
 manifest scan of 481,000/2,119,000 source objects. One generated manifest object
 lives in a source-region recovery-control prefix for at most 24 hours, is capped
 at 8 GiB, and is priced as 0.28 decimal GB-month plus one tier-one write;
@@ -230,7 +414,8 @@ transfer envelope for 24 hours, yielding 7.39/36.91 GB-month. Each exact
 destination version is read with checksum mode, its service checksum is checked,
 and its body digest and embedded signature are recomputed. The
 530,000/2,331,000 validation attempts use the destination Tier-2 GET rate and
-conservatively account for both KMS `GenerateDataKey` and `Decrypt` operations.
+one recovery-region client-envelope `Decrypt`. S3 copies the SSE-S3-wrapped
+ciphertext without a KMS operation.
 Same-region validation reads use an S3
 gateway endpoint; the Batch service performs the cross-region copy path, so
 neither sends bytes through NAT. This separation prevents normal monthly work
@@ -264,15 +449,21 @@ empty proof—530,001/2,331,001 requests—rather than relying on full 1,000-ent
 pages. LIST uses the destination Tier-1 rate; DELETE requests are free under the
 dated S3 price contract.
 
-Egress is derived from the exact monthly request schedule and fixed response
-distribution in the ADR: 70% reads at a 6.34 KiB mean, remaining response bodies
-at no more than 1 KiB, and 1 KiB of request- and response-header allowance for
-every request. The 23,436,000/117,180,000 total API envelopes already contain
-the external synthetic. Response bodies and request/response headers consume
-137.70/688.52 GB. The ingress enforces an eight KiB encoded server-handshake
-flight and reserves 14/70 GB of monthly handshake bytes while retaining the
-20/100-per-second burst limit. Adding bounded outbound provider traffic yields
-179.59/991.64 GB; the worksheet prices 200/1,000 GB.
+The exact monthly generated request schedule and winning-probe response
+distribution derive 137.70/688.52 GB for response bodies and response headers.
+The 49,104 duplicate and shutdown deliveries add one API write and at most 2,048
+response bytes each, raising the fixed response totals to
+137.800564992/688.620564992 GB, but that generator
+mix is not the production bound. A durable ledger reserves the complete encoded
+response before write and caps the month at 150/690 GB. The
+23,485,104/117,229,104 API envelopes contain all 138,384 external-synthetic
+calls: two for each intended identity and one for every duplicate and shutdown
+delivery.
+The ingress separately reserves 14/70 GB of server-handshake bytes while
+retaining the 20/100-per-second burst limit. Adding 27.88/233.13 GB of bounded
+provider-request traffic yields hard egress caps of 191.88/993.13 GB; the
+worksheet prices 195/995 GB without free allowances. Request headers and request
+lines contribute to ALB processing, not server-to-client internet egress.
 
 The recovery-probe result bucket is also versioned with explicit cleanup: current
 objects expire after 31 days, noncurrent entries expire after one day, and marker
@@ -280,17 +471,27 @@ cleanup requires an exact version-list audit before admitting the next probe ide
 window.
 
 The one-minute recovery-region probe uses 44,640 immutable schedule identities
-in a 744-hour month. EventBridge Scheduler target retries and Lambda asynchronous
-retries are zero, but at-least-once delivery is not treated as exactly once.
+in one dedicated accounting-window group. Each identity uses the Scheduler
+universal Lambda `Invoke` target with `InvocationType=RequestResponse`, so the
+probe runs synchronously without Lambda asynchronous-queue delay. Scheduler
+target retries are zero and maximum event age is 60 seconds, but at-least-once
+delivery is not treated as exactly once.
 The worksheet reserves one duplicate per intended identity plus 4,464
 non-borrowable shutdown-race attempts: 93,744 paid Scheduler/Lambda attempts.
-Every attempt is allowed the full 1 GB, ten-second timeout and 0.00015 GB log
-envelope, producing 937,440 GB-seconds and 14.0616 GB. The identity is also the
+Every attempt is allowed the full 1 GB, five-second timeout and 0.00015 GB log
+envelope, producing 468,720 GB-seconds and 14.0616 GB. The identity is also the
 idempotency key for the probe's no-op write; only a newly committed claim
-proceeds to the read, result metric, and artifact paths. At duplicate-reserve
-exhaustion a delete-only circuit breaker removes the exact schedule, while the
-shutdown partition absorbs in-flight delivery. The 44,640 artifact attempts and
-44.64 GB artifact storage remain winner-only bounds.
+proceeds to the read, result metric, and artifact paths. Each duplicate and
+shutdown delivery still consumes that write and a bounded short response. Both
+probe API clients permit one attempt with implicit SDK retries disabled; a
+transient or uncertain response makes the interval unavailable. At
+duplicate-reserve exhaustion an exact-group circuit breaker deletes the entire
+schedule group, while the shutdown partition absorbs in-flight delivery and
+eventual group deletion. The full 60-second Scheduler precision window,
+five-second function, five-second EMF extraction or missing-signal recognition,
+ten-second alarm, and forty-second pager budgets meet the inclusive 240-second
+objective. The 44,640 artifact attempts and 44.64 GB artifact storage remain
+winner-only bounds.
 The worksheet prices Scheduler at its USD 1 per million paid tier even though the
 published offer includes a free tier, then prices Lambda, logs, one artifact
 attempt, three custom metrics, and one high-resolution alarm. Free service
@@ -308,16 +509,18 @@ calculator rejects `current` aliases and ordinary mutable pricing pages.
 | RDS compute | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `SCBZU9XX357QUA4D` at USD 0.129/db.t4g.medium Multi-AZ-hour; `QPKXCKEKNV5DW3QA` at USD 0.478/db.r7g.large Multi-AZ-hour; PostgreSQL T4g credit `DXW9ERDR4STYT9D7` at USD 0.075/vCPU-hour |
 | RDS primary storage and backup | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-east-1/index.json) | `J7S7KD4WFDNQWKNX` at USD 0.23/GB-month Multi-AZ gp3; charged PostgreSQL backup `6W8ECRFVDATCER7J` at USD 0.095/GB-month |
 | RDS recovery storage | [AmazonRDS 20260831092223](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260831092223/us-west-2/index.json) | `PAHDKG6EF4XSHYXC` at USD 0.095/GB-month |
-| Queue | [AWSQueueService 20250828200713](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSQueueService/20250828200713/us-east-1/index.json) | `8RN6B8U4MERHRXP3` at USD 0.40/million standard requests |
+| Queues | [AWSQueueService 20250828200713 primary](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSQueueService/20250828200713/us-east-1/index.json), [recovery](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSQueueService/20250828200713/us-west-2/index.json) | Primary standard `8RN6B8U4MERHRXP3` at USD 0.40/million; recovery FIFO tier-one `YH5ZUTMAG8WSV8TJ` at USD 0.50/million |
 | Load balancer | [AWSELB 20260831092255](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSELB/20260831092255/us-east-1/index.json) | `37CUWUT8GSNQEPUV` at USD 0.0225/hour; `P2XGEJ8N3KU52WA8` at USD 0.008/LCU-hour |
 | NAT | [AmazonEC2 20260831181331](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/20260831181331/us-east-1/index.json) | `M2YSHUBETB3JX4M4` at USD 0.045/hour; `59S5R83GFPUAGVR5` at USD 0.045/GB |
-| Public IPv4 | [AmazonVPC 20260831092232](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/20260831092232/us-east-1/index.json) | `4GQUNXTFWVSGPUZK` at USD 0.005/address-hour |
+| Public IPv4 | [AmazonVPC 20260831092232 primary](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/20260831092232/us-east-1/index.json), [recovery](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/20260831092232/us-west-2/index.json) | Primary `4GQUNXTFWVSGPUZK` and recovery `NBHXEKTE88TJDDQF` at USD 0.005/address-hour |
 | Data transfer | [AWSDataTransfer 20260831121448](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/20260831121448/us-east-1/index.json) | `HQEH3ZWJVT46JHRG` at USD 0.09/GB internet egress; `PNUBVW4CPC8XA46W` at USD 0.01/directional-GB cross-AZ; `XGXYRYWGNXSSEUVT` at USD 0.02/GB cross-region |
 | Telemetry | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | `S8QGXX5R2BKKMDSJ` at USD 0.50/GB log ingest; `GF9Q9S5QWW3RHMGQ` at USD 0.50/GB OTEL ingest; `6K9ADYQAHV5KX9KZ` at USD 0.03/GB-month; `KG586CTNGQ4VRZKZ` at USD 0.30/metric-month |
 | Primary alarms | [AmazonCloudWatch 20260831092148](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-east-1/index.json) | Standard-resolution alarm metric `EVETVUGEN3MUTMXM` at USD 0.10/alarm-metric-month |
 | Recovery scheduling | [AWSEvents 20260831092301](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSEvents/20260831092301/index.json) | us-west-2 scheduled invocation `QNGCFAB5SW8AUQEB` at USD 0.000001 after the free tier; the worksheet applies that paid rate to every dispatch |
 | Recovery monitoring | [AmazonCloudWatch 20260831092148 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/20260831092148/us-west-2/index.json) | Logs `CWY7X4MZ4F3MP5SD` at USD 0.50/GB and `MN45SJANDTCPR9QA` at USD 0.03/GB-month; metrics `CN6TP6ZEVS58RK7M` at USD 0.30/month; high-resolution alarm `JQ7VDDDHEZA9XV78` at USD 0.30/alarm-metric-month |
-| Recovery probe compute | [AWSLambda 20260831092318 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/20260831092318/us-west-2/index.json) | Request `ZWHFK83WS2P4WZR6` at USD 0.0000002/request; tier-one duration `XCU6U9G4FCKZQWG9` at USD 0.0000166667/GB-second |
+| Recovery Lambda compute | [AWSLambda 20260831092318 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/20260831092318/us-west-2/index.json) | Request `ZWHFK83WS2P4WZR6` at USD 0.0000002/request; tier-one duration `XCU6U9G4FCKZQWG9` at USD 0.0000166667/GB-second |
+| Recovery validator Fargate compute | [AmazonECS 20260831092155 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/20260831092155/us-west-2/index.json) | ARM vCPU `5UAMYEN99PSY23D6` at USD 0.03238/vCPU-hour; ARM memory `TAE28FJERF797NWS` at USD 0.00356/GB-hour |
+| Recovery validation state | [AmazonDynamoDB 20260831092153 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/20260831092153/us-west-2/index.json) | On-demand reads `K6UMRY3TVDVCBP56` at USD 0.125/million units; writes `4G4G98VBTENWGY5R` at USD 0.625/million units; storage `UNCJFSHZ2ZQGDPJV` at USD 0.25/GB-month without the free tier |
 | Primary object storage and Batch Operations | [AmazonS3 20260831092225 us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-east-1/index.json) | `WP9ANXZGBYYSGJEA` at USD 0.023/GB-month; tier-one PUT/LIST request `E9YHNFENF4XQBZR6` at USD 0.000005/request; tier-two GET request `ZWQ6Q48CRJXX4FXE` at USD 0.0000004/request; Batch job `JS698V37SA2BFFYW` at USD 0.25/job; object operation `VFSW6ADYJ5NS2Z6P` at USD 0.000001/object; generated-manifest scan `VUCQUWK8JADFEN65` at USD 0.000000015/source object; DELETE requests are free |
 | Recovery object storage | [AmazonS3 20260831092225 us-west-2](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260831092225/us-west-2/index.json) | `Z3FQZG73HYSPVABR` at USD 0.023/GB-month; Tier-1 PUT/LIST request `D4PMUVH6F64HK2D6` at USD 0.000005/request; Tier-2 GET request `E77AQEM2DC4VV3FC` at USD 0.0000004/request; DELETE requests are free |
 | Encryption keys | [awskms 20260831092318](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20260831092318/index.json) | `U553K98XGDXCYHWS` and `S8HBXBVJKWKDP9AS` at USD 1/key-month; request SKUs `MFEBZPX8NHM5FY7Z` and `SE9KXT6M6JTP7E4W` at USD 0.000003/request |

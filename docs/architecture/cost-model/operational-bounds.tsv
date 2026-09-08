@@ -1,0 +1,212 @@
+scope	metric	value	unit	note
+small	generated_api_requests_month	23346720	request	The fixed generated workload before recovery-probe API calls
+small	api_requests_month	23485104	request	The fixed 744-hour workload including intended duplicate and shutdown recovery-probe API calls
+small	api_requests_per_second	20	request-second	Permitted fixed-envelope request rate at the edge
+small	alb_native_request_header_bytes	65536	byte	The ALB non-adjustable entire-request-header limit is the enforceable edge ceiling
+small	alb_accounted_request_header_bytes	65536	byte	The ALB processed-byte model includes the complete native header ceiling
+small	alb_native_request_line_bytes	16384	byte	The ALB non-adjustable request-line limit is a separate enforceable edge ceiling
+small	alb_accounted_request_line_bytes	16384	byte	The ALB processed-byte model includes the complete native request-line ceiling
+small	alb_non_request_header_processed_bytes_hour	426272000	byte	Prior request-body response and protocol envelope after removing its former one-KiB request-header allowance
+small	alb_processed_bytes_hour	6324512000	byte	Non-header envelope plus twenty requests per second at the native header and request-line ceilings
+small	alb_lcus	7	LCU	Maximum priced ALB capacity across all four dimensions
+small	fixed_response_egress_base_bytes	137700000000	byte	Deterministic qualification workload response bodies and headers before short duplicate and shutdown probe responses
+small	fixed_response_egress_bytes	137800564992	byte	Deterministic qualification workload including bounded short duplicate and shutdown probe responses
+small	response_egress_month_bytes	150000000000	byte	Durable response-byte admission ledger including quota responses
+small	handshake_egress_month_bytes	14000000000	byte	Durable TLS handshake byte ledger
+small	provider_egress_month_bytes	27880000000	byte	Bounded provider request traffic
+small	internet_egress_month_bytes	195000000000	byte	Billable internet egress envelope without free allowances
+small	archive_ingress_gb	16	GB	Normal monthly archive body bytes
+small	archive_objects_month	37000	object	Normal monthly archive object ceiling
+small	archive_kms_base_requests_per_object	2	request	Client-envelope GenerateDataKey and recovery validation Decrypt
+small	archive_kms_retry_requests	7400	request	Equal writer and validator retry partitions totaling ten percent of base
+small	archive_kms_total_requests	81400	request	Base requests plus retry reserve
+small	live_archive_validator_attempts	40700	attempt	One validation attempt per object plus ten percent retries
+small	live_archive_validator_retry_attempts	3700	attempt	Ten percent non-borrowable validation retry partition
+small	live_archive_validator_get_requests	81400	request	One exact-version HEAD and one checksum-enabled body GET per validator attempt
+small	live_archive_validator_queue_send_retry_requests	3700	request	Ten percent non-borrowable source outbox send retry partition
+small	live_archive_validator_queue_quarantine_requests	40700	request	One dead-letter-queue send reserved for every baseline and bounded repair attempt
+small	live_archive_validator_dlq_repair_jobs	3700	job	At most the non-borrowable validation retry partition is redriven from the dead-letter queue
+small	live_archive_validator_dlq_receive_retry_requests	370	request	Ten percent non-borrowable empty or retried receive partition for bounded repair jobs
+small	live_archive_validator_dlq_redrive_send_retry_requests	370	request	Ten percent non-borrowable validation-queue send retry partition for bounded repair jobs
+small	live_archive_validator_dlq_reconciliation_requests	11840	request	Receive send and post-send delete per repair job plus explicit receive and send retries
+small	live_archive_validator_queue_message_requests	133940	request	Source sends validation deletes quarantine sends and repair-before-delete dead-letter reconciliation
+small	live_archive_validator_queue_poll_requests	2678400	request	One application-rate-limited receive per second for 744 hours
+small	live_archive_validator_queue_requests	2812340	request	Message operations plus the application-enforced validation-queue poll ceiling
+small	live_archive_validator_fargate_vcpu_hours	375.104167	vCPU-hour	Two quarter-vCPU ARM tasks for 744 hours plus one full billing minute for each bounded launch token
+small	live_archive_validator_fargate_memory_hours	750.208333	GB-hour	Two half-GB ARM tasks for 744 hours plus one full billing minute for each bounded launch token
+small	live_archive_validator_public_ipv4_hours	1500.416667	address-hour	Two continuous public addresses plus one full billing minute for each bounded launch token
+small	live_archive_validator_reservation_lease_condition_read_units	81400	read-request-unit	Two transactional read units for the pre-HEAD live lease ConditionCheck per attempt
+small	live_archive_validator_reservation_lease_condition_write_units	81400	write-request-unit	Two transactional write units conservatively reserved for the pre-HEAD live lease ConditionCheck per attempt
+small	live_archive_validator_final_lease_condition_read_units	81400	read-request-unit	Two transactional read units for the final live lease ConditionCheck per attempt
+small	live_archive_validator_final_lease_condition_write_units	81400	write-request-unit	Two transactional write units conservatively reserved for the final live lease ConditionCheck per attempt
+small	live_archive_validator_launch_guard_write_units	187488	write-request-unit	One conditional two-KiB launch-ledger update for every intended duplicate and shutdown-race probe invocation
+small	live_archive_validator_launch_result_write_units	1490	write-request-unit	One conditional two-KiB task-ARN persistence update for every bounded launch token
+small	live_archive_validator_state_read_units	248140	read-request-unit	One receipt read and two lease-condition units in each of two transactions per attempt plus one source-side heartbeat read per minute
+small	live_archive_validator_receipt_cleanup_writes	74000	write-request-unit	One conditional exact-identity receipt delete across two boundary-concentrated expiry envelopes
+small	live_archive_validator_state_write_units	1287058	write-request-unit	Receipt and checkpoint transactions lease-condition reserves launch guards launch results lease renewal and boundary-safe cleanup
+small	live_archive_validator_state_storage_gb	1	GB-month	Two-KiB billed-storage envelopes for retained receipts and cleanup overlap plus bounded counters
+small	live_archive_validator_queue_transfer_gb	0.3334144	GB	Retry-inclusive eight-KiB source-send wire envelope charged as cross-region transfer
+small	live_archive_validator_read_gb	47.0378496	GB	Baseline ingress plus every validation retry concentrated at the eight-MiB object maximum
+small	live_archive_validator_log_gb	0.824	GB	Twenty kilobytes per attempt plus ten MB of bounded service and lease logs
+small	live_archive_validator_log_storage_gb	1.648	GB-month	Two boundary-concentrated validator log envelopes at thirty-day retention
+small	archive_objects_per_minute	1	object-minute	Admission ceiling below the single active consumer's thirty-object-per-minute capacity
+target	generated_api_requests_month	117090720	request	The fixed generated workload before recovery-probe API calls
+target	api_requests_month	117229104	request	The fixed 744-hour workload including intended duplicate and shutdown recovery-probe API calls
+target	api_requests_per_second	100	request-second	Permitted fixed-envelope request rate at the edge
+target	alb_native_request_header_bytes	65536	byte	The ALB non-adjustable entire-request-header limit is the enforceable edge ceiling
+target	alb_accounted_request_header_bytes	65536	byte	The ALB processed-byte model includes the complete native header ceiling
+target	alb_native_request_line_bytes	16384	byte	The ALB non-adjustable request-line limit is a separate enforceable edge ceiling
+target	alb_accounted_request_line_bytes	16384	byte	The ALB processed-byte model includes the complete native request-line ceiling
+target	alb_non_request_header_processed_bytes_hour	3631360000	byte	Prior request-body response and protocol envelope after removing its former one-KiB request-header allowance
+target	alb_processed_bytes_hour	33122560000	byte	Non-header envelope plus one hundred requests per second at the native header and request-line ceilings
+target	alb_lcus	34	LCU	Maximum priced ALB capacity across all four dimensions
+target	fixed_response_egress_base_bytes	688520000000	byte	Deterministic qualification workload response bodies and headers before short duplicate and shutdown probe responses
+target	fixed_response_egress_bytes	688620564992	byte	Deterministic qualification workload including bounded short duplicate and shutdown probe responses
+target	response_egress_month_bytes	690000000000	byte	Durable response-byte admission ledger including quota responses
+target	handshake_egress_month_bytes	70000000000	byte	Durable TLS handshake byte ledger
+target	provider_egress_month_bytes	233130000000	byte	Bounded provider request traffic
+target	internet_egress_month_bytes	995000000000	byte	Billable internet egress envelope without free allowances
+target	archive_ingress_gb	80	GB	Normal monthly archive body bytes
+target	archive_objects_month	163000	object	Normal monthly archive object ceiling
+target	archive_kms_base_requests_per_object	2	request	Client-envelope GenerateDataKey and recovery validation Decrypt
+target	archive_kms_retry_requests	32600	request	Equal writer and validator retry partitions totaling ten percent of base
+target	archive_kms_total_requests	358600	request	Base requests plus retry reserve
+target	live_archive_validator_attempts	179300	attempt	One validation attempt per object plus ten percent retries
+target	live_archive_validator_retry_attempts	16300	attempt	Ten percent non-borrowable validation retry partition
+target	live_archive_validator_get_requests	358600	request	One exact-version HEAD and one checksum-enabled body GET per validator attempt
+target	live_archive_validator_queue_send_retry_requests	16300	request	Ten percent non-borrowable source outbox send retry partition
+target	live_archive_validator_queue_quarantine_requests	179300	request	One dead-letter-queue send reserved for every baseline and bounded repair attempt
+target	live_archive_validator_dlq_repair_jobs	16300	job	At most the non-borrowable validation retry partition is redriven from the dead-letter queue
+target	live_archive_validator_dlq_receive_retry_requests	1630	request	Ten percent non-borrowable empty or retried receive partition for bounded repair jobs
+target	live_archive_validator_dlq_redrive_send_retry_requests	1630	request	Ten percent non-borrowable validation-queue send retry partition for bounded repair jobs
+target	live_archive_validator_dlq_reconciliation_requests	52160	request	Receive send and post-send delete per repair job plus explicit receive and send retries
+target	live_archive_validator_queue_message_requests	590060	request	Source sends validation deletes quarantine sends and repair-before-delete dead-letter reconciliation
+target	live_archive_validator_queue_poll_requests	2678400	request	One application-rate-limited receive per second for 744 hours
+target	live_archive_validator_queue_requests	3268460	request	Message operations plus the application-enforced validation-queue poll ceiling
+target	live_archive_validator_fargate_vcpu_hours	375.104167	vCPU-hour	Two quarter-vCPU ARM tasks for 744 hours plus one full billing minute for each bounded launch token
+target	live_archive_validator_fargate_memory_hours	750.208333	GB-hour	Two half-GB ARM tasks for 744 hours plus one full billing minute for each bounded launch token
+target	live_archive_validator_public_ipv4_hours	1500.416667	address-hour	Two continuous public addresses plus one full billing minute for each bounded launch token
+target	live_archive_validator_reservation_lease_condition_read_units	358600	read-request-unit	Two transactional read units for the pre-HEAD live lease ConditionCheck per attempt
+target	live_archive_validator_reservation_lease_condition_write_units	358600	write-request-unit	Two transactional write units conservatively reserved for the pre-HEAD live lease ConditionCheck per attempt
+target	live_archive_validator_final_lease_condition_read_units	358600	read-request-unit	Two transactional read units for the final live lease ConditionCheck per attempt
+target	live_archive_validator_final_lease_condition_write_units	358600	write-request-unit	Two transactional write units conservatively reserved for the final live lease ConditionCheck per attempt
+target	live_archive_validator_launch_guard_write_units	187488	write-request-unit	One conditional two-KiB launch-ledger update for every intended duplicate and shutdown-race probe invocation
+target	live_archive_validator_launch_result_write_units	1490	write-request-unit	One conditional two-KiB task-ARN persistence update for every bounded launch token
+target	live_archive_validator_state_read_units	941140	read-request-unit	One receipt read and two lease-condition units in each of two transactions per attempt plus one source-side heartbeat read per minute
+target	live_archive_validator_receipt_cleanup_writes	326000	write-request-unit	One conditional exact-identity receipt delete across two boundary-concentrated expiry envelopes
+target	live_archive_validator_state_write_units	3202258	write-request-unit	Receipt and checkpoint transactions lease-condition reserves launch guards launch results lease renewal and boundary-safe cleanup
+target	live_archive_validator_state_storage_gb	4.4	GB-month	Two-KiB billed-storage envelopes for retained receipts and cleanup overlap plus bounded counters
+target	live_archive_validator_queue_transfer_gb	1.4688256	GB	Retry-inclusive eight-KiB source-send wire envelope charged as cross-region transfer
+target	live_archive_validator_read_gb	216.7343104	GB	Baseline ingress plus every validation retry concentrated at the eight-MiB object maximum
+target	live_archive_validator_log_gb	3.596	GB	Twenty kilobytes per attempt plus ten MB of bounded service and lease logs
+target	live_archive_validator_log_storage_gb	7.192	GB-month	Two boundary-concentrated validator log envelopes at thirty-day retention
+target	archive_objects_per_minute	4	object-minute	Admission ceiling below the single active consumer's thirty-object-per-minute capacity
+shared	probe_schedule_identities	44640	schedule	One immutable identity for every minute in a 744-hour month
+shared	probe_duplicate_attempts	44640	attempt	One duplicate reserve for every intended identity
+shared	probe_shutdown_attempts	4464	attempt	Non-borrowable in-flight and group-deletion propagation reserve
+shared	probe_api_requests	138384	request	Two calls per intended identity plus one idempotent write for every duplicate and shutdown delivery
+shared	probe_api_sdk_retries	0	attempt	Probe idempotent-write and read clients each make exactly one attempt
+shared	probe_short_response_bytes	2048	byte	One-KiB receipt or error body plus one-KiB response headers for a short replay or shutdown delivery
+shared	probe_group_delete_coverage	44640	schedule	Every identity belongs to the one deletable accounting-window group
+shared	probe_synchronous_lambda_invoke	1	boolean	Scheduler universal target pins Lambda Invoke to RequestResponse
+shared	probe_scheduler_universal_invoke_target	1	boolean	Scheduler uses the universal Lambda Invoke target rather than the asynchronous templated target
+shared	probe_scheduler_invocation_type_request_response	1	boolean	Universal Lambda Invoke sets InvocationType to RequestResponse
+shared	probe_scheduler_maximum_retry_attempts	0	attempt	Scheduler target delivery retries are disabled
+shared	probe_scheduler_maximum_event_age_seconds	60	second	Scheduler rejects delivery after the bounded event-age window
+shared	probe_api_before_launch_control	1	boolean	Every invocation completes and records the normal API synthetic before validator lifecycle control
+shared	probe_api_deadline_seconds	1	second	The API synthetic commits success or failure before its one-second sub-deadline
+shared	probe_lifecycle_reserve_seconds	4	second	Four seconds of the five-second invocation remain reserved for serialized validator lifecycle control
+shared	probe_second_schedule_start_seconds	120	second	Latest start of the second scheduled minute after failure onset
+shared	scheduler_delivery_delay_seconds	60	second	Full documented Scheduler precision window without subsecond rounding assumptions
+shared	probe_timeout_seconds	5	second	Hard timeout for one probe invocation
+shared	emf_publish_extract_seconds	5	second	Qualification bound for log ingestion and metric extraction or missing-signal recognition
+shared	alarm_evaluation_seconds	10	second	High-resolution alarm evaluation bound
+shared	pager_receipt_seconds	40	second	Notification and pager delivery bound
+shared	regional_detection_objective_seconds	240	second	Hard primary-region loss detection objective
+shared	live_archive_validator_outbox_dispatch_seconds	60	second	Maximum from becoming the ordered outbox head to acknowledged recovery-queue send
+shared	live_archive_validator_queue_delay_seconds	300	second	FIFO queue delay measured from acknowledged recovery-queue send
+shared	managed_crr_stage_seconds	300	second	Accepted normal live replication stage
+shared	live_archive_validator_task_count	2	task	One active lease holder and one hot standby Fargate task
+shared	live_archive_validator_active_leaders	1	task	DynamoDB fencing admits exactly one queue consumer
+shared	live_archive_validator_task_vcpu	0.25	vCPU	Quarter-vCPU ARM allocation per task
+shared	live_archive_validator_task_memory_gb	0.5	GB	Half-GB ARM allocation per task
+shared	live_archive_validator_ecs_service_scheduler	0	boolean	Standalone tasks prevent an ECS service scheduler from launching unreserved replacements
+shared	live_archive_validator_probe_launch_controller	1	boolean	The independently scheduled recovery probe is the only validator task-launch principal
+shared	live_archive_validator_stop_obsolete_before_launch	1	boolean	Every obsolete validator task reaches STOPPED before a desired-revision launch
+shared	live_archive_validator_max_stop_tasks_per_probe	1	task	One non-retried StopTask request per probe bounds controller work
+shared	live_archive_validator_stop_task_sdk_retries	0	attempt	Obsolete-task termination retries only on the next priced probe invocation
+shared	live_archive_validator_run_task_count	1	task	Each guarded ECS RunTask request launches exactly one independently replayable slot
+shared	live_archive_validator_two_slot_run_task_calls	2	request	Bootstrap and digest transition start both pre-reserved per-slot RunTask requests in one invocation
+shared	live_archive_validator_single_slot_run_task_calls	1	request	An unplanned single-slot loss submits exactly one replacement request
+shared	live_archive_validator_run_task_client_token	1	boolean	Every RunTask request carries the durable deterministic launch-token identity
+shared	live_archive_validator_run_task_started_by	1	boolean	Every RunTask stamps the deterministic ledger slot identity for discovery reconciliation
+shared	live_archive_validator_run_task_client_token_min_ttl_seconds	3600	second	A successfully created task retains its client-token identity for at least its lifetime plus one hour
+shared	live_archive_validator_run_task_replay_deadline_seconds	3000	second	An uncertain RunTask request may replay only within fifty minutes of its durable first-attempt timestamp
+shared	live_archive_validator_run_task_discovery_before_replay	1	boolean	List and describe reconcile a matching startedBy task ARN before any idempotent replay
+shared	live_archive_validator_run_task_sdk_retries	0	attempt	Uncertain RunTask outcomes replay only the same client token and request parameters
+shared	live_archive_validator_run_task_response_arn_persisted	1	boolean	The returned task ARN is conditionally persisted against its launch token before the slot is considered populated
+shared	live_archive_validator_two_slot_calls_parallel	1	boolean	Both independently tokened topology-fill requests start concurrently under one lifecycle claim
+shared	live_archive_validator_probe_ecs_list_tasks	1	boolean	Probe role receives ECS ListTasks
+shared	live_archive_validator_probe_ecs_describe_tasks	1	boolean	Probe role receives ECS DescribeTasks
+shared	live_archive_validator_probe_ecs_stop_task	1	boolean	Probe role receives ECS StopTask
+shared	live_archive_validator_probe_ecs_run_task	1	boolean	Probe role receives ECS RunTask
+shared	live_archive_validator_probe_ecs_other_actions	0	action	Probe role receives no other ECS action
+shared	live_archive_validator_probe_ecs_cluster_condition	1	boolean	Every ECS statement carries the exact recovery-cluster condition where supported
+shared	live_archive_validator_probe_ecs_task_family_condition	1	boolean	StopTask and RunTask are restricted to the validator task family
+shared	live_archive_validator_probe_dynamodb_update_item	1	boolean	Probe role receives DynamoDB UpdateItem
+shared	live_archive_validator_probe_dynamodb_other_actions	0	action	Probe role receives no other DynamoDB action
+shared	live_archive_validator_probe_launch_leading_key	1	boolean	DynamoDB access is restricted to the launch-control leading-key namespace
+shared	live_archive_validator_probe_pass_execution_role	1	boolean	PassRole names the validator execution role
+shared	live_archive_validator_probe_pass_task_role	1	boolean	PassRole names the validator task role
+shared	live_archive_validator_probe_pass_other_roles	0	role	PassRole names no additional role
+shared	live_archive_validator_probe_passed_to_ecs	1	boolean	PassRole is conditioned on ecs-tasks.amazonaws.com
+shared	live_archive_validator_launch_ledger_item_bytes	2048	byte	Launch control stores two slots parameters client tokens returned task ARNs and a capacity-two token bucket
+shared	live_archive_validator_restart_guard	1	boolean	A service-wide capacity-two token bucket refuses launches after the reserved monthly envelope
+shared	live_archive_validator_launch_control_serialized	1	boolean	The already-priced conditional guard gives one probe identity exclusive lifecycle and replay ownership
+shared	live_archive_validator_launch_control_claim_seconds	5	second	The exclusive lifecycle claim outlives the four-second lifecycle phase and expires after a terminated invocation
+shared	live_archive_validator_launch_bucket_capacity	2	token	Two immediately available tokens can fill the active and standby slots
+shared	live_archive_validator_launch_token_refill_seconds	3600	second	The service-wide launch bucket refills at most one token per hour
+shared	live_archive_validator_launch_window_end_exclusive	1	boolean	A refill exactly at hour 744 belongs only to the next non-overlapping accounting window
+shared	live_archive_validator_launches_month	745	launch	Two initial bucket tokens plus 743 hourly refills strictly inside a 744-hour window
+shared	live_archive_validator_control_schedule_seconds	60	second	Validator lifecycle control is attempted by every fixed one-minute probe identity
+shared	live_archive_validator_topology_fill_seconds	125	second	After obsolete tasks stop the next worst-case delivered probe submits both slots within its five-second invocation
+shared	live_archive_validator_restart_minimum_billing_seconds	60	second	Each launch reserves the Fargate and public-IPv4 one-minute billing minimum
+shared	live_archive_validator_polls_per_second	1	request-second	Application token bucket hard ceiling for the active task
+shared	live_archive_validator_receive_loop_count	2	loop	Two concurrent receive loops share the one-start-per-second application token bucket
+shared	live_archive_validator_max_inter_poll_seconds	1	second	Dedicated receive loop starts the next request within one second
+shared	live_archive_validator_long_poll_seconds	20	second	Configured SQS ReceiveMessage wait time
+shared	live_archive_validator_receive_response_seconds	21	second	HTTP response deadline exceeds the configured long poll
+shared	live_archive_validator_batch_size	10	message	Maximum FIFO ReceiveMessage batch
+shared	live_archive_validator_fifo_enabled	1	boolean	Validation queue uses FIFO ordering
+shared	live_archive_validator_receipt_key_components	3	component	Bucket key and version ID form the durable receipt identity
+shared	live_archive_validator_receipt_identity_digest_bytes	32	byte	Receipt key is the SHA-256 digest of the length-delimited bucket key and version ID tuple
+shared	live_archive_validator_receipt_identity_sha256	1	boolean	Receipt identity uses SHA-256 rather than storing unbounded raw S3 identity fields in the key
+shared	live_archive_validator_signed_content_length	1	boolean	Source job signs expected body length before recovery validation
+shared	live_archive_validator_pre_head_reservation	1	boolean	Attempt request KMS byte and receipt budgets are reserved before HEAD
+shared	live_archive_validator_pending_takeover	1	boolean	Expired matching pending receipts advance to a fenced attempt generation
+shared	live_archive_validator_final_lease_fence	1	boolean	The final receipt and checkpoint transaction checks the still-live lease generation
+shared	live_archive_validator_sdk_retries	0	attempt	Validator SDK clients retry only through an explicitly reserved attempt
+shared	live_archive_validator_dlq_sdk_retries	0	attempt	DLQ reconciliation retries only through the explicit receive-retry partition
+shared	live_archive_validator_max_receive_count	1	attempt	An unacknowledged validation delivery is quarantined after one receive
+shared	live_archive_validator_dlq_repair_before_delete	1	boolean	A DLQ copy is deleted only after its signed job is acknowledged by the validation queue
+shared	live_archive_validator_dlq_send_validation_permission	1	boolean	The reconciliation role can send only to the exact validation FIFO queue
+shared	live_archive_validator_fifo_dedup_seconds	300	second	SQS FIFO suppresses a repeated deduplication identity only inside its five-minute interval
+shared	live_archive_validator_uncertain_send_retry_seconds	240	second	Source and redrive uncertain-send retries must complete within four minutes of the first send attempt
+shared	live_archive_validator_attempt_includes_delete_ack	1	boolean	The two-second successful attempt ends only after DeleteMessage acknowledgement
+shared	live_archive_validator_receipt_cleanup_enabled	1	boolean	A deterministic exact-version sweeper removes receipts after archive expiry
+shared	live_archive_validator_receipt_cleanup_seconds	86400	second	Daily hard deadline from verified archive expiry to exact receipt deletion
+shared	live_archive_validator_receipt_encoded_bytes	1024	byte	Maximum application-encoded receipt including attribute names and values
+shared	dynamodb_base_item_storage_overhead_bytes	100	byte	Documented base per-item DynamoDB storage overhead
+shared	live_archive_validator_receipt_storage_envelope_bytes	2048	byte	Priced per-receipt billing envelope including base and transaction metadata overhead
+shared	live_archive_validator_max_object_bytes	8388608	byte	Maximum compressed archive object and per-retry body read
+shared	live_archive_validator_send_wire_bytes	8192	byte	Complete retry-inclusive source SendMessage wire cap
+shared	live_archive_validator_queued_predecessors	3	attempt	Worst target burst places three same-stream objects before the fourth
+shared	live_archive_validator_receive_cycles	4	request	Worst split delivery requires one complete receive cycle per object in the target same-stream burst
+shared	live_archive_validator_per_stream_min_interval_seconds	61	second	Outside an admitted burst each stream waits longer than one ordered outbox dispatch before another object
+shared	live_archive_validator_same_stream_burst_objects	4	object	One target-sized same-stream burst may be admitted only from an empty stream outbox
+shared	live_archive_validator_same_stream_burst_blocks_refill	1	boolean	A stream cannot refill until every object in its admitted burst is acknowledged and checkpointed
+shared	live_archive_validator_attempt_seconds	2	second	Hard validation-attempt deadline
+shared	live_archive_validator_source_to_complete_seconds	636	second	Four ordered send acknowledgements queue delay and four complete split-delivery receive validation and delete cycles
+shared	live_archive_validator_lease_renew_seconds	10	second	Each of two tasks makes at most one conditional lease write per interval
+shared	live_archive_validator_lease_seconds	30	second	Lease expiration bounds stale-leader authority
+shared	live_archive_validator_heartbeat_read_seconds	60	second	Primary admission checks the recovery lease heartbeat once per minute
