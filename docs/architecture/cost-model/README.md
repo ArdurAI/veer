@@ -118,16 +118,19 @@ ceiling. It does not contact AWS or read environment credentials.
 | Live archive validator same-region reads | 47.0378496 GB | 216.7343104 GB |
 | Live archive validator log ingestion/storage | 0.824/1.648 GB | 3.596/7.192 GB |
 | Retained current archive data versions per region | 481,000 | 2,119,000 |
-| Physical archive versions plus delete markers per region | 518,000 | 2,282,000 |
-| Retention-cleanup ListObjectVersions requests, both regions | 148,002 | 652,002 |
-| Delete-marker cleanup-overlap storage per region | 0.02 GB-month | 0.09 GB-month |
+| Physical archive versions plus delete markers per region | 555,000 | 2,445,000 |
+| Retention-cleanup ListObjectVersions requests, both regions | 296,004 | 1,304,004 |
+| Retention-cleanup Object Lock metadata reads, both regions | 296,000 | 1,304,000 |
+| Delete-marker cleanup-overlap storage per region | 0.04 GB-month | 0.17 GB-month |
 | Full-reseed source GET/destination PUT attempts | 530,000 each | 2,331,000 each |
 | Full-reseed KMS client-envelope decrypt requests | 530,000 | 2,331,000 |
 | Full-reseed cross-region transfer | 229 GB | 1,144 GB |
 | Full-reseed S3 Batch Operations jobs | 1 | 1 |
 | Full-reseed S3 Batch object operations | 530,000 | 2,331,000 |
 | Full-reseed generated-manifest source objects scanned | 481,000 | 2,119,000 |
-| Full-reseed transient manifest objects | 1 | 1 |
+| Full-reseed transient manifest data/set objects | 481,000/481,003 | 2,119,000/2,119,003 |
+| Full-reseed transient manifest write/validation-read/consumption-read requests | 481,003/481,003/481,003 | 2,119,003/2,119,003/2,119,003 |
+| Full-reseed transient manifest cleanup LIST/DELETE requests | 483/482 | 2,121/2,120 |
 | Full-reseed transient manifest storage | 0.28 GB-month | 0.28 GB-month |
 | Full-reseed candidate overlap storage | 7.39 GB-month | 36.91 GB-month |
 | Full-reseed destination GET validation attempts | 530,000 | 2,331,000 |
@@ -141,8 +144,11 @@ ceiling. It does not contact AWS or read environment credentials.
 | Retained recovery-probe identity claims | 46,080 | 46,080 |
 | Encoded recovery-probe identity claim | 256 bytes | 256 bytes |
 | Probe Lambda duration | 468,720 GB-seconds | 468,720 GB-seconds |
-| Probe logs/artifacts retained 30 days | 14.0616/44.64 GB | 14.0616/44.64 GB |
+| Probe logs/artifact data retained 30 days plus cleanup overlap | 14.0616/44.64 GB | 14.0616/44.64 GB |
 | Probe artifact PUT attempts | 44,640 | 44,640 |
+| Probe artifact current maximum or post-Lifecycle current/noncurrent/marker state | 44,640 or 43,200/1,440/1,440 | 44,640 or 43,200/1,440/1,440 |
+| Probe artifact cleanup LIST/DELETE requests | 1,488/93 | 1,488/93 |
+| Probe artifact marker-key storage | 0.00073728 GB-month | 0.00073728 GB-month |
 
 The database and queue rows preserve the accepted ADR 0002 stack and ADR 0012
 reliability envelope on equal assumptions. They are design estimates, not
@@ -405,11 +411,37 @@ Replication job builds a fresh candidate generation from retained versions. The
 full reseed prices 530,000/2,331,000 Batch object operations, source GET
 attempts, destination PUT attempts, and destination validation GET attempts;
 one client-envelope KMS decrypt per destination validation; 229/1,144 GB
-transferred; and a generated-
-manifest scan of 481,000/2,119,000 source objects. One generated manifest object
-lives in a source-region recovery-control prefix for at most 24 hours, is capped
-at 8 GiB, and is priced as 0.28 decimal GB-month plus one tier-one write;
-completion-report output is disabled. Candidate overlap is capped at the retry-inclusive
+transferred; and a generated-manifest scan of 481,000/2,119,000 source objects.
+The generated
+[`S3InventoryReport_CSV_20211130`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_control_S3GeneratedManifestDescriptor.html)
+set lives in a dedicated nonversioned source-region recovery-control bucket and
+reserves three control objects plus at most one data object per scanned source:
+481,003/2,119,003 objects and writes. Veer validation and S3 Batch Operations
+consumption each read the entire conforming set, so each pass separately prices
+481,003/2,119,003 Tier-2 reads. AWS documents the
+[Inventory control and data objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory-location.html)
+but publishes no shard-count quota, so this is an explicit qualification
+allowance rather than a provider guarantee. Veer validates the full listed set
+before replication and fails the attempt if it exceeds the cardinality or
+aggregate 8 GiB allowance. S3 writes the output before that check and exposes no
+pre-write control for Veer's allowance, so provider-generated excess writes,
+bytes, storage, and cleanup are an explicit unbounded residual cost outside the
+fixed ceilings. Veer permits one generator attempt and stops before replication
+or any other non-cleanup Veer-initiated billable action on excess. Exact-prefix
+cleanup LIST and DELETE calls are the sole permitted compensation and remain
+part of the unbounded residual, because Veer cannot retroactively bound S3's
+output. A dedicated role is assumable only by the recovery job
+submitter for the signed generation. It can `s3:ListBucket` only with the exact
+generated-prefix condition and can `s3:GetObject` and `s3:DeleteObject` only
+beneath that prefix; it cannot write objects, create jobs, or pass roles. That
+role executes pre-confirmation validation and terminal cleanup. A conforming
+set is moved from `Suspended` to `Ready` only when the job submitter calls
+`s3:UpdateJobStatus` on the exact created job ARN after a signed successful
+validation; `Cancelled` on that ARN requires a signed rejection result, and no
+other job update is permitted.
+The set remains for at most 24 hours, prices 0.28
+decimal GB-month, and reserves 483/2,121 cleanup LISTs plus 482/2,120 free
+deletes; completion-report output is disabled. Candidate overlap is capped at the retry-inclusive
 transfer envelope for 24 hours, yielding 7.39/36.91 GB-month. Each exact
 destination version is read with checksum mode, its service checksum is checked,
 and its body digest and embedded signature are recomputed. The
@@ -433,15 +465,22 @@ metadata and creation time. Runtime and active-retention roles cannot bypass or
 shorten governance retention. A separate signed cleanup role may bypass only a
 tagged, non-authoritative recovery candidate or retired generation so failed
 reseed storage can still meet its 24-hour teardown bound. A daily exact-version
-sweeper is the
-24-hour hard bound and verifies an empty expired prefix; lifecycle remains
-defense in depth. One boundary-concentrated envelope of noncurrent versions and
-markers raises the physical cap to 518,000/2,282,000 entries per region and
-marker-key storage to 0.02/0.09 GB-month. The worksheet prices a deliberately
-pessimistic one LIST response per version and marker plus the final empty proof:
-74,001/326,001 per region, 148,002/652,002 total. DELETE requests remain free.
+sweeper is the 24-hour hard bound and verifies an empty expired prefix;
+lifecycle remains defense in depth. The sweeper checks retention and legal hold,
+then deletes eligible current versions, noncurrent versions, and markers by exact
+version ID. Two adjacent boundary-concentrated cohorts raise the physical cap to
+555,000/2,445,000 entries per region and marker-key storage to 0.04/0.17
+GB-month. The worksheet prices a deliberately pessimistic one LIST response per
+eligible data version and marker plus one final empty proof for each signed
+cohort prefix: 148,002/652,002 per region, 296,004/1,304,004 total. DELETE
+requests remain free.
+One retention and one legal-hold metadata read per eligible data version adds
+148,000/652,000 Tier-2 requests per region, or 296,000/1,304,000 total.
 Protected data bytes are already priced as S3 Standard storage; the default
 retention path adds no separate API request row.
+Qualification exercises both legal boundary states: eligible objects that remain
+current while Lifecycle is delayed, and the noncurrent-version plus delete-marker
+state after Lifecycle acts.
 
 Failed candidates and retired active generations are cleaned by exact version.
 The LIST budget assumes only one returned version per request plus one final
@@ -465,10 +504,20 @@ provider-request traffic yields hard egress caps of 191.88/993.13 GB; the
 worksheet prices 195/995 GB without free allowances. Request headers and request
 lines contribute to ALB processing, not server-to-client internet egress.
 
-The recovery-probe result bucket is also versioned with explicit cleanup: current
-objects expire after 31 days, noncurrent entries expire after one day, and marker
-cleanup requires an exact version-list audit before admitting the next probe identity
-window.
+The recovery-probe result bucket is also versioned with explicit cleanup. Current
+objects expire after 30 days; a daily sweeper enumerates current versions,
+noncurrent versions, and delete markers and deletes eligible entries by exact
+version ID before admitting the next probe identity window. Before Lifecycle
+acts, the maximum is 44,640 current data versions. After it acts, the alternate
+class state is 43,200 current versions, 1,440 noncurrent versions, and 1,440
+markers. The class maxima are not simultaneous; the larger physical state is
+46,080 entries. Thirty-one sweeps reserve 1,488 LIST
+requests including empty proofs and 93 free delete batches. Data storage is 44.64
+GB-month and maximum 512-byte marker keys add 0.00073728 GB-month.
+The probe role has no list or delete permission. A separate short-lived cleanup
+role grants the daily sweeper only exact-prefix `s3:ListBucketVersions` and
+`s3:DeleteObjectVersion`; it cannot read or write bodies, modify the bucket, or
+act on another prefix.
 
 The one-minute recovery-region probe uses 44,640 immutable schedule identities
 in one dedicated accounting-window group. Each identity uses the Scheduler
@@ -490,8 +539,8 @@ schedule group, while the shutdown partition absorbs in-flight delivery and
 eventual group deletion. The full 60-second Scheduler precision window,
 five-second function, five-second EMF extraction or missing-signal recognition,
 ten-second alarm, and forty-second pager budgets meet the inclusive 240-second
-objective. The 44,640 artifact attempts and 44.64 GB artifact storage remain
-winner-only bounds.
+objective. The 44,640 artifact attempts remain winner-only; data and marker
+storage plus cleanup requests are independently bounded as described above.
 The worksheet prices Scheduler at its USD 1 per million paid tier even though the
 published offer includes a free tier, then prices Lambda, logs, one artifact
 attempt, three custom metrics, and one high-resolution alarm. Free service

@@ -29,8 +29,10 @@ small	external_synthetic_log_ingestion	monitoring	14.0616	GB	0.50	aws-cloudwatch
 small	external_synthetic_log_storage	monitoring	14.0616	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of every bounded probe invocation log
 small	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
 small	external_synthetic_alarm	monitoring	1	alarm-metric-month	0.30	aws-cloudwatch-recovery	One ten-second high-resolution missing-or-failed-run alarm
-small	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
+small	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	One-per-minute one-million-byte artifacts held thirty days current plus one daily cleanup interval noncurrent
 small	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One conditional tier-one S3 PUT attempt per admitted probe identity
+small	external_synthetic_artifact_marker_storage	monitoring	0.00073728	GB-month	0.023	aws-s3-recovery	One day of one-per-minute maximum 512-byte delete markers pending exact-version cleanup
+small	external_synthetic_artifact_cleanup_list_requests	monitoring	1488	API-request	0.000005	aws-s3-recovery	Thirty-one daily ListObjectVersions passes across forty-seven maximum pages plus a final empty proof
 small	live_archive_validator_fargate_vcpu	recovery	375.104167	vCPU-hour	0.03238	aws-ecs-recovery	Two quarter-vCPU ARM task slots plus the bounded launch-token minimums
 small	live_archive_validator_fargate_memory	recovery	750.208333	GB-hour	0.00356	aws-ecs-recovery	Two half-GB ARM task slots plus the bounded launch-token minimums
 small	live_archive_validator_public_ipv4	recovery	1500.416667	address-hour	0.005	aws-vpc-ipv4-recovery	Two continuous public addresses plus the bounded launch-token minimums
@@ -44,10 +46,12 @@ small	live_archive_validator_state_storage	recovery	1	GB-month	0.25	aws-dynamodb
 small	live_archive_validator_queue_transfer	recovery	0.3334144	GB	0.02	aws-cross-region-transfer	Retry-inclusive eight-KiB source-send wire envelope charged as us-east-1 to us-west-2 transfer
 small	object_archive	storage	208	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
 small	recovery_object_archive	recovery	208	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
-small	archive_delete_marker_overlap	storage	0.02	GB-month	0.023	aws-s3	One boundary-concentrated envelope of maximum 512-byte delete-marker keys pending exact-version cleanup
-small	recovery_archive_delete_marker_overlap	recovery	0.02	GB-month	0.023	aws-s3-recovery	One replicated boundary-concentrated envelope of maximum 512-byte delete-marker keys pending cleanup
-small	archive_lifecycle_list_requests	storage	74001	API-request	0.000005	aws-s3	One ListObjectVersions request per expiring data version and marker plus final empty proof
-small	recovery_archive_lifecycle_list_requests	recovery	74001	API-request	0.000005	aws-s3-recovery	One recovery-region version-list request per expiring version and marker plus final empty proof
+small	archive_delete_marker_overlap	storage	0.04	GB-month	0.023	aws-s3	Two adjacent boundary-concentrated envelopes of maximum 512-byte delete-marker keys pending exact-version cleanup
+small	recovery_archive_delete_marker_overlap	recovery	0.04	GB-month	0.023	aws-s3-recovery	Two replicated boundary-concentrated envelopes of maximum 512-byte delete-marker keys pending cleanup
+small	archive_lifecycle_list_requests	storage	148002	API-request	0.000005	aws-s3	One conservative ListObjectVersions request per eligible data version and marker plus one final empty proof for each of two signed cohort prefixes
+small	recovery_archive_lifecycle_list_requests	recovery	148002	API-request	0.000005	aws-s3-recovery	One recovery-region request per eligible version and marker plus one final empty proof for each of two signed cohort prefixes
+small	archive_lifecycle_object_lock_read_requests	storage	148000	API-request	0.0000004	aws-s3	One retention and one legal-hold metadata read per eligible primary-region data version
+small	recovery_archive_lifecycle_object_lock_read_requests	recovery	148000	API-request	0.0000004	aws-s3-recovery	One retention and one legal-hold metadata read per eligible recovery-region data version
 small	normal_recovery_object_transfer	recovery	16	GB	0.02	aws-cross-region-transfer	One full monthly archive ingress envelope replicated to the recovery region
 small	recovery_object_transfer	recovery	229	GB	0.02	aws-cross-region-transfer	One full retained-archive reseed with ten percent byte retry headroom
 small	primary_archive_requests	storage	55500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of thirty-seven thousand monthly archive objects
@@ -59,7 +63,10 @@ small	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations r
 small	full_reseed_batch_object_operations	recovery	530000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including rounded-up retry headroom
 small	full_reseed_generated_manifest_scan	recovery	481000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
 small	full_reseed_manifest_storage	recovery	0.28	GB-month	0.023	aws-s3	Eight GiB converted to decimal GB and retained for at most twenty-four hours in a thirty-one-day window
-small	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
+small	full_reseed_manifest_write	recovery	481003	API-request	0.000005	aws-s3	One tier-one output write for three control objects plus the one-data-object-per-source qualification allowance
+small	full_reseed_manifest_validation_read	recovery	481003	API-request	0.0000004	aws-s3	One Veer tier-two validation read for every conforming manifest-set object
+small	full_reseed_manifest_consumption_read	recovery	481003	API-request	0.0000004	aws-s3	One S3 Batch Operations tier-two consumption read for every conforming manifest-set object
+small	full_reseed_manifest_cleanup_list_requests	recovery	483	API-request	0.000005	aws-s3	Four hundred eighty-two one-thousand-key pages plus a final empty manifest-prefix proof
 small	full_reseed_candidate_storage	recovery	7.39	GB-month	0.023	aws-s3-recovery	Retry-inclusive candidate generation retained for at most twenty-four hours
 small	full_reseed_destination_get_requests	recovery	530000	API-request	0.0000004	aws-s3-recovery	Exact-version destination body GET validation attempts including rounded-up retry headroom
 small	full_reseed_cleanup_list_requests	recovery	530001	API-request	0.000005	aws-s3-recovery	One version-list request per possible version plus one final empty proof
@@ -97,8 +104,10 @@ target	external_synthetic_log_ingestion	monitoring	14.0616	GB	0.50	aws-cloudwatc
 target	external_synthetic_log_storage	monitoring	14.0616	GB-month	0.03	aws-cloudwatch-recovery	Thirty-day retention of every bounded probe invocation log
 target	external_synthetic_metrics	monitoring	3	metric-month	0.30	aws-cloudwatch-recovery	Only SuccessPercent Duration and Failed
 target	external_synthetic_alarm	monitoring	1	alarm-metric-month	0.30	aws-cloudwatch-recovery	One ten-second high-resolution missing-or-failed-run alarm
-target	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	0.001 GB encrypted artifact per run retained thirty days
+target	external_synthetic_artifact_storage	monitoring	44.64	GB-month	0.023	aws-s3-recovery	One-per-minute one-million-byte artifacts held thirty days current plus one daily cleanup interval noncurrent
 target	external_synthetic_artifact_requests	monitoring	44640	API-request	0.000005	aws-s3-recovery	One conditional tier-one S3 PUT attempt per admitted probe identity
+target	external_synthetic_artifact_marker_storage	monitoring	0.00073728	GB-month	0.023	aws-s3-recovery	One day of one-per-minute maximum 512-byte delete markers pending exact-version cleanup
+target	external_synthetic_artifact_cleanup_list_requests	monitoring	1488	API-request	0.000005	aws-s3-recovery	Thirty-one daily ListObjectVersions passes across forty-seven maximum pages plus a final empty proof
 target	live_archive_validator_fargate_vcpu	recovery	375.104167	vCPU-hour	0.03238	aws-ecs-recovery	Two quarter-vCPU ARM task slots plus the bounded launch-token minimums
 target	live_archive_validator_fargate_memory	recovery	750.208333	GB-hour	0.00356	aws-ecs-recovery	Two half-GB ARM task slots plus the bounded launch-token minimums
 target	live_archive_validator_public_ipv4	recovery	1500.416667	address-hour	0.005	aws-vpc-ipv4-recovery	Two continuous public addresses plus the bounded launch-token minimums
@@ -112,10 +121,12 @@ target	live_archive_validator_state_storage	recovery	4.4	GB-month	0.25	aws-dynam
 target	live_archive_validator_queue_transfer	recovery	1.4688256	GB	0.02	aws-cross-region-transfer	Retry-inclusive eight-KiB source-send wire envelope charged as us-east-1 to us-west-2 transfer
 target	object_archive	storage	1040	GB-month	0.023	aws-s3	Thirteen full 31-day ingress envelopes retained for 365 days
 target	recovery_object_archive	recovery	1040	GB-month	0.023	aws-s3-recovery	Thirteen replicated 31-day ingress envelopes retained in us-west-2
-target	archive_delete_marker_overlap	storage	0.09	GB-month	0.023	aws-s3	One boundary-concentrated envelope of maximum 512-byte delete-marker keys pending exact-version cleanup
-target	recovery_archive_delete_marker_overlap	recovery	0.09	GB-month	0.023	aws-s3-recovery	One replicated boundary-concentrated envelope of maximum 512-byte delete-marker keys pending cleanup
-target	archive_lifecycle_list_requests	storage	326001	API-request	0.000005	aws-s3	One ListObjectVersions request per expiring data version and marker plus final empty proof
-target	recovery_archive_lifecycle_list_requests	recovery	326001	API-request	0.000005	aws-s3-recovery	One recovery-region version-list request per expiring version and marker plus final empty proof
+target	archive_delete_marker_overlap	storage	0.17	GB-month	0.023	aws-s3	Two adjacent boundary-concentrated envelopes of maximum 512-byte delete-marker keys pending exact-version cleanup
+target	recovery_archive_delete_marker_overlap	recovery	0.17	GB-month	0.023	aws-s3-recovery	Two replicated boundary-concentrated envelopes of maximum 512-byte delete-marker keys pending cleanup
+target	archive_lifecycle_list_requests	storage	652002	API-request	0.000005	aws-s3	One conservative ListObjectVersions request per eligible data version and marker plus one final empty proof for each of two signed cohort prefixes
+target	recovery_archive_lifecycle_list_requests	recovery	652002	API-request	0.000005	aws-s3-recovery	One recovery-region request per eligible version and marker plus one final empty proof for each of two signed cohort prefixes
+target	archive_lifecycle_object_lock_read_requests	storage	652000	API-request	0.0000004	aws-s3	One retention and one legal-hold metadata read per eligible primary-region data version
+target	recovery_archive_lifecycle_object_lock_read_requests	recovery	652000	API-request	0.0000004	aws-s3-recovery	One retention and one legal-hold metadata read per eligible recovery-region data version
 target	normal_recovery_object_transfer	recovery	80	GB	0.02	aws-cross-region-transfer	One full monthly archive ingress envelope replicated to the recovery region
 target	recovery_object_transfer	recovery	1144	GB	0.02	aws-cross-region-transfer	One full retained-archive reseed with ten percent byte retry headroom
 target	primary_archive_requests	storage	244500	API-request	0.000005	aws-s3	Half of three tier-one requests for each of one hundred sixty-three thousand monthly archive objects
@@ -127,7 +138,10 @@ target	full_reseed_batch_job	recovery	1	job	0.25	aws-s3	One S3 Batch Operations 
 target	full_reseed_batch_object_operations	recovery	2331000	object-operation	0.000001	aws-s3	Batch operation attempts for retained objects including retry headroom
 target	full_reseed_generated_manifest_scan	recovery	2119000	source-object	0.000000015	aws-s3	One service-generated manifest scan over the retained source objects
 target	full_reseed_manifest_storage	recovery	0.28	GB-month	0.023	aws-s3	Eight GiB converted to decimal GB and retained for at most twenty-four hours in a thirty-one-day window
-target	full_reseed_manifest_write	recovery	1	API-request	0.000005	aws-s3	One tier-one write for the generated manifest artifact
+target	full_reseed_manifest_write	recovery	2119003	API-request	0.000005	aws-s3	One tier-one output write for three control objects plus the one-data-object-per-source qualification allowance
+target	full_reseed_manifest_validation_read	recovery	2119003	API-request	0.0000004	aws-s3	One Veer tier-two validation read for every conforming manifest-set object
+target	full_reseed_manifest_consumption_read	recovery	2119003	API-request	0.0000004	aws-s3	One S3 Batch Operations tier-two consumption read for every conforming manifest-set object
+target	full_reseed_manifest_cleanup_list_requests	recovery	2121	API-request	0.000005	aws-s3	Two thousand one hundred twenty one-thousand-key pages plus a final empty manifest-prefix proof
 target	full_reseed_candidate_storage	recovery	36.91	GB-month	0.023	aws-s3-recovery	Retry-inclusive candidate generation retained for at most twenty-four hours
 target	full_reseed_destination_get_requests	recovery	2331000	API-request	0.0000004	aws-s3-recovery	Exact-version destination body GET validation attempts including retry headroom
 target	full_reseed_cleanup_list_requests	recovery	2331001	API-request	0.000005	aws-s3-recovery	One version-list request per possible version plus one final empty proof

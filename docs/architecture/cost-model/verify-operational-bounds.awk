@@ -139,6 +139,63 @@ END {
         fail("probe group deletion does not cover every schedule identity")
     }
 
+    probe_artifact_retention_seconds = bound("shared", "probe_artifact_retention_seconds")
+    probe_artifact_cleanup_seconds = bound("shared", "probe_artifact_cleanup_seconds")
+    if (probe_artifact_retention_seconds != 30 * 86400 || \
+        probe_artifact_cleanup_seconds != 86400) {
+        fail("probe artifact retention must equal 30 days with cleanup inside one day")
+    }
+    probe_artifact_unexpired_current_versions = probe_artifact_retention_seconds / 60
+    probe_artifact_cleanup_versions = probe_artifact_cleanup_seconds / 60
+    probe_artifact_current_versions_max = \
+        probe_artifact_unexpired_current_versions + probe_artifact_cleanup_versions
+    if (bound("shared", "probe_artifact_unexpired_current_versions") != \
+            probe_artifact_unexpired_current_versions || \
+        bound("shared", "probe_artifact_cleanup_interval_data_versions") != \
+            probe_artifact_cleanup_versions || \
+        bound("shared", "probe_artifact_current_versions_max") != \
+            probe_artifact_current_versions_max || \
+        bound("shared", "probe_artifact_noncurrent_versions_max") != \
+            probe_artifact_cleanup_versions || \
+        bound("shared", "probe_artifact_delete_markers_max") != \
+            probe_artifact_cleanup_versions || \
+        bound("shared", "probe_artifact_lifecycle_class_alternatives") != 1) {
+        fail("probe artifact class maxima must model lifecycle-dependent alternatives")
+    }
+    probe_artifact_physical_entries = probe_artifact_unexpired_current_versions + \
+        2 * probe_artifact_cleanup_versions
+    if (bound("shared", "probe_artifact_physical_entries") != \
+        probe_artifact_physical_entries) {
+        fail("probe artifact physical entries must include current noncurrent and marker versions")
+    }
+    probe_artifact_cleanup_sweeps = 744 * 3600 / probe_artifact_cleanup_seconds
+    probe_artifact_cleanup_list_requests = probe_artifact_cleanup_sweeps * \
+        (ceil(probe_artifact_physical_entries / 1000) + 1)
+    if (bound("shared", "probe_artifact_cleanup_list_requests_month") != \
+        probe_artifact_cleanup_list_requests) {
+        fail("probe artifact cleanup LIST budget must cover every physical entry and final empty proofs")
+    }
+    probe_artifact_cleanup_delete_requests = probe_artifact_cleanup_sweeps * \
+        ceil(2 * probe_artifact_cleanup_versions / 1000)
+    if (bound("shared", "probe_artifact_cleanup_delete_requests_month") != \
+        probe_artifact_cleanup_delete_requests) {
+        fail("probe artifact cleanup delete budget must cover noncurrent versions and markers")
+    }
+    if (bound("shared", "probe_artifact_encoded_bytes") != 1000000 || \
+        bound("shared", "probe_artifact_key_bytes") != 512) {
+        fail("probe artifact storage must use the one-million-byte body and 512-byte key envelopes")
+    }
+    if (bound("shared", "probe_artifact_cleanup_lists_all_versions") != 1 || \
+        bound("shared", "probe_artifact_cleanup_exact_version_delete") != 1) {
+        fail("probe artifact cleanup must enumerate all version classes and delete exact versions")
+    }
+    if (bound("shared", "probe_artifact_cleanup_role_assumable") != 1 || \
+        bound("shared", "probe_artifact_cleanup_role_lists_exact_prefix") != 1 || \
+        bound("shared", "probe_artifact_cleanup_role_deletes_exact_versions") != 1 || \
+        bound("shared", "probe_artifact_cleanup_role_other_bucket_actions") != 0) {
+        fail("probe artifact cleanup requires an assumable exact-prefix least-privilege role")
+    }
+
     if (bound("shared", "probe_second_schedule_start_seconds") != 120) {
         fail("probe second schedule start must equal 120 seconds")
     }
@@ -340,6 +397,60 @@ END {
     if (bound("shared", "live_archive_validator_lease_renew_seconds") != 10 || \
         bound("shared", "live_archive_validator_lease_seconds") != 30) {
         fail("live archive validator lease and renewal must equal 30 and 10 seconds")
+    }
+
+    archive_overlap_envelopes = bound("shared", "archive_lifecycle_overlap_envelopes")
+    archive_marker_key_bytes = bound("shared", "archive_delete_marker_key_bytes")
+    if (archive_overlap_envelopes != 2 || archive_marker_key_bytes != 512 || \
+        bound("shared", "archive_retention_cleanup_seconds") != 86400) {
+        fail("archive retention must reserve two adjacent cohorts and complete exact cleanup inside one day")
+    }
+    if (bound("shared", "archive_sweeper_lists_current_versions") != 1 || \
+        bound("shared", "archive_sweeper_lists_noncurrent_versions") != 1 || \
+        bound("shared", "archive_sweeper_lists_delete_markers") != 1 || \
+        bound("shared", "archive_sweeper_exact_version_delete") != 1 || \
+        bound("shared", "archive_sweeper_checks_object_lock") != 1 || \
+        bound("shared", "archive_sweeper_gets_object_retention") != 1 || \
+        bound("shared", "archive_sweeper_gets_object_legal_hold") != 1) {
+        fail("archive sweeper must prove Object Lock eligibility and delete every version class by exact identifier")
+    }
+    if (bound("shared", "archive_recovery_fixture_delayed_lifecycle_current_versions") != 1 || \
+        bound("shared", "archive_recovery_fixture_post_lifecycle_version_classes") != 1) {
+        fail("archive recovery qualification must exercise both lifecycle-dependent version states")
+    }
+    manifest_control_objects = bound("shared", "full_reseed_manifest_control_objects")
+    manifest_aggregate_bytes = bound("shared", "full_reseed_manifest_aggregate_bytes")
+    manifest_list_page_size = bound("shared", "full_reseed_manifest_list_page_size")
+    manifest_delete_batch_size = bound("shared", "full_reseed_manifest_delete_batch_size")
+    if (bound("shared", "full_reseed_manifest_inventory_format") != 1 || \
+        manifest_control_objects != 3 || manifest_aggregate_bytes != 8589934592 || \
+        bound("shared", "full_reseed_manifest_cleanup_seconds") != 86400 || \
+        bound("shared", "full_reseed_manifest_output_versioned") != 0 || \
+        manifest_list_page_size != 1000 || manifest_delete_batch_size != 1000) {
+        fail("generated manifest must use the bounded nonversioned Inventory-format object-set contract")
+    }
+    if (bound("shared", "full_reseed_manifest_prewrite_provider_enforcement") != 0 || \
+        bound("shared", "full_reseed_manifest_excess_output_residual") != 1) {
+        fail("generated manifest qualification must expose unbounded provider output before post-write validation")
+    }
+    if (bound("shared", "full_reseed_manifest_validator_assumable") != 1 || \
+        bound("shared", "full_reseed_manifest_validator_lists_exact_prefix") != 1 || \
+        bound("shared", "full_reseed_manifest_validator_reads_exact_prefix") != 1 || \
+        bound("shared", "full_reseed_manifest_validator_deletes_exact_prefix") != 1 || \
+        bound("shared", "full_reseed_manifest_validator_creates_jobs") != 0 || \
+        bound("shared", "full_reseed_manifest_validator_passes_roles") != 0) {
+        fail("generated manifest qualification requires an assumable exact-prefix least-privilege executor")
+    }
+    if (bound("shared", "full_reseed_job_confirmation_required") != 1 || \
+        bound("shared", "full_reseed_job_submitter_updates_exact_job_status") != 1 || \
+        bound("shared", "full_reseed_job_submitter_updates_other_job_status") != 0 || \
+        bound("shared", "full_reseed_job_ready_requires_signed_manifest_validation") != 1 || \
+        bound("shared", "full_reseed_job_cancel_requires_signed_manifest_rejection") != 1) {
+        fail("generated manifest qualification requires signed evidence for exact-job status transitions")
+    }
+    if (bound("shared", "full_reseed_manifest_residual_cleanup_after_rejection") != 1 || \
+        bound("shared", "full_reseed_noncleanup_billable_action_after_manifest_rejection") != 0) {
+        fail("manifest rejection must permit only residual cleanup billable actions")
     }
 
     for (profile_index = 1; profile_index <= 2; profile_index++) {
@@ -583,6 +694,94 @@ END {
             input(profile, "normal_recovery_object_transfer") != archive_ingress_gb) {
             fail(profile " archive storage or normal replication transfer differs from ingress")
         }
+        archive_retained_data_versions = objects * 13
+        archive_physical_entries = archive_retained_data_versions + \
+            archive_overlap_envelopes * objects
+        archive_eligible_entries = 2 * archive_overlap_envelopes * objects
+        archive_object_lock_read_requests = \
+            2 * archive_overlap_envelopes * objects
+        archive_list_requests = archive_eligible_entries + archive_overlap_envelopes
+        archive_marker_storage_gb = \
+            ceil(archive_overlap_envelopes * objects * archive_marker_key_bytes / 10000000) / 100
+        if (bound(profile, "archive_retained_data_versions_region") != \
+                archive_retained_data_versions || \
+            bound(profile, "archive_physical_entries_region") != \
+                archive_physical_entries) {
+            fail(profile " archive physical entries must include retained data and both adjacent marker cohorts")
+        }
+        if (bound(profile, "archive_retention_list_requests_region") != \
+                archive_list_requests || \
+            bound(profile, "archive_retention_delete_entries_region") != \
+                archive_eligible_entries) {
+            fail(profile " archive cleanup must list and delete both eligible data and marker cohorts")
+        }
+        if (bound(profile, "archive_retention_object_lock_read_requests_region") != \
+            archive_object_lock_read_requests) {
+            fail(profile " archive cleanup must read retention and legal hold for every eligible data version")
+        }
+        if (differs(bound(profile, "archive_delete_marker_storage_gb"), \
+            archive_marker_storage_gb)) {
+            fail(profile " archive marker storage must price both adjacent maximum-key cohorts")
+        }
+        if (input(profile, "archive_lifecycle_list_requests") != archive_list_requests || \
+            input(profile, "recovery_archive_lifecycle_list_requests") != \
+                archive_list_requests || \
+            input(profile, "archive_lifecycle_object_lock_read_requests") != \
+                archive_object_lock_read_requests || \
+            input(profile, "recovery_archive_lifecycle_object_lock_read_requests") != \
+                archive_object_lock_read_requests || \
+            differs(input(profile, "archive_delete_marker_overlap"), \
+                archive_marker_storage_gb) || \
+            differs(input(profile, "recovery_archive_delete_marker_overlap"), \
+                archive_marker_storage_gb)) {
+            fail(profile " archive lifecycle cost rows differ from the physical-entry contract")
+        }
+
+        manifest_source_objects = input(profile, "full_reseed_generated_manifest_scan")
+        manifest_data_objects = bound(profile, "full_reseed_manifest_data_objects")
+        manifest_objects = manifest_data_objects + manifest_control_objects
+        manifest_write_requests = bound(profile, "full_reseed_manifest_write_requests")
+        manifest_validation_read_requests = \
+            bound(profile, "full_reseed_manifest_validation_read_requests")
+        manifest_consumption_read_requests = \
+            bound(profile, "full_reseed_manifest_consumption_read_requests")
+        manifest_read_requests = bound(profile, "full_reseed_manifest_read_requests")
+        manifest_cleanup_list_requests = \
+            ceil(manifest_objects / manifest_list_page_size) + 1
+        manifest_cleanup_delete_requests = \
+            ceil(manifest_objects / manifest_delete_batch_size)
+        manifest_storage_gb = \
+            ceil(manifest_aggregate_bytes / 1000000000 / 31 * 100) / 100
+        if (manifest_source_objects != archive_retained_data_versions || \
+            manifest_data_objects != manifest_source_objects || \
+            bound(profile, "full_reseed_manifest_objects") != manifest_objects) {
+            fail(profile " generated manifest set must reserve one data object per scanned source plus three controls")
+        }
+        if (manifest_write_requests != manifest_objects || \
+            manifest_validation_read_requests != manifest_objects || \
+            manifest_consumption_read_requests != manifest_objects || \
+            manifest_read_requests != 2 * manifest_objects || \
+            bound(profile, "full_reseed_manifest_cleanup_list_requests") != \
+                manifest_cleanup_list_requests || \
+            bound(profile, "full_reseed_manifest_cleanup_delete_requests") != \
+                manifest_cleanup_delete_requests) {
+            fail(profile " generated manifest requests must cover separate validation and consumption reads plus empty proof")
+        }
+        if (differs(bound(profile, "full_reseed_manifest_storage_gb"), \
+            manifest_storage_gb)) {
+            fail(profile " generated manifest storage must price eight GiB for one day")
+        }
+        if (input(profile, "full_reseed_manifest_write") != manifest_write_requests || \
+            input(profile, "full_reseed_manifest_validation_read") != \
+                manifest_validation_read_requests || \
+            input(profile, "full_reseed_manifest_consumption_read") != \
+                manifest_consumption_read_requests || \
+            input(profile, "full_reseed_manifest_cleanup_list_requests") != \
+                manifest_cleanup_list_requests || \
+            differs(input(profile, "full_reseed_manifest_storage"), \
+                manifest_storage_gb)) {
+            fail(profile " generated manifest cost rows differ from the bounded object-set contract")
+        }
         validator_read_bytes = archive_ingress_gb * 1000000000 + \
             validator_retries * max_object_bytes
         if (differs(bound(profile, "live_archive_validator_read_gb") * 1000000000, \
@@ -616,6 +815,19 @@ END {
         if (input(profile, "external_synthetic_lambda_duration") != \
             total_probe_attempts * bound("shared", "probe_timeout_seconds")) {
             fail(profile " probe duration row is inconsistent with the hard timeout")
+        }
+        probe_artifact_storage_gb = probe_artifact_current_versions_max * \
+            bound("shared", "probe_artifact_encoded_bytes") / 1000000000
+        probe_artifact_marker_storage_gb = probe_artifact_cleanup_versions * \
+            bound("shared", "probe_artifact_key_bytes") / 1000000000
+        if (input(profile, "external_synthetic_artifact_requests") != intended || \
+            differs(input(profile, "external_synthetic_artifact_storage"), \
+                probe_artifact_storage_gb) || \
+            differs(input(profile, "external_synthetic_artifact_marker_storage"), \
+                probe_artifact_marker_storage_gb) || \
+            input(profile, "external_synthetic_artifact_cleanup_list_requests") != \
+                probe_artifact_cleanup_list_requests) {
+            fail(profile " probe artifact cost rows differ from the versioned cleanup contract")
         }
     }
 
