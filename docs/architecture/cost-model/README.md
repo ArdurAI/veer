@@ -274,6 +274,11 @@ flight and reserves 14/70 GB of monthly handshake bytes while retaining the
 20/100-per-second burst limit. Adding bounded outbound provider traffic yields
 179.59/991.64 GB; the worksheet prices 200/1,000 GB.
 
+The recovery-probe result bucket is also versioned with explicit cleanup: current
+objects expire after 31 days, noncurrent entries expire after one day, and marker
+cleanup requires an exact version-list audit before admitting the next probe identity
+window.
+
 The one-minute recovery-region probe uses 44,640 immutable schedule identities
 in a 744-hour month. EventBridge Scheduler target retries and Lambda asynchronous
 retries are zero, but at-least-once delivery is not treated as exactly once.
