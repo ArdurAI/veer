@@ -525,6 +525,13 @@ replace_once .github/branch-protection.json \
 expect_rejection unbound-required-check-app 'policy differs from required effective policy'
 
 new_fixture
+insert_after_once .github/branch-protection.json \
+  '    "strict": true,' \
+  '    "contexts": [],'
+expect_rejection legacy-required-status-contexts \
+  'required_status_checks.contexts must be omitted'
+
+new_fixture
 replace_once .github/branch-protection.json \
   '"allow_fork_syncing": true' \
   '"allow_fork_syncing": true, "required_status_checks": null'
@@ -639,4 +646,4 @@ replace_once hack/dev \
 expect_rejection excluded-generated-go \
   'contains forbidden policy: -exclude-generated'
 
-printf '%s\n' 'veer-supply-chain-tests cases=65 status=passed'
+printf '%s\n' 'veer-supply-chain-tests cases=66 status=passed'
