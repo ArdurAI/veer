@@ -1,0 +1,13 @@
+fail-on-severity: moderate
+fail-on-scopes:
+  - runtime
+  - development
+license-check: true
+allow-licenses:
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - ISC
+  - MIT
+show-openssf-scorecard: true
+warn-only: false

@@ -328,7 +328,7 @@ func derivePolicyVersion(directory MemberDirectory, policies []PolicyRevision) P
 	writeHashUint64(hasher, uint64(len(policies)))
 	for _, policy := range policies {
 		writeHashFrame(hasher, policy.Record.ID().String())
-		writeHashUint64(hasher, uint64(policy.Generation.Int64()))
+		writeHashInt64(hasher, policy.Generation.Int64())
 		writeHashUint64(hasher, uint64(len(policy.Spec.Bindings)))
 		for _, binding := range policy.Spec.Bindings {
 			writeHashFrame(hasher, binding.MemberID.String())
@@ -350,6 +350,15 @@ func writeHashFrame(hasher hash.Hash, value string) {
 func writeHashUint64(hasher hash.Hash, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
+	_, _ = hasher.Write(encoded[:])
+}
+
+func writeHashInt64(hasher hash.Hash, value int64) {
+	var encoded [8]byte
+	written, err := binary.Encode(encoded[:], binary.BigEndian, value)
+	if err != nil || written != len(encoded) {
+		panic("encode fixed-width policy integer")
+	}
 	_, _ = hasher.Write(encoded[:])
 }
 

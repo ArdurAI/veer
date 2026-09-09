@@ -1,0 +1,201 @@
+name: Supply-chain security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    name: Dependency review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          config-file: ./.github/dependency-review-config.yml
+
+  repository-scan:
+    name: Repository scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Scan vulnerabilities, secrets, licenses, containers, and IaC
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret,license
+          severity: UNKNOWN,MEDIUM,HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: false
+          trivyignores: .trivyignore.yaml
+          version: v0.74.0
+          cache: false
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bootstrap pinned build tools
+        shell: sh
+        run: ./hack/dev bootstrap
+
+      - name: Select pinned Go for CodeQL
+        shell: sh
+        run: printf '%s\n' "$GITHUB_WORKSPACE/.tools/bin" >> "$GITHUB_PATH"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: go
+          build-mode: manual
+
+      - name: Build analyzed source
+        shell: sh
+        run: ./hack/dev _codeql-build
+
+      - name: Analyze source
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: /language:go
+
+  sbom:
+    name: SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bootstrap checksum-pinned Syft
+        shell: sh
+        run: ./hack/dev bootstrap syft
+
+      - name: Create source snapshot
+        shell: sh
+        run: |
+          mkdir -p dist
+          if archive_attributes=$(git grep -n -E 'export-(ignore|subst)' HEAD -- .gitattributes ':(glob)**/.gitattributes'); then
+            printf '%s\n' "$archive_attributes" >&2
+            printf '%s\n' 'archive-affecting Git attributes are forbidden' >&2
+            exit 1
+          else
+            archive_attribute_status=$?
+            [ "$archive_attribute_status" -eq 1 ] || exit "$archive_attribute_status"
+          fi
+          git_tree=$(git ls-tree -r HEAD)
+          if printf '%s\n' "$git_tree" | grep -q '^160000 '; then
+            printf '%s\n' "$git_tree" | grep '^160000 ' >&2
+            printf '%s\n' 'Git submodules are forbidden in the source archive' >&2
+            exit 1
+          fi
+          git archive --format=tar --output "dist/veer-source-${GITHUB_SHA}.tar" HEAD
+
+      - name: Generate SPDX JSON SBOM
+        shell: sh
+        run: SYFT_CHECK_FOR_APP_UPDATE=false ./.tools/bin/syft scan "file:dist/veer-source-${GITHUB_SHA}.tar" --output "spdx-json=dist/veer-source.spdx.json"
+
+      - name: Retain source snapshot and SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: veer-source-sbom-${{ github.sha }}
+          path: |
+            dist/veer-source-${{ github.sha }}.tar
+            dist/veer-source.spdx.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+
+  attest-source:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Source provenance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bootstrap checksum-pinned Syft
+        shell: sh
+        run: ./hack/dev bootstrap syft
+
+      - name: Create attestation subject
+        shell: sh
+        run: |
+          mkdir -p dist
+          if archive_attributes=$(git grep -n -E 'export-(ignore|subst)' HEAD -- .gitattributes ':(glob)**/.gitattributes'); then
+            printf '%s\n' "$archive_attributes" >&2
+            printf '%s\n' 'archive-affecting Git attributes are forbidden' >&2
+            exit 1
+          else
+            archive_attribute_status=$?
+            [ "$archive_attribute_status" -eq 1 ] || exit "$archive_attribute_status"
+          fi
+          git_tree=$(git ls-tree -r HEAD)
+          if printf '%s\n' "$git_tree" | grep -q '^160000 '; then
+            printf '%s\n' "$git_tree" | grep '^160000 ' >&2
+            printf '%s\n' 'Git submodules are forbidden in the source archive' >&2
+            exit 1
+          fi
+          git archive --format=tar --output "dist/veer-source-${GITHUB_SHA}.tar" HEAD
+
+      - name: Generate attestation SBOM
+        shell: sh
+        run: SYFT_CHECK_FOR_APP_UPDATE=false ./.tools/bin/syft scan "file:dist/veer-source-${GITHUB_SHA}.tar" --output "spdx-json=dist/veer-source.spdx.json"
+
+      - name: Attest source provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/veer-source-${{ github.sha }}.tar
+
+      - name: Attest source SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/veer-source-${{ github.sha }}.tar
+          sbom-path: dist/veer-source.spdx.json

@@ -55,7 +55,10 @@ func writeHashBytes(hasher hash.Hash, value []byte) {
 
 func writeHashInt64(hasher hash.Hash, value int64) {
 	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(value))
+	written, err := binary.Encode(encoded[:], binary.BigEndian, value)
+	if err != nil || written != len(encoded) {
+		panic("encode fixed-width reconciliation integer")
+	}
 	writeHashBytes(hasher, encoded[:])
 }
 

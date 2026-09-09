@@ -617,9 +617,9 @@ func deriveFingerprint(issuer, subject string) Fingerprint {
 	payload := make([]byte, 0, len(fingerprintDomain)+1+8+len(issuer)+len(subject))
 	payload = append(payload, fingerprintDomain...)
 	payload = append(payload, 0)
-	payload = binary.BigEndian.AppendUint32(payload, uint32(len(issuer)))
+	payload = binary.BigEndian.AppendUint32(payload, uint32(len(issuer))) // #nosec G115 -- VEER-SEC-005: issuer is bounded to 2,048 bytes
 	payload = append(payload, issuer...)
-	payload = binary.BigEndian.AppendUint32(payload, uint32(len(subject)))
+	payload = binary.BigEndian.AppendUint32(payload, uint32(len(subject))) // #nosec G115 -- VEER-SEC-006: subject is bounded to 255 bytes
 	payload = append(payload, subject...)
 	return Fingerprint{initialized: true, digest: sha256.Sum256(payload)}
 }

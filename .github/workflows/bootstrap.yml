@@ -29,7 +29,67 @@ jobs:
         shell: sh
         run: ./hack/dev bootstrap
 
+      - name: Authenticate action and module sources
+        shell: sh
+        run: ./hack/verify-online-sources.sh
+
       - name: Run the local fast gate
+        shell: sh
+        run: ./hack/dev check
+
+      - name: Verify a non-mutating check
+        shell: sh
+        run: git diff --exit-code
+
+  race-coverage:
+    name: Race and coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bootstrap pinned tools
+        shell: sh
+        run: ./hack/dev bootstrap
+
+      - name: Run race detector
+        shell: sh
+        run: ./hack/dev race
+
+      - name: Enforce coverage floor
+        shell: sh
+        run: ./hack/dev coverage
+
+  supported-platforms:
+    name: Supported platform (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux arm64
+            runner: ubuntu-24.04-arm
+          - label: macOS arm64
+            runner: macos-15
+          - label: macOS Intel
+            runner: macos-15-intel
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bootstrap pinned tools
+        shell: sh
+        run: ./hack/dev bootstrap
+
+      - name: Run complete local gate
         shell: sh
         run: ./hack/dev check
 

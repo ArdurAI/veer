@@ -1,0 +1,9 @@
+vulnerabilities: []
+misconfigurations: []
+secrets:
+  - id: gocardless-api-token
+    paths:
+      - "docs/architecture/cost-model/verify-operational-bounds.awk"
+    statement: owner=info@ardur.ai; reason=cost-model launch_token identifiers are symbolic names and contain no secret material
+    expired_at: 2027-03-08
+licenses: []

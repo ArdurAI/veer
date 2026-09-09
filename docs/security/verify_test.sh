@@ -746,7 +746,7 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  { sub(/Issue #13 controls bootstrap/, "Issue #9999 controls bootstrap"); print }
+  { sub(/Issues #13 and #15 control bootstrap/, "Issues #9999 and #15 control bootstrap"); print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'unknown issue reference in readable prose' \
@@ -756,7 +756,7 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  { sub(/Issue #13 controls bootstrap/, "Issue #0 controls bootstrap"); print }
+  { sub(/Issues #13 and #15 control bootstrap/, "Issues #0 and #15 control bootstrap"); print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'zero issue reference in readable prose' \
@@ -766,7 +766,7 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  { sub(/Issue #13 controls bootstrap/, "Issue #01 controls bootstrap"); print }
+  { sub(/Issues #13 and #15 control bootstrap/, "Issues #01 and #15 control bootstrap"); print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'leading-zero issue reference in readable prose' \
@@ -1244,7 +1244,7 @@ new_fixture
 model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
-  { sub(/Issue #13 controls bootstrap/, "Issue #9999 controls bootstrap <!-- retained marker -->"); print }
+  { sub(/Issues #13 and #15 control bootstrap/, "Issues #9999 and #15 control bootstrap <!-- retained marker -->"); print }
 ' "$model" >"$rewritten_model"
 mv "$rewritten_model" "$model"
 expect_rejection 'inline comment cannot erase visible issue work' \

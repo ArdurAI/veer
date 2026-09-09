@@ -25,7 +25,7 @@ The selected implementation baseline is:
 
 | Component | Pinned version | Role |
 | --- | --- | --- |
-| `go` | `1.27.0` | Language, compiler, runtime, and standard-library HTTP server |
+| `go` | `1.27.1` | Language, compiler, runtime, and standard-library HTTP server |
 | `postgresql` | `18.6` | Authoritative relational state and transactional outbox |
 | `pgx` | `5.10.0` | Native PostgreSQL driver and connection pool |
 | `sqlc` | `1.31.1` | Typed Go generation from reviewed SQL queries |
@@ -64,7 +64,7 @@ In particular:
 
 ### Go with the standard HTTP stack
 
-Go `1.27.0` is the current supported release as of this decision. The
+Go `1.27.1` is the current supported patch release as verified on 2026-09-08. The
 [Go release policy](https://go.dev/doc/devel/release) supports a major release
 until two newer major releases exist, and the
 [Go 1 compatibility promise](https://go.dev/doc/go1compat) applies to the
@@ -319,7 +319,7 @@ they are architecture comparisons, not vendor quotes or forecasts.
 
 | Candidate | Correctness | Recovery | Security | Performance | Operability | Monthly baseline cost | Outcome |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Go 1.27.0 plus `net/http` | Explicit transactions, cancellation, and typed domain ports without framework lifecycle rules. | Small stateless binaries restart independently; recovery remains store- and fence-driven. | Memory-safe runtime, standard-library HTTP/TLS surface, and a small dependency graph; unsafe code remains possible and is gated. | Must pass Veer's 100-RPS peak and latency harness; no third-party benchmark is treated as proof. | One module, fast builds, single binaries, native profiling, and familiar Kubernetes shutdown behavior. | USD 0 license; no added node is assumed beyond ADR 0001. | Selected. |
+| Go 1.27.1 plus `net/http` | Explicit transactions, cancellation, and typed domain ports without framework lifecycle rules. | Small stateless binaries restart independently; recovery remains store- and fence-driven. | Memory-safe runtime, standard-library HTTP/TLS surface, and a small dependency graph; unsafe code remains possible and is gated. | Must pass Veer's 100-RPS peak and latency harness; no third-party benchmark is treated as proof. | One module, fast builds, single binaries, native profiling, and familiar Kubernetes shutdown behavior. | USD 0 license; no added node is assumed beyond ADR 0001. | Selected. |
 | Rust 1.98.0 plus Axum 0.8.9/Tokio | Strong static guarantees, but async cancellation and transaction ownership still require the same application protocol. | Stateless recovery is viable; compilation and incident debugging add a second operational learning curve for this repository. | Memory safety is strong; macro and crate supply-chain surfaces remain material. | Likely capable, but Veer's low request ceiling does not justify selecting on speculative throughput. | More complex build, cross-compilation, profiling, and contributor bootstrap for the initial team. | USD 0 license; the same no-extra-node assumption is unproved. | Rejected for alpha operability, not capability. |
 | Node.js 24.20.0 LTS plus Fastify 5.12.1/TypeScript | Transactions and fencing are feasible, but runtime validation must carry guarantees erased from TypeScript types. | Stateless recovery is viable; event-loop blocking becomes another failure mode to detect. | Memory-safe managed runtime, but a larger transitive package and install-script surface requires more supply-chain controls. | Likely capable at the accepted rate if blocking work is excluded; still requires the same harness. | Rapid API development, offset by runtime, package-manager, and dependency-tree operations. | USD 0 license; the same no-extra-node assumption is unproved. | Rejected for alpha dependency and runtime surface. |
 

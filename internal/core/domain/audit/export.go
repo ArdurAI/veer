@@ -64,7 +64,7 @@ func DescribeExport(
 		initialized:    true,
 		stream:         previous.stream,
 		sequenceRange:  sequenceRange,
-		eventCount:     uint32(segment.Len()),
+		eventCount:     uint32(segment.Len()), // #nosec G115 -- VEER-SEC-007: validated segments contain at most 1,000 events
 		previousDigest: previous.digest,
 		terminalDigest: terminal.digest,
 		bodyDigest:     deriveExportBodyDigest(body),

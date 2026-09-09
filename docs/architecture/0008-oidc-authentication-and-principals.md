@@ -269,10 +269,10 @@ failures.
 ### Dependency and offline build
 
 Veer uses
-[`github.com/go-jose/go-jose/v4` v4.1.4](https://github.com/go-jose/go-jose/releases/tag/v4.1.4)
+[`github.com/go-jose/go-jose/v4` v4.1.5](https://github.com/go-jose/go-jose/releases/tag/v4.1.5)
 for JOSE signature verification and JWK handling. It is Apache-2.0 licensed,
 requires Go 1.24 or newer, and has no non-standard-library module dependency at
-that version. Veer's selected Go 1.27.0 toolchain satisfies that requirement.
+that version. Veer's selected Go 1.27.1 toolchain satisfies that requirement.
 
 The exact source is committed under `vendor/`, and ordinary format, lint,
 build, and test checks use `-mod=vendor` with module proxy, checksum database,

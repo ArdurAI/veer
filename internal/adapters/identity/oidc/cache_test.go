@@ -1107,12 +1107,18 @@ func TestJWKSEd25519IdentityPointIsRejectedBeforeVerification(t *testing.T) {
 	clock := newFakeClock(testNow)
 	identityKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
 	identityKey[0] = 1
-	fixture.setKeys(t, jose.JSONWebKey{
-		Key:       identityKey,
-		KeyID:     "small-order-key",
-		Algorithm: string(jose.EdDSA),
-		Use:       "sig",
+	encodedIdentityKey, err := json.Marshal(map[string]any{
+		"alg": string(jose.EdDSA),
+		"crv": "Ed25519",
+		"kid": "small-order-key",
+		"kty": "OKP",
+		"use": "sig",
+		"x":   base64.RawURLEncoding.EncodeToString(identityKey),
 	})
+	if err != nil {
+		t.Fatalf("marshal hostile JWK fixture: %v", err)
+	}
+	fixture.setResponse(http.StatusOK, rawJWKS(t, json.RawMessage(encodedIdentityKey)))
 	anchor := testTrustAnchor(fixture, identity.KindHuman)
 	anchor.AllowedAlgorithms = []jose.SignatureAlgorithm{jose.EdDSA}
 	verifier := newTestVerifier(t, fixture, anchor, clock)

@@ -331,7 +331,7 @@ func (broker *Broker) makeSourceRoomExceptLocked(
 	protected connectionKey,
 ) (*credential.SourceMaterial, bool) {
 	if len(broker.sources)+len(broker.retiredSources)+len(broker.sourceFlights)+
-		int(broker.sourceReservations) < MaxSourceEntries {
+		int(broker.sourceReservations) < MaxSourceEntries { // #nosec G115 -- VEER-SEC-001: reservation count is capacity-bounded
 		return nil, true
 	}
 	var oldest *sourceEntry
