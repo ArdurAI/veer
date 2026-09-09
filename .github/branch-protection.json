@@ -1,7 +1,6 @@
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": [],
     "checks": [
       {"context": "DCO exact-head", "app_id": 15368},
       {"context": "Clean checkout contract", "app_id": 15368},

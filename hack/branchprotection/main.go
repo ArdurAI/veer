@@ -15,7 +15,6 @@ const maximumPolicyBytes = 64 * 1024
 const expectedPolicy = `{
   "required_status_checks": {
     "strict": true,
-    "contexts": [],
     "checks": [
       {"context": "DCO exact-head", "app_id": 15368},
       {"context": "Clean checkout contract", "app_id": 15368},
@@ -74,12 +73,30 @@ func verifyPolicy(policy []byte) error {
 	if err != nil {
 		return fmt.Errorf("invalid policy: %w", err)
 	}
+	if err := verifyNoLegacyStatusContexts(actual); err != nil {
+		return err
+	}
 	required, err := decodeJSON([]byte(expectedPolicy))
 	if err != nil {
 		return fmt.Errorf("invalid embedded policy: %w", err)
 	}
 	if !reflect.DeepEqual(actual, required) {
 		return errors.New("policy differs from required effective policy")
+	}
+	return nil
+}
+
+func verifyNoLegacyStatusContexts(policy any) error {
+	root, ok := policy.(map[string]any)
+	if !ok {
+		return nil
+	}
+	statusChecks, ok := root["required_status_checks"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, exists := statusChecks["contexts"]; exists {
+		return errors.New("required_status_checks.contexts must be omitted")
 	}
 	return nil
 }

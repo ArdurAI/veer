@@ -24,6 +24,14 @@ func TestVerifyPolicyRejectsEffectiveChange(t *testing.T) {
 	}
 }
 
+func TestVerifyPolicyRejectsLegacyStatusContexts(t *testing.T) {
+	changed := strings.Replace(expectedPolicy, `"strict": true,`, `"strict": true, "contexts": [],`, 1)
+	if err := verifyPolicy([]byte(changed)); err == nil ||
+		!strings.Contains(err.Error(), "required_status_checks.contexts must be omitted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDecodeJSONRejectsDuplicateKeys(t *testing.T) {
 	_, err := decodeJSON([]byte(`{"required_status_checks": {}, "required_status_checks": null}`))
 	if err == nil || !strings.Contains(err.Error(), `duplicate object key "required_status_checks"`) {

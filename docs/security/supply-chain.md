@@ -151,8 +151,11 @@ required for:
 
 Every required status check is associated with GitHub Actions app ID `15368`,
 read from the exact-head check runs before this policy was recorded. The legacy
-`contexts` list is intentionally empty; GitHub's fine-grained `checks` entries
-prevent another status producer from satisfying a protected context name.
+`contexts` field is intentionally omitted because GitHub's
+[update branch protection API](https://docs.github.com/en/rest/branches/branch-protection#update-branch-protection)
+models it as an alternative to the fine-grained `checks` representation. Each
+`checks` entry prevents another status producer from satisfying a protected
+context name.
 
 The bootstrap change cannot require its own not-yet-existing checks before it
 merges. That one-time ordering constraint does not permit later bypass: the
