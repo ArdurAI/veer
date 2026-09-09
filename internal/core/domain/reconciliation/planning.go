@@ -388,6 +388,10 @@ func NextCompensationStep(
 	if ValidateCompensationPlan(plan, proofs) != nil || len(completed) >= len(proofs) {
 		return CompensationStep{}, ErrInvalidPlan
 	}
+	// ValidateCompensationPlan bounds proofs to MaxEffectsPerOperation (1,000),
+	// and the guard above proves completed is strictly shorter than proofs.
+	position := uint32(len(completed) + 1) // #nosec G115 -- VEER-SEC-002: bounded compensation position
+	total := uint32(len(proofs))           // #nosec G115 -- VEER-SEC-003: bounded compensation total
 	schedule := deriveCompensationSchedule(plan, proofs)
 	for index, projection := range completed {
 		if validateEffectProjection(projection) != nil || projection.state != AttemptStateApplied ||
@@ -397,8 +401,8 @@ func NextCompensationStep(
 			!projection.compensation.original.Equal(proofs[index].original.key) ||
 			!projection.compensation.inverse.Equal(proofs[index].inverse) ||
 			projection.compensation.dependencyOrder != proofs[index].dependencyOrder ||
-			projection.compensation.position != uint32(index+1) ||
-			projection.compensation.total != uint32(len(proofs)) ||
+			projection.compensation.position != uint32(index+1) || // #nosec G115 -- VEER-SEC-004: index is bounded by total
+			projection.compensation.total != total ||
 			!equalDigest(projection.compensation.proofEvidence, proofs[index].evidence) ||
 			!equalDigest(projection.compensation.schedule, schedule) {
 			return CompensationStep{}, ErrInvalidPlan
@@ -411,8 +415,8 @@ func NextCompensationStep(
 		original:        proof.original.key,
 		inverse:         proof.inverse,
 		dependencyOrder: proof.dependencyOrder,
-		position:        uint32(len(completed) + 1),
-		total:           uint32(len(proofs)),
+		position:        position,
+		total:           total,
 		proofEvidence:   proof.evidence,
 		schedule:        schedule,
 	}, nil

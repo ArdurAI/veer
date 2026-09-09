@@ -390,8 +390,8 @@ func TestChunkedCredentialTrailersCannotRepopulateRequest(t *testing.T) {
 				t.Fatal("chunked request body guard state was wrong")
 			}
 			if test.closeBody {
-				if !errors.Is(result.bodyErr, io.EOF) {
-					t.Fatal("guard changed the net/http chunked Close result")
+				if result.bodyErr != nil {
+					t.Fatalf("guard changed the Go 1.27.1 net/http chunked Close result: %v", result.bodyErr)
 				}
 			} else {
 				if result.bodyErr != nil || string(result.body) != "chunked-body" {
@@ -512,8 +512,8 @@ func TestUndeclaredChunkedCredentialTrailersCannotRepopulateRequest(t *testing.T
 				t.Fatal("chunked request without a sensitive declaration was not guarded")
 			}
 			if test.closeBody {
-				if !errors.Is(result.bodyErr, io.EOF) {
-					t.Fatal("guard changed the chunked Close result")
+				if result.bodyErr != nil {
+					t.Fatalf("guard changed the Go 1.27.1 chunked Close result: %v", result.bodyErr)
 				}
 			} else if result.bodyErr != nil || string(result.body) != "chunked-body" {
 				t.Fatal("guard changed the chunked Read result")

@@ -131,6 +131,9 @@ func writeFrame(hasher hash.Hash, value []byte) {
 
 func writeInt64(hasher hash.Hash, value int64) {
 	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(value))
+	written, err := binary.Encode(encoded[:], binary.BigEndian, value)
+	if err != nil || written != len(encoded) {
+		panic("encode fixed-width credential integer")
+	}
 	writeFrame(hasher, encoded[:])
 }

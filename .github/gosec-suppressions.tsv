@@ -1,0 +1,12 @@
+id	rule	scope	owner	expires	reason
+VEER-SEC-001	G115	internal/core/service/credentialbroker/state.go	info@ardur.ai	2027-03-08	sourceReservations is incremented only after MaxSourceEntries admission and never exceeds the bounded material ceiling
+VEER-SEC-002	G115	internal/core/domain/reconciliation/planning.go	info@ardur.ai	2027-03-08	ValidateCompensationPlan limits proofs to 1000 and completed is strictly shorter before encoding position
+VEER-SEC-003	G115	internal/core/domain/reconciliation/planning.go	info@ardur.ai	2027-03-08	ValidateCompensationPlan limits the encoded compensation total to 1000
+VEER-SEC-004	G115	internal/core/domain/reconciliation/planning.go	info@ardur.ai	2027-03-08	completed iteration is bounded by the validated compensation total of at most 1000
+VEER-SEC-005	G115	internal/core/domain/identity/identity.go	info@ardur.ai	2027-03-08	NewLogicalIdentity limits the issuer to MaxIssuerBytes of 2048 before fingerprint derivation
+VEER-SEC-006	G115	internal/core/domain/identity/identity.go	info@ardur.ai	2027-03-08	NewLogicalIdentity limits the subject to MaxSubjectBytes of 255 before fingerprint derivation
+VEER-SEC-007	G115	internal/core/domain/audit/export.go	info@ardur.ai	2027-03-08	validated audit segments contain at most MaxSegmentEvents of 1000 before descriptor construction
+VEER-SEC-008	G101	internal/core/domain/reconciliation/vocabulary.go	info@ardur.ai	2027-03-08	CredentialReference is a public evidence-kind constant and never stores credential material
+VEER-SEC-009	G101	internal/core/domain/authorization/vocabulary.go	info@ardur.ai	2027-03-08	credential.resolve is a public authorization action identifier and never stores credential material
+VEER-SEC-010	G101	api/openapi/contract.go	info@ardur.ai	2027-03-08	providerTokenPattern validates public provider names and is not a token or credential
+VEER-SEC-011	G118	internal/core/service/credentialbroker/lifecycle.go	info@ardur.ai	2027-03-08	revocation uses its own bounded backend context so cleanup and terminal publication survive caller cancellation

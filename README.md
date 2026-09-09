@@ -25,10 +25,12 @@ utilities and these two commands:
 ```
 
 Bootstrap installs Veer's checksum-verified toolchain under the ignored
-`.tools/` directory. The aggregate check then runs formatting, lint, build,
-unit-test, API, and policy/documentation gates without cloud credentials or
-network access. See the [local development guide](docs/development.md) for
-supported hosts, individual commands, resource use, and troubleshooting.
+`.tools/` directory. The aggregate check then runs formatting, lint, workflow
+and Go security analysis, build, unit-test, API, and policy/documentation gates
+without cloud credentials or network access. Race and coverage commands add
+the slower concurrency and measured-coverage gates used by CI. See the
+[local development guide](docs/development.md) for supported hosts, individual
+commands, resource use, and troubleshooting.
 
 ## Community and governance
 
@@ -98,6 +100,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)
 - [Formal threat model and data classification](docs/security/threat-model.md)
+- [Software-supply-chain controls](docs/security/supply-chain.md)
 - [Roadmap](docs/roadmap.md)
 
 ## License

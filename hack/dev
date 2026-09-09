@@ -59,17 +59,20 @@ trap 'exit 1' HUP INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: ./hack/dev COMMAND
+Usage: ./hack/dev COMMAND [ARGUMENT]
 
 Commands:
-  bootstrap  Install the checksum-verified repository-local toolchain.
+  bootstrap  Install the checksum-verified toolchain; optional argument: syft.
   build      Compile all Go packages without network access.
+  coverage   Enforce the measured aggregate statement-coverage floor.
   format     Rewrite Go and shell files to the repository format.
   lint       Run Go and shell static analysis without network access.
+  race       Run the complete Go test suite with the race detector.
+  security   Run workflow, supply-chain-policy, and Go security analysis.
   test       Run the fast unit-test suite without network access.
   api        Validate the versioned OpenAPI and evolution contract offline.
   docs       Validate Markdown, community policy, and architecture evidence.
-  check      Run format, lint, build, test, and docs gates.
+  check      Run format, lint, security, build, test, docs, and API gates.
   versions   Print the verified repository-local tool versions.
   help       Show this help.
 EOF
@@ -119,7 +122,7 @@ validate_manifest() {
   LC_ALL=C awk -F '\t' '
     BEGIN {
         expected_header = "name\tversion\tos\tarch\tformat\tmember\tsha256\turl"
-        split("go golangci-lint sqlc goose shfmt shellcheck rumdl vacuum", tools, " ")
+        split("go syft actionlint golangci-lint gosec sqlc goose shfmt shellcheck rumdl vacuum", tools, " ")
         split("darwin linux", systems, " ")
         split("amd64 arm64", architectures, " ")
         for (loop_index in tools) {
@@ -175,11 +178,26 @@ validate_manifest() {
             expected_format = "go-tar.gz"
             expected_member = "go"
             expected_url = "https://go.dev/dl/go" $2 "." $3 "-" $4 ".tar.gz"
+        } else if ($1 == "syft") {
+            expected_format = "tar.gz"
+            expected_member = "syft"
+            expected_url = github_prefix "anchore/syft" release_suffix \
+                "syft_" $2 "_" $3 "_" $4 ".tar.gz"
+        } else if ($1 == "actionlint") {
+            expected_format = "tar.gz"
+            expected_member = "actionlint"
+            expected_url = github_prefix "rhysd/actionlint" release_suffix \
+                "actionlint_" $2 "_" $3 "_" $4 ".tar.gz"
         } else if ($1 == "golangci-lint") {
             expected_format = "tar.gz"
             expected_member = "golangci-lint-" $2 "-" $3 "-" $4 "/golangci-lint"
             expected_url = github_prefix "golangci/golangci-lint" release_suffix \
                 "golangci-lint-" $2 "-" $3 "-" $4 ".tar.gz"
+        } else if ($1 == "gosec") {
+            expected_format = "tar.gz"
+            expected_member = "gosec"
+            expected_url = github_prefix "securego/gosec" release_suffix \
+                "gosec_" $2 "_" $3 "_" $4 ".tar.gz"
         } else if ($1 == "sqlc") {
             expected_format = "tar.gz"
             expected_member = "sqlc"
@@ -507,6 +525,7 @@ preflight_host_commands() {
 }
 
 bootstrap() {
+  requested_tool=$1
   preflight_host_commands
   validate_manifest
   verify_declared_versions
@@ -523,7 +542,9 @@ bootstrap() {
       fail "$local_directory must not be a symbolic link"
     fi
   done
-  rm -f -- "$state_dir/manifest.sha256"
+  if [ "$requested_tool" = all ]; then
+    rm -f -- "$state_dir/manifest.sha256"
+  fi
   temp_dir=$(mktemp -d "$tools_dir/tmp/bootstrap.XXXXXX")
   tab=$(printf '\t')
   selected=''
@@ -532,6 +553,9 @@ bootstrap() {
   while IFS="$tab" read -r name version row_os row_arch format member sha url; do
     [ "$name" != name ] || continue
     if [ "$row_os" != "$platform_os" ] || [ "$row_arch" != "$platform_arch" ]; then
+      continue
+    fi
+    if [ "$requested_tool" != all ] && [ "$name" != "$requested_tool" ]; then
       continue
     fi
     case " $selected " in
@@ -545,7 +569,19 @@ bootstrap() {
     printf '%s\n' "veer-bootstrap tool=$name version=$version os=$row_os arch=$row_arch status=installed"
   done <"$manifest_file"
 
-  [ "$selected_count" -eq 8 ] || fail "expected 8 tools for $platform_os/$platform_arch, found $selected_count"
+  expected_count=11
+  if [ "$requested_tool" = syft ]; then
+    expected_count=1
+  fi
+  [ "$selected_count" -eq "$expected_count" ] ||
+    fail "expected $expected_count selected tools for $platform_os/$platform_arch, found $selected_count"
+
+  if [ "$requested_tool" = syft ]; then
+    verify_version syft "$(version_for_tool syft)" \
+      env SYFT_CHECK_FOR_APP_UPDATE=false "$bin_dir/syft" version
+    printf '%s\n' "veer-bootstrap selection=syft status=ready"
+    return
+  fi
   ln -sf ../go/bin/go "$bin_dir/go"
   ln -sf ../go/bin/gofmt "$bin_dir/gofmt"
 
@@ -589,11 +625,14 @@ verify_declared_versions() {
   [ "$go_mod_version" = "$go_version" ] ||
     fail "go.mod version mismatch: expected $go_version, got $go_mod_version"
 
-  for tool in go golangci-lint sqlc goose shfmt shellcheck rumdl vacuum; do
+  for tool in go syft actionlint golangci-lint gosec sqlc goose shfmt shellcheck rumdl vacuum; do
     version=$(version_for_tool "$tool")
     case "$tool" in
       go) display_name=Go ;;
+      actionlint) display_name=actionlint ;;
+      gosec) display_name=gosec ;;
       shellcheck) display_name=ShellCheck ;;
+      syft) display_name=Syft ;;
       vacuum) display_name=Vacuum ;;
       *) display_name=$tool ;;
     esac
@@ -653,7 +692,11 @@ verify_versions() {
   sanitize_external_environment
   prepare_go_telemetry
   verify_version go "go$(version_for_tool go)" "$bin_dir/go" version
+  verify_version syft "$(version_for_tool syft)" \
+    env SYFT_CHECK_FOR_APP_UPDATE=false "$bin_dir/syft" version
+  verify_version actionlint "$(version_for_tool actionlint)" "$bin_dir/actionlint" -version
   verify_version golangci-lint "$(version_for_tool golangci-lint)" "$bin_dir/golangci-lint" version
+  verify_version gosec "$(version_for_tool gosec)" "$bin_dir/gosec" -version
   verify_version sqlc "$(version_for_tool sqlc)" "$bin_dir/sqlc" version
   verify_version goose "$(version_for_tool goose)" "$bin_dir/goose" -version
   verify_version shfmt "$(version_for_tool shfmt)" "$bin_dir/shfmt" --version
@@ -677,7 +720,7 @@ require_prepared() {
     fail 'tool manifest changed; run ./hack/dev bootstrap'
   fi
 
-  for tool in go gofmt golangci-lint sqlc goose shfmt shellcheck rumdl vacuum; do
+  for tool in go gofmt syft actionlint golangci-lint gosec sqlc goose shfmt shellcheck rumdl vacuum; do
     [ -x "$bin_dir/$tool" ] || fail "missing repository-local tool $tool; run ./hack/dev bootstrap"
   done
 }
@@ -860,8 +903,74 @@ build() {
   "$bin_dir/go" build -trimpath ./...
 }
 
+codeql_build() {
+  [ "${GITHUB_ACTIONS:-}" = true ] ||
+    fail '_codeql-build is restricted to GitHub Actions'
+  [ "${RUNNER_OS:-}" = Linux ] ||
+    fail '_codeql-build requires the Linux CodeQL tracing contract'
+  case "${RUNNER_TEMP:-}" in
+    /*) ;;
+    *) fail '_codeql-build requires an absolute RUNNER_TEMP' ;;
+  esac
+
+  expected_codeql_go="$RUNNER_TEMP/codeql-action-go-tracing/bin/go"
+  [ "${CODEQL_ACTION_GO_BINARY:-}" = "$expected_codeql_go" ] ||
+    fail 'CodeQL Go wrapper is absent or outside the pinned tracing location'
+  [ -f "$expected_codeql_go" ] && [ ! -L "$expected_codeql_go" ] &&
+    [ -x "$expected_codeql_go" ] ||
+    fail 'CodeQL Go wrapper must be an executable regular non-symlink file'
+
+  expected_wrapper=$(printf '#!/bin/bash\n\nexec %s "$@"' "$bin_dir/go")
+  actual_wrapper=$(cat -- "$expected_codeql_go")
+  [ "$actual_wrapper" = "$expected_wrapper" ] ||
+    fail 'CodeQL Go wrapper does not delegate exactly to the pinned toolchain'
+
+  "$expected_codeql_go" build -trimpath ./...
+}
+
 test_units() {
   "$bin_dir/go" test -trimpath -count=1 ./...
+}
+
+test_race() {
+  require_command cc
+  CGO_ENABLED=1
+  export CGO_ENABLED
+  "$bin_dir/go" test -trimpath -count=1 -race ./...
+}
+
+test_coverage() {
+  coverage_profile="$tools_dir/tmp/coverage.out"
+  coverage_threshold=80.0
+  "$bin_dir/go" test -trimpath -count=1 -covermode=atomic \
+    -coverprofile="$coverage_profile" ./...
+  coverage_percent=$(
+    "$bin_dir/go" tool cover -func="$coverage_profile" |
+      LC_ALL=C awk '/^total:/ { sub(/%/, "", $3); print $3 }'
+  )
+  case "$coverage_percent" in
+    '' | *[!0-9.]*) fail "invalid aggregate coverage result: $coverage_percent" ;;
+  esac
+  if ! LC_ALL=C awk -v actual="$coverage_percent" -v required="$coverage_threshold" \
+    'BEGIN { exit !(actual + 0 >= required + 0) }'; then
+    fail "aggregate statement coverage $coverage_percent% is below $coverage_threshold%"
+  fi
+  printf '%s\n' \
+    "veer-coverage statements_percent=$coverage_percent required_percent=$coverage_threshold status=passed"
+}
+
+check_security() {
+  "$bin_dir/actionlint" -no-color
+  "$bin_dir/gosec" \
+    -exclude-dir=.tools \
+    -exclude-dir=vendor \
+    -nosec-require-justification \
+    -nosec-require-rules \
+    -track-suppressions \
+    -quiet \
+    ./...
+  "$repo_root/hack/verify-supply-chain.sh"
+  "$repo_root/hack/verify-supply-chain_test.sh"
 }
 
 check_api() {
@@ -936,6 +1045,7 @@ check_all() {
   cd -- "$repo_root"
   run_step format "$repo_root/hack/dev" _format-check
   run_step lint "$repo_root/hack/dev" lint
+  run_step security "$repo_root/hack/dev" security
   run_step build "$repo_root/hack/dev" build
   run_step test "$repo_root/hack/dev" test
   run_step docs "$repo_root/hack/dev" docs
@@ -946,14 +1056,32 @@ check_all() {
 command=${1:-help}
 case "$command" in
   bootstrap)
-    [ "$#" -eq 1 ] || fail 'bootstrap accepts no arguments'
-    bootstrap
+    case "$#" in
+      1) bootstrap all ;;
+      2)
+        [ "$2" = syft ] || fail 'bootstrap accepts only the optional syft argument'
+        bootstrap syft
+        ;;
+      *) fail 'bootstrap accepts only the optional syft argument' ;;
+    esac
     ;;
   build)
     [ "$#" -eq 1 ] || fail 'build accepts no arguments'
     prepare_offline_environment
     cd -- "$repo_root"
     build
+    ;;
+  _codeql-build)
+    [ "$#" -eq 1 ] || fail '_codeql-build accepts no arguments'
+    prepare_offline_environment
+    cd -- "$repo_root"
+    codeql_build
+    ;;
+  coverage)
+    [ "$#" -eq 1 ] || fail 'coverage accepts no arguments'
+    prepare_offline_environment
+    cd -- "$repo_root"
+    test_coverage
     ;;
   format)
     [ "$#" -eq 1 ] || fail 'format accepts no arguments'
@@ -965,6 +1093,18 @@ case "$command" in
     prepare_offline_environment
     cd -- "$repo_root"
     lint
+    ;;
+  race)
+    [ "$#" -eq 1 ] || fail 'race accepts no arguments'
+    prepare_offline_environment
+    cd -- "$repo_root"
+    test_race
+    ;;
+  security)
+    [ "$#" -eq 1 ] || fail 'security accepts no arguments'
+    prepare_offline_environment
+    cd -- "$repo_root"
+    check_security
     ;;
   test)
     [ "$#" -eq 1 ] || fail 'test accepts no arguments'

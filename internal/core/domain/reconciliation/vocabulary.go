@@ -67,7 +67,7 @@ const (
 	EvidenceDesiredIntent       EvidenceKind = "DesiredIntent"
 	EvidenceObservedSnapshot    EvidenceKind = "ObservedSnapshot"
 	EvidenceProviderConnection  EvidenceKind = "ProviderConnection"
-	EvidenceCredentialReference EvidenceKind = "CredentialReference"
+	EvidenceCredentialReference EvidenceKind = "CredentialReference" // #nosec G101 -- VEER-SEC-008: public non-secret evidence vocabulary
 	EvidenceCapability          EvidenceKind = "Capability"
 	EvidenceQuota               EvidenceKind = "Quota"
 	EvidenceCost                EvidenceKind = "Cost"

@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -27,7 +28,7 @@ const (
 	expectedSchemaCount          = 81
 	minimumDeprecationNoticeDays = 90
 	canonicalDecimalPattern      = `^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$`
-	providerTokenPattern         = `^[a-z][a-z0-9.-]*$`
+	providerTokenPattern         = `^[a-z][a-z0-9.-]*$` // #nosec G101 -- VEER-SEC-010: public provider-name regex, not a credential
 	conditionReasonPattern       = `^[A-Z][A-Za-z0-9]*$`
 	currencyPattern              = `^[A-Z]{3}$`
 	regionPattern                = `^[a-z0-9][a-z0-9-]{0,62}$`
@@ -649,20 +650,49 @@ var (
 
 // Load reads one bounded, regular, non-symlink contract file.
 func Load(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
+	initialInfo, err := os.Lstat(path)
 	if err != nil {
-		return nil, fmt.Errorf("stat contract: %w", err)
+		return nil, fmt.Errorf("stat contract entry: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("contract must be a regular non-symlink file: %s", path)
+	if !initialInfo.Mode().IsRegular() || initialInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("contract must be a stable regular non-symlink file: %s", path)
 	}
-	if info.Size() > maxContractBytes {
+	if initialInfo.Size() > maxContractBytes {
 		return nil, fmt.Errorf("contract exceeds %d bytes", maxContractBytes)
 	}
 
-	file, err := os.Open(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
-		return nil, fmt.Errorf("open contract: %w", err)
+		return nil, fmt.Errorf("open contract root: %w", err)
+	}
+	file, openErr := root.Open(filepath.Base(path))
+	rootCloseErr := root.Close()
+	if openErr != nil {
+		return nil, fmt.Errorf("open contract: %w", openErr)
+	}
+	if rootCloseErr != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("close contract root: %w", rootCloseErr)
+	}
+
+	openedInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("stat open contract: %w", err)
+	}
+	entryInfo, err := os.Lstat(path)
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("stat contract entry: %w", err)
+	}
+	if !openedInfo.Mode().IsRegular() || !entryInfo.Mode().IsRegular() ||
+		entryInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(openedInfo, entryInfo) {
+		_ = file.Close()
+		return nil, fmt.Errorf("contract must be a stable regular non-symlink file: %s", path)
+	}
+	if openedInfo.Size() > maxContractBytes {
+		_ = file.Close()
+		return nil, fmt.Errorf("contract exceeds %d bytes", maxContractBytes)
 	}
 
 	data, readErr := io.ReadAll(io.LimitReader(file, maxContractBytes+1))

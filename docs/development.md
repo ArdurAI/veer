@@ -33,8 +33,10 @@ rejects source paths containing any symbolic-link component. It also removes
 inherited tar and ShellCheck defaults plus common AWS, Google Cloud, and Azure
 credential variables from child processes. No check needs a cloud API,
 database, queue, cluster, container runtime, or private credential. The
-documentation step also verifies the canonical Apache-2.0 license,
-community-policy agreement, and DCO verifier regressions.
+security step verifies every workflow with actionlint, scans Go with gosec,
+and runs the supply-chain policy and its negative fixtures. The documentation
+step also verifies the canonical Apache-2.0 license, community-policy
+agreement, and DCO verifier regressions.
 
 ## Supported hosts and prerequisites
 
@@ -63,8 +65,11 @@ The artifact manifest is the source of truth for every supported platform:
 
 | Tool | Version | Purpose |
 | --- | --- | --- |
-| Go | 1.27.0 | Build and unit-test runtime |
+| Go | 1.27.1 | Build and unit-test runtime |
+| Syft | 1.51.1 | Source-archive SPDX SBOM generation |
+| actionlint | 1.7.12 | GitHub Actions syntax and expression validation |
 | golangci-lint | 2.13.2 | Go static analysis |
+| gosec | 2.29.0 | Go security static analysis |
 | sqlc | 1.31.1 | Typed code generation from reviewed SQL |
 | goose | 3.27.3 | SQL migration execution |
 | shfmt | 3.14.0 | Shell formatting |
@@ -85,11 +90,13 @@ therefore compile and test without module-network access, a repository token,
 or proxy credentials.
 
 The current runtime dependency is
-[`github.com/go-jose/go-jose/v4` v4.1.4](https://github.com/go-jose/go-jose/releases/tag/v4.1.4),
+[`github.com/go-jose/go-jose/v4` v4.1.5](https://github.com/go-jose/go-jose/releases/tag/v4.1.5),
 selected for OIDC JWT signature and JWK handling. The committed version is
 Apache-2.0 licensed, requires Go 1.24 or newer, and has no non-standard-library
-module dependencies. [ADR 0008](architecture/0008-oidc-authentication-and-principals.md)
-defines the surrounding trust, parsing, network, redaction, and error boundary.
+module dependencies. Version 4.1.5 includes the upstream 2026-09-03 JOSE parser,
+key-selection, Ed25519 JWK, and range-validation security fixes.
+[ADR 0008](architecture/0008-oidc-authentication-and-principals.md) defines the
+surrounding trust, parsing, network, redaction, and error boundary.
 
 `./hack/dev bootstrap` still downloads only the checksum-pinned tools in
 `tools/manifest.tsv`; it never resolves application modules. Dependency updates
@@ -99,19 +106,36 @@ result, and then rerun the complete network-disabled check. Do not work around a
 missing or inconsistent vendor tree by enabling a module proxy in an ordinary
 check.
 
+The hosted clean-checkout lane performs a separate online authenticity check.
+It downloads every declared module into a clean temporary cache through
+`proxy.golang.org`, verifies the `go.sum` and `sum.golang.org` identities, runs
+`go mod vendor -o` with the pinned Go toolchain, and requires the regenerated
+tree to match the committed `vendor/` byte-for-byte. This network gate does not
+change the normal offline build contract.
+
 ## Commands
 
 | Command | Behavior |
 | --- | --- |
 | `./hack/dev bootstrap` | Validate the full platform matrix, download or reuse verified artifacts, install them under `.tools/`, and verify versions. |
+| `./hack/dev bootstrap syft` | Install and verify only checksum-pinned Syft for a least-privilege SBOM job. |
 | `./hack/dev check` | Run every required fast gate in order and stop on the first failure. |
 | `./hack/dev format` | Rewrite physically contained Go and shell files whose path components are all regular directories, using the pinned formatters. |
 | `./hack/dev lint` | Run ShellCheck and golangci-lint. |
 | `./hack/dev build` | Compile every Go package with path trimming. |
+| `./hack/dev coverage` | Run all Go tests with atomic coverage and require at least 80.0% aggregate statement coverage. |
+| `./hack/dev race` | Run all Go tests with the race detector; requires a host C compiler. |
+| `./hack/dev security` | Validate workflow syntax, immutable action locks, scanner/review/SBOM/branch policy, 65 negative fixtures, and Go security analysis. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
 | `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization/audit/reconciliation projections, schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify community policy, DCO regressions, architecture, cost, stack, and security evidence, including negative contract fixtures. |
 | `./hack/dev versions` | Verify and report every installed tool version. |
+
+The aggregate command includes `security` but keeps the slower race and
+coverage repetitions as explicit commands. CI requires all three. The 80.0%
+coverage floor is below the measured 81.6% baseline from the complete package
+set on 2026-09-08, leaving little accidental regression room without pretending
+that aggregate coverage proves security behavior.
 
 The aggregate command emits machine-readable lines such as
 `veer-check step=test status=passed duration_seconds=1`. These give local and
@@ -138,6 +162,9 @@ Git object data, bound to the event head SHA, and never checked out or executed.
 The trusted workflow creates and completes a separate `DCO exact-head` check on
 that verified head SHA. Repository protection can therefore require the
 trusted result without treating the base-attached workflow run as head evidence.
+The workflow policy binds the exact fields, environment, inputs, control flags,
+and content digests of every privileged start, verification, and completion
+step, so a preserved display name cannot hide changed reporting behavior.
 
 The `VEER_DCO_WORKFLOW_SHA256`, `VEER_COMMUNITY_POLICY_SHA256`, and
 `VEER_DCO_VERIFIER_SHA256` repository Actions variables are the external
@@ -154,6 +181,44 @@ exact-head check instead of leaving it indefinitely in progress.
 
 The workflow also runs for pull-request base edits. A retargeted pull request
 therefore receives a fresh result for its new base-to-head commit range.
+
+## CI and software-supply-chain gates
+
+[`docs/security/supply-chain.md`](security/supply-chain.md) defines the complete
+control and evidence boundary. The short operational rules are:
+
+- `.github/actions-lock.tsv` binds every external workflow action to a full
+  commit SHA and its canonical upstream release URL; the clean hosted lane also
+  resolves each release tag and requires its peeled commit to equal that SHA;
+- pull requests run the clean checkout, race, coverage, Linux arm64, macOS
+  arm64, macOS Intel, dependency-review, Trivy, CodeQL, gosec, workflow-policy,
+  and SBOM gates;
+- Trivy scans vulnerabilities, secrets, license risk, and any present
+  container/IaC configuration. Empty repository categories are not treated as
+  evidence that a scanner ran;
+- `.trivyignore.yaml` is the only Trivy suppression registry. Every exception
+  must include an ID, at least one exact path, `owner=info@ardur.ai;
+  reason=...`, and a future `expired_at` date;
+- `.github/gosec-suppressions.tsv` governs each exact Go `#nosec` annotation
+  with a rule, source file, `info@ardur.ai` owner, reason, and future expiry;
+  unregistered, mis-scoped, duplicate, orphaned, or expired exceptions and
+  generic lint suppressions are rejected. Gosec scans checked-in generated Go
+  files because those files remain part of the compiled source boundary;
+- PR SBOM/source artifacts are retained for 30 days. A `main` push also creates
+  GitHub-hosted provenance and SBOM attestations for the exact source snapshot;
+  archive-affecting `export-ignore` and `export-subst` attributes are rejected
+  before snapshot creation, and Git submodule entries are rejected because a
+  plain Git archive cannot represent their source. These attestations are not
+  release signatures or proof of a runnable control plane; and
+- `.github/branch-protection.json` is the reviewable desired policy for strict
+  required checks bound to GitHub Actions app ID `15368`, one independent
+  latest-head approval, stale-review dismissal, conversation resolution,
+  administrator enforcement, and disabled force pushes/deletion.
+
+The repository settings are part of the control. The in-tree JSON is not proof
+that GitHub applied it; live API readback after the bootstrap merge is required.
+Secret scanning, push protection, dependency security updates, Actions SHA
+pinning, and CodeQL analysis likewise require live settings or result evidence.
 
 ### First-merge bootstrap
 
@@ -287,9 +352,10 @@ schemas.
 
 ## Network, disk, and CI cost safeguards
 
-- Only `bootstrap` needs public network access. Verified downloads are cached
-  in `.tools/downloads/`; repeated bootstrap runs reuse them after checking
-  their digest.
+- Bootstrap and the explicit hosted action/module-authentication gate need
+  public network access. Tool downloads are cached in `.tools/downloads/` and
+  reused only after digest verification; normal `check`, build, and test paths
+  remain network-disabled.
 - Each manifest row is bound to the selected tool's exact upstream repository,
   release version, platform artifact name, archive format, and binary member.
   Tar archives may contain only canonical, uniquely addressed regular files
@@ -297,10 +363,12 @@ schemas.
   capped while streaming at 8 MiB before any listing is materialized; archives
   are additionally limited to 20,000 members and 512 MiB of expanded file
   data. The compressed download cap remains 100 MiB per artifact.
-- On a macOS/arm64 clean run verified on 2026-09-01, the download cache was
-  exactly 176,834,836 bytes and `.tools/` occupied approximately 851 MiB after
-  one full check. Other platforms may differ. The whole directory is ignored
-  by Git and can be removed to reclaim local space.
+- For the macOS/arm64 manifest verified on 2026-09-09, the eleven selected
+  archives total exactly 235,329,338 bytes. Syft accounts for 27,907,057
+  compressed bytes and an 84,518,582-byte installed binary. Build, lint, and Go
+  caches grow with use, so `.tools/` working size is not presented as a fixed
+  bound. Other platforms differ. The whole directory is ignored by Git and can
+  be removed to reclaim local space.
 - The bootstrap CI job uses a fresh checkout to prove the clean-host path. Its
   runner is bounded to 15 minutes and has no service containers, cloud login,
   or paid third-party API calls.

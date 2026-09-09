@@ -65,7 +65,7 @@ const (
 	ActionReconcilePlan       Action = "reconcile.plan"
 	ActionReconcileExecute    Action = "reconcile.execute"
 	ActionOperationTransition Action = "operation.transition"
-	ActionCredentialResolve   Action = "credential.resolve"
+	ActionCredentialResolve   Action = "credential.resolve" // #nosec G101 -- VEER-SEC-009: public authorization action vocabulary
 	ActionProviderDiscover    Action = "provider.discover"
 	ActionProviderApply       Action = "provider.apply"
 	ActionProviderObserve     Action = "provider.observe"

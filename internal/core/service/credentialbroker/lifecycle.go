@@ -623,6 +623,9 @@ func (broker *Broker) waitLifecycleCleanup(
 		unique = append(unique, attempt)
 		if !attempt.started {
 			attempt.started = true
+			// Revocation owns a bounded backend context so secret destruction and
+			// terminal publication continue after a caller stops waiting.
+			// #nosec G118 -- VEER-SEC-011: lifecycle cleanup deliberately outlives caller cancellation
 			go broker.runRevocation(attempt)
 		}
 	}
