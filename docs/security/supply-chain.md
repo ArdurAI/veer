@@ -157,6 +157,12 @@ models it as an alternative to the fine-grained `checks` representation. Each
 `checks` entry prevents another status producer from satisfying a protected
 context name.
 
+The rule keeps `main` writable through reviewed merges with `lock_branch` set
+to `false`. Its `allow_fork_syncing` value is therefore also `false`: GitHub
+only applies fork syncing when a branch is locked and normalizes the flag to
+the effective disabled value on an unlocked branch. This does not prevent a
+fork from syncing while `main` remains unlocked.
+
 The bootstrap change cannot require its own not-yet-existing checks before it
 merges. That one-time ordering constraint does not permit later bypass: the
 rule is applied only after the exact merged SHA has produced every named check,

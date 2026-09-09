@@ -43,7 +43,7 @@ const expectedPolicy = `{
   "block_creations": false,
   "required_conversation_resolution": true,
   "lock_branch": false,
-  "allow_fork_syncing": true
+  "allow_fork_syncing": false
 }`
 
 func main() {
@@ -76,12 +76,28 @@ func verifyPolicy(policy []byte) error {
 	if err := verifyNoLegacyStatusContexts(actual); err != nil {
 		return err
 	}
+	if err := verifyForkSyncingRequiresLockedBranch(actual); err != nil {
+		return err
+	}
 	required, err := decodeJSON([]byte(expectedPolicy))
 	if err != nil {
 		return fmt.Errorf("invalid embedded policy: %w", err)
 	}
 	if !reflect.DeepEqual(actual, required) {
 		return errors.New("policy differs from required effective policy")
+	}
+	return nil
+}
+
+func verifyForkSyncingRequiresLockedBranch(policy any) error {
+	root, ok := policy.(map[string]any)
+	if !ok {
+		return nil
+	}
+	lockBranch, hasLockBranch := root["lock_branch"].(bool)
+	allowForkSyncing, hasAllowForkSyncing := root["allow_fork_syncing"].(bool)
+	if hasLockBranch && hasAllowForkSyncing && !lockBranch && allowForkSyncing {
+		return errors.New("allow_fork_syncing must be false when lock_branch is false")
 	}
 	return nil
 }

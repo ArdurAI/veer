@@ -533,8 +533,14 @@ expect_rejection legacy-required-status-contexts \
 
 new_fixture
 replace_once .github/branch-protection.json \
-  '"allow_fork_syncing": true' \
-  '"allow_fork_syncing": true, "required_status_checks": null'
+  '"allow_fork_syncing": false' '"allow_fork_syncing": true'
+expect_rejection fork-syncing-on-unlocked-branch \
+  'allow_fork_syncing must be false when lock_branch is false'
+
+new_fixture
+replace_once .github/branch-protection.json \
+  '"allow_fork_syncing": false' \
+  '"allow_fork_syncing": false, "required_status_checks": null'
 expect_rejection duplicate-branch-protection-key \
   'duplicate object key "required_status_checks"'
 
@@ -646,4 +652,4 @@ replace_once hack/dev \
 expect_rejection excluded-generated-go \
   'contains forbidden policy: -exclude-generated'
 
-printf '%s\n' 'veer-supply-chain-tests cases=66 status=passed'
+printf '%s\n' 'veer-supply-chain-tests cases=67 status=passed'
