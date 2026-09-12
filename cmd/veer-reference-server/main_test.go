@@ -62,6 +62,32 @@ func TestRunServesAuthenticatedRequestOnRealListenerAndShutsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	listRequest, err := http.NewRequest(http.MethodGet, baseURL+"/api/v1alpha1/workspaces", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listRequest.Header.Set("Authorization", "Bearer "+token)
+	listResponse, err := client.Do(listRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listBody, err := io.ReadAll(listResponse.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := listResponse.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(listBody, &page); err != nil {
+		t.Fatal(err)
+	}
+	if listResponse.StatusCode != http.StatusOK || len(page.Items) != 1 {
+		t.Fatalf("authorized list response = %d, %s", listResponse.StatusCode, listBody)
+	}
+
 	body := strings.NewReader(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"socket"},"spec":{}}`)
 	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1alpha1/workspaces", body)
 	if err != nil {
@@ -81,12 +107,12 @@ func TestRunServesAuthenticatedRequestOnRealListenerAndShutsDown(t *testing.T) {
 	if err := response.Body.Close(); err != nil {
 		t.Fatal(err)
 	}
-	var receipt map[string]any
-	if err := json.Unmarshal(responseBody, &receipt); err != nil {
+	var problem map[string]any
+	if err := json.Unmarshal(responseBody, &problem); err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusAccepted || receipt["resourceId"] == "" || receipt["operationId"] == "" {
-		t.Fatalf("authenticated response = %d, %#v", response.StatusCode, receipt)
+	if response.StatusCode != http.StatusForbidden || problem["code"] != "authorization-denied" {
+		t.Fatalf("reserved create response = %d, %#v", response.StatusCode, problem)
 	}
 
 	transport.CloseIdleConnections()

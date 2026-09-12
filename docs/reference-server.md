@@ -1,8 +1,8 @@
 # In-memory reference server
 
 Veer's first executable control-plane slice is the loopback-only
-`veer-reference-server`. It is a deterministic contract harness for issue #21,
-not the production `veer-api` service.
+`veer-reference-server`. It is a deterministic contract and authorization
+harness for issues #21 and #24, not the production `veer-api` service.
 
 ## Proven boundary
 
@@ -30,15 +30,30 @@ uses bounded header and connection timeouts, and requires a bearer credential
 from a regular non-symlink token file with no group or world permissions.
 Bearer syntax is parsed by Veer's fuzz-tested HTTP boundary; the reference
 adapter reduces the configured credential to a per-process, randomly keyed
-HMAC-SHA-256 digest immediately and compares fixed-size digests. A closed
-seven-action gate is invoked after authentication on every published
-operation.
+HMAC-SHA-256 digest immediately and compares fixed-size digests.
 
-That gate is deliberately not Veer's tenant authorization evaluator. The
-fixed local Workload principal, bearer file, and action allow-list make the
-harness controllable on a trusted developer host, but do not validate OIDC,
-load Workspace membership or Policy resources, resolve a per-row list target,
-or enforce production authorization. Issue #24 owns that integration.
+Before listening, the command creates one process-local Workspace, private
+Human member directory, and WorkspaceAdministrator Policy. The HTTP handler is
+bound to the policy-enforcing runtime rather than the raw lifecycle service.
+That runtime reloads retained hierarchy and Policy resources, evaluates a
+sealed target for get/replace/delete and Operation get, and evaluates every
+retained list row before it can influence page size or a cursor. Workspace
+create and status replacement remain reserved and return `403` without a
+resource or Operation mutation.
+
+Accepted mutations retain a bounded process-local admission record. Plan
+construction replaces caller-supplied actor, decision, and Operation fields
+with that record and current retained Operation. Immediately before a
+process-local execution callback, the runtime reloads current membership,
+PolicySet, and Operation, then requires exact actor, policy-version, and
+authorization-input bindings. Non-delete execution also reloads the current
+resource generation. Delete replay and execution use only the server-sealed
+pre-delete targets retained with the admission because the resource has
+already been tombstoned. Revocation, policy drift, or applicable generation
+drift prevents the callback. Expired idempotency epochs replace their prior
+admission instead of leaving the new Operation unplannable. This is executable
+reference evidence, not a queue, worker, provider adapter, production OIDC
+path, or cross-process authorization guarantee.
 
 ## Run locally
 
@@ -65,6 +80,7 @@ Run the focused evidence set with:
 
 ```sh
 go test ./internal/core/service/reference \
+  ./internal/core/service/referenceauthorization \
   ./internal/adapters/store/memory \
   ./internal/adapters/referenceaccess \
   ./internal/transport/http \
@@ -72,6 +88,7 @@ go test ./internal/core/service/reference \
   ./test/contract
 
 go test -race ./internal/core/service/reference \
+  ./internal/core/service/referenceauthorization \
   ./internal/adapters/store/memory \
   ./internal/adapters/referenceaccess \
   ./internal/transport/http \
@@ -84,7 +101,10 @@ SHA-256 digest, exercises deterministic black-box HTTP vectors, proves zero
 database, queue, and provider calls, and compares the complete report with
 [`reference-server-v1alpha1.golden.json`](../test/contract/testdata/reference-server-v1alpha1.golden.json).
 The command test uses a real ephemeral TCP listener and proves authentication,
-request handling, and graceful shutdown.
+policy-filtered request handling, reserved-action denial, and graceful
+shutdown. Authorization tests prove denied-mutation atomicity, per-row list
+filtering, actor/decision Plan binding, policy drift, generation drift,
+admission/revocation races, and effect/revocation exclusion.
 
 ## Explicit limitations
 
@@ -96,8 +116,14 @@ request handling, and graceful shutdown.
   required for a production `202` response.
 - The command is loopback-only and does not terminate TLS. Exposing it through
   a proxy, container port, tunnel, or public listener is unsupported.
-- The bearer adapter is a fixed local verifier, not OIDC. The action gate is
-  not Workspace membership or PolicySet authorization.
+- The bearer adapter is a fixed local verifier, not OIDC. The preseeded private
+  member directory is process-local configuration rather than a membership
+  API or durable identity store. Removing a member makes its retained Policy
+  bindings inactive; new Policy writes still require every referenced member
+  to exist.
+- The execution callback serializes only this process's configured membership,
+  policy mutations, and effect. It is not a distributed transaction or proof
+  that an external provider call can be cancelled after dispatch.
 - There is no provider execution, queue, worker, audit sink, telemetry export,
   persistent secret, cloud resource, or paid API call.
 

@@ -66,13 +66,18 @@ administrators implicitly.
 A canonical decision contains only its contract version, policy version, input
 digest, effect, and reason. The exact contract and complete action matrix are in
 [ADR 0009](../architecture/0009-deterministic-hierarchical-authorization.md).
-The domain evaluator and OpenAPI projection are reference contracts. Until API
-and worker integration is implemented and tested, they are not evidence of
-tenant-policy or provider-effect enforcement. The issue #21 loopback reference
-server does enforce one fixed local bearer credential and a closed action
-allow-list before its process-local lifecycle service. That harness does not
-load a PolicySet, resolve per-row list targets, or establish production
-authorization.
+The domain evaluator and OpenAPI projection define the reference contract. The
+loopback reference server enforces one fixed local bearer credential and binds
+its published routes to current retained hierarchy, private membership, and
+PolicySet evaluation. Lists authorize each retained row before pagination;
+denied and reserved mutations make no resource or Operation change. Accepted
+mutations bind the actor and decision into immutable Plans, and a process-local
+execution callback rejects revocation, policy/input drift, and applicable
+generation drift immediately before its effect. Delete execution uses its
+server-sealed pre-delete target after the resource tombstone and still
+re-evaluates current policy. This does not establish production OIDC, durable
+membership/policy state, distributed exclusion, queue/worker integration,
+provider-effect enforcement, or durable audit/outbox atomicity.
 
 ## Secrets and provider credentials
 
@@ -261,11 +266,12 @@ The implemented reconciliation package is a provider-free, process-local
 reference model. It bounds untrusted evidence, rejects generic serialization of
 opaque authority values, redacts diagnostics, models fixed-window idempotency,
 duplicate delivery, fencing, cancellation, retention, queue accounting, and all
-eight crash boundaries, but persists and executes nothing. Durable PostgreSQL
-transactions, SQS policy and heartbeat behavior, execution-time authorization,
-provider adapters, cross-node enforcement, and operational evidence remain the
-responsibility of issues #24 and #30 through #37. Exactly-once provider
-execution is not claimed.
+eight crash boundaries, but persists and executes nothing. Issue #24's
+process-local wrapper can bind admitted authority into a Plan and reauthorize a
+synchronous callback; durable PostgreSQL transactions, SQS policy and heartbeat
+behavior, real worker/provider dispatch, cross-node enforcement, and operational
+evidence remain the responsibility of issues #30 through #37. Exactly-once
+provider execution is not claimed.
 
 ## Audit requirements
 

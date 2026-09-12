@@ -75,11 +75,13 @@ implementation.
 
 Issue [#21](https://github.com/ArdurAI/veer/issues/21) subsequently implements
 the four published paths and seven operations in a loopback-only in-memory
-reference server. It uses the shared bearer parser, a fixed local credential
-adapter, and an injected closed action gate. That executable harness is not
-OIDC validation, tenant PolicySet enforcement, durable persistence, atomic
-audit/outbox acceptance, or a production deployment. Those boundaries remain
-owned by the issues below.
+reference server. Issue [#24](https://github.com/ArdurAI/veer/issues/24) binds
+that handler to retained PolicySet enforcement and a process-local
+execution-time reauthorization callback. The harness uses the shared bearer
+parser and a fixed local credential adapter; it is not production OIDC,
+durable persistence or membership, atomic audit/outbox acceptance, a real
+worker/provider dispatch path, or a production deployment. Those boundaries
+remain owned by the issues below.
 
 - Issue [#17](https://github.com/ArdurAI/veer/issues/17) implements the common
   resource envelope, stable identity, serialization, and property tests.

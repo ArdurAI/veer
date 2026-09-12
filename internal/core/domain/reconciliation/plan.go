@@ -218,6 +218,10 @@ func (value Plan) WorkspaceID() resource.ID      { return value.workspaceID }
 func (value Plan) ResourceID() resource.ID       { return value.resourceID }
 func (value Plan) Generation() int64             { return value.generation }
 func (value Plan) PlannerVersion() string        { return value.plannerVersion }
+func (value Plan) ActorKind() identity.Kind      { return value.actorKind }
+func (value Plan) ActorFingerprint() string      { return value.actorFingerprint }
+func (value Plan) PolicyVersion() string         { return value.policyVersion }
+func (value Plan) AuthorizationInput() string    { return value.authorizationInput }
 func (value Plan) DesiredIntent() Evidence       { return value.desired }
 func (value Plan) ObservedSnapshot() Evidence    { return value.observed }
 func (value Plan) Digest() PlanDigest            { return value.digest }

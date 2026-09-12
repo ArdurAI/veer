@@ -609,6 +609,55 @@ func TestSealedTargetResolution(t *testing.T) {
 	}
 
 	operationTarget := syntheticBoundTarget(t, fixture.snapshot, ObjectKindOperation, testOperationA, testComponentA)
+	resolvedOperation, err := ResolveOperationTarget(
+		fixture.snapshot,
+		testOperationA,
+		testComponentA,
+		testWorkspaceAID,
+		idPointer(testEnvironmentA),
+		idPointer(testProviderA),
+	)
+	if err != nil || ValidateTarget(resolvedOperation) != nil ||
+		resolvedOperation.ObjectKind() != ObjectKindOperation ||
+		resolvedOperation.ObjectID() != testOperationA ||
+		resolvedOperation.ResourceID() != testComponentA {
+		t.Fatalf("ResolveOperationTarget() = %v, %v", resolvedOperation, err)
+	}
+	unboundOperation, err := ResolveOperationTarget(
+		fixture.snapshot,
+		testOperationA,
+		testComponentA,
+		testWorkspaceAID,
+		nil,
+		nil,
+	)
+	if err != nil || ValidateTarget(unboundOperation) != nil {
+		t.Fatalf("ResolveOperationTarget(unbound) = %v, %v", unboundOperation, err)
+	}
+	for _, test := range []struct {
+		name        string
+		workspaceID resource.ID
+		environment *resource.ID
+		provider    *resource.ID
+	}{
+		{name: "workspace substitution", workspaceID: testWorkspaceBID, environment: idPointer(testEnvironmentA), provider: idPointer(testProviderA)},
+		{name: "environment substitution", workspaceID: testWorkspaceAID, environment: idPointer(testEnvironmentB), provider: idPointer(testProviderA)},
+		{name: "provider environment substitution", workspaceID: testWorkspaceAID, environment: idPointer(testEnvironmentA), provider: idPointer(testProviderB)},
+		{name: "incomplete provider binding", workspaceID: testWorkspaceAID, environment: idPointer(testEnvironmentA)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ResolveOperationTarget(
+				fixture.snapshot,
+				testOperationA,
+				testComponentA,
+				test.workspaceID,
+				test.environment,
+				test.provider,
+			); !errors.Is(err, ErrInvalidTarget) {
+				t.Fatalf("ResolveOperationTarget(substitution) error = %v", err)
+			}
+		})
+	}
 
 	for _, kind := range []ObjectKind{ObjectKindMembership, ObjectKindAudit} {
 		target, err := ResolveWorkspaceObjectTarget(fixture.snapshot, kind, testViewerID)

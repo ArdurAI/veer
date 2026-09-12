@@ -79,10 +79,12 @@ bounded decision representation. Its OpenAPI projection is a pure reference
 contract; no API route or worker enforcement is implemented by that document.
 Issue #21 adds a loopback-only reference server around the published
 Workspace/Operation routes plus process-local lifecycle semantics for all six
-resource kinds. It requires an injected bearer authenticator and closed action
-gate, but does not invoke the PolicySet evaluator, persist state, emit durable
-audit/outbox records, enqueue work, or execute a provider. Issue #24 owns
-authoritative route authorization and issue #30 owns durable acceptance.
+resource kinds. Issue #24 binds that handler to retained hierarchy and
+PolicySet evaluation, per-row list filtering, admission decision/actor Plan
+binding, and a process-local execution-time reauthorization callback. The
+harness still does not validate production OIDC, persist durable state, emit
+durable audit/outbox records, enqueue work, or execute a provider. Issue #30
+owns durable acceptance.
 [ADR 0010](0010-provider-neutral-credential-broker.md) fixes a provider-neutral,
 process-local credential broker with separate secret-resolution and
 session-issuance ports, immutable operation/target/recipient bindings, exact
@@ -160,8 +162,9 @@ not imply that asynchronous provider work has already completed.
 - Tenant roles cannot grant worker, controller, provider-adapter, approval,
   export, or redrive actions. Workspace creation/bootstrap remains default
   denied until a platform provisioning decision exists.
-- The current authorization package and OpenAPI manifest are reference
-  contracts; production API and worker wiring remains deferred.
+- The loopback reference runtime enforces the current authorization package on
+  its published routes and process-local execution callback; production API,
+  durable membership/policy state, and worker/provider wiring remain deferred.
 - Short-lived provider credentials wherever the provider supports them.
 
 ### Desired-state store

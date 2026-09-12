@@ -18,9 +18,13 @@ import (
 	"github.com/ArdurAI/veer/api/openapi"
 	"github.com/ArdurAI/veer/internal/adapters/referenceaccess"
 	"github.com/ArdurAI/veer/internal/adapters/store/memory"
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
+	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 	"github.com/ArdurAI/veer/internal/core/service/reference"
+	"github.com/ArdurAI/veer/internal/core/service/referenceauthorization"
 	httptransport "github.com/ArdurAI/veer/internal/transport/http"
 )
 
@@ -57,41 +61,35 @@ type mutationReceipt struct {
 	ResourceVersion string `json:"resourceVersion"`
 }
 
-type statusReceipt struct {
-	ResourceVersion string `json:"resourceVersion"`
-}
-
 func TestReferenceServerBlackBoxContract(t *testing.T) {
 	server := httptest.NewServer(newReferenceHandler(t))
 	defer server.Close()
 	vectors := make([]responseVector, 0, 13)
 
-	createBody := []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"payments","labels":{"team":"platform"}},"spec":{"suspendReconciliation":false}}`)
-	create := exercise(t, server, "create-workspace", http.MethodPost, "/api/v1alpha1/workspaces", createBody, map[string]string{
+	createBody := []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"reserved"},"spec":{}}`)
+	create := exercise(t, server, "create-workspace-denied", http.MethodPost, "/api/v1alpha1/workspaces", createBody, map[string]string{
 		"Content-Type": "application/json", "Idempotency-Key": "contract-create-0001", "Veer-Request-Id": "req-create",
 	})
 	vectors = append(vectors, create)
-	var created mutationReceipt
-	decodeBody(t, create.Body, &created)
 
-	createReplay := exercise(t, server, "create-workspace-replay", http.MethodPost, "/api/v1alpha1/workspaces", []byte(`{
-  "kind":"Workspace","apiVersion":"v1alpha1","spec":{},"metadata":{"labels":{"team":"platform"},"displayName":"payments"}
-}`), map[string]string{
+	createReplay := exercise(t, server, "create-workspace-denied-repeat", http.MethodPost, "/api/v1alpha1/workspaces", createBody, map[string]string{
 		"Content-Type": "application/json", "Idempotency-Key": "contract-create-0001", "Veer-Request-Id": "req-create-replay",
 	})
 	vectors = append(vectors, createReplay)
-	if !bytes.Equal(createReplay.Body, create.Body) || createReplay.Headers.RequestID == create.Headers.RequestID {
-		t.Fatal("create replay did not preserve semantic body with fresh request correlation")
+	if create.Status != http.StatusForbidden || createReplay.Status != http.StatusForbidden ||
+		createReplay.Headers.RequestID == create.Headers.RequestID {
+		t.Fatal("reserved Workspace creation did not fail closed with fresh request correlation")
 	}
 
-	workspaceTarget := "/api/v1alpha1/workspaces/" + created.ResourceID
+	const workspaceID = "wsp_0000000000000001"
+	workspaceTarget := "/api/v1alpha1/workspaces/" + workspaceID
 	get := exercise(t, server, "get-workspace", http.MethodGet, workspaceTarget, nil, map[string]string{
 		"Veer-Request-Id": "req-get",
 	})
 	vectors = append(vectors, get)
 
-	operationTarget := "/api/v1alpha1/operations/" + created.OperationID
-	vectors = append(vectors, exercise(t, server, "get-create-operation", http.MethodGet, operationTarget, nil, map[string]string{
+	operationTarget := "/api/v1alpha1/operations/op_0000000000000001"
+	vectors = append(vectors, exercise(t, server, "get-bootstrap-operation", http.MethodGet, operationTarget, nil, map[string]string{
 		"Veer-Request-Id": "req-operation",
 	}))
 
@@ -125,14 +123,11 @@ func TestReferenceServerBlackBoxContract(t *testing.T) {
 	}
 	status := exercise(t, server, "replace-workspace-status", http.MethodPut, workspaceTarget+"/status", statusBody, statusHeaders)
 	vectors = append(vectors, status)
-	var statusValue statusReceipt
-	decodeBody(t, status.Body, &statusValue)
-
 	statusHeaders["Veer-Request-Id"] = "req-status-replay"
-	statusReplay := exercise(t, server, "replace-workspace-status-replay", http.MethodPut, workspaceTarget+"/status", statusBody, statusHeaders)
+	statusReplay := exercise(t, server, "replace-workspace-status-denied-repeat", http.MethodPut, workspaceTarget+"/status", statusBody, statusHeaders)
 	vectors = append(vectors, statusReplay)
-	if !bytes.Equal(statusReplay.Body, status.Body) {
-		t.Fatal("status replay body drifted")
+	if status.Status != http.StatusForbidden || statusReplay.Status != http.StatusForbidden {
+		t.Fatal("reserved status replacement did not fail closed")
 	}
 
 	vectors = append(vectors, exercise(t, server, "list-workspaces", http.MethodGet, "/api/v1alpha1/workspaces?pageSize=1", nil, map[string]string{
@@ -140,7 +135,7 @@ func TestReferenceServerBlackBoxContract(t *testing.T) {
 	}))
 
 	deleteHeaders := map[string]string{
-		"Idempotency-Key": "contract-delete-0001", "If-Match": `"` + statusValue.ResourceVersion + `"`,
+		"Idempotency-Key": "contract-delete-0001", "If-Match": `"` + replaced.ResourceVersion + `"`,
 		"Veer-Request-Id": "req-delete",
 	}
 	deleted := exercise(t, server, "delete-workspace", http.MethodDelete, workspaceTarget, nil, deleteHeaders)
@@ -148,11 +143,11 @@ func TestReferenceServerBlackBoxContract(t *testing.T) {
 	deleteHeaders["Veer-Request-Id"] = "req-delete-replay"
 	deleteReplay := exercise(t, server, "delete-workspace-replay", http.MethodDelete, workspaceTarget, nil, deleteHeaders)
 	vectors = append(vectors, deleteReplay)
-	if !bytes.Equal(deleteReplay.Body, deleted.Body) {
-		t.Fatal("delete replay body drifted")
+	if deleted.Status != http.StatusConflict || deleteReplay.Status != http.StatusConflict {
+		t.Fatal("Workspace deletion bypassed retained Policy child")
 	}
 
-	vectors = append(vectors, exercise(t, server, "get-deleted-workspace", http.MethodGet, workspaceTarget, nil, map[string]string{
+	vectors = append(vectors, exercise(t, server, "get-after-denied-delete", http.MethodGet, workspaceTarget, nil, map[string]string{
 		"Veer-Request-Id": "req-get-deleted",
 	}))
 
@@ -174,7 +169,14 @@ func TestReferenceServerBlackBoxContract(t *testing.T) {
 		t.Fatalf("json.MarshalIndent() error = %v", err)
 	}
 	got = append(got, '\n')
-	want, err := os.ReadFile(filepath.Join(repositoryRoot(t), "test/contract/testdata/reference-server-v1alpha1.golden.json"))
+	goldenPath := filepath.Join(repositoryRoot(t), "test/contract/testdata/reference-server-v1alpha1.golden.json")
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
+			t.Fatalf("update reference contract golden: %v", err)
+		}
+		return
+	}
+	want, err := os.ReadFile(goldenPath)
 	if err != nil {
 		t.Fatalf("read reference contract golden: %v\ngenerated:\n%s", err, got)
 	}
@@ -201,15 +203,50 @@ func newReferenceHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workspace, err := service.Create(context.Background(), reference.CreateCommand{
+		Principal: principal, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "reference:contract:workspace", IdempotencyKey: "contract-bootstrap-workspace-v1",
+		Body: []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"payments","labels":{"team":"platform"}},"spec":{"suspendReconciliation":false}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberID := resource.ID("mem_contract_admin_0001")
+	member, err := authorization.NewMemberRecord(authorization.MemberInput{
+		ID: memberID, WorkspaceID: workspace.ResourceID, Kind: principal.Kind(),
+		LogicalIdentity: principal.LogicalIdentity(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := authorization.NewMemberDirectory(workspace.ResourceID, []authorization.MemberRecord{member})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := workspace.ResourceID
+	if _, err := service.Create(context.Background(), reference.CreateCommand{
+		Principal: principal, Kind: hierarchy.KindPolicy, WorkspaceID: workspace.ResourceID, ParentID: &parentID,
+		CanonicalTarget: "reference:contract:policy", IdempotencyKey: "contract-bootstrap-policy-v1",
+		Body:    []byte(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"contract administrator"},"spec":{"bindings":[{"memberId":"` + memberID.String() + `","role":"WorkspaceAdministrator","scope":{"kind":"Workspace"}}]}}`),
+		Members: directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := referenceauthorization.New(referenceauthorization.Config{
+		Reference: service, MemberDirectories: []authorization.MemberDirectory{directory}, MaximumAdmissions: 32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	credential, err := ports.NewBearerCredential("reference-contract-token")
 	if err != nil {
 		t.Fatal(err)
 	}
-	access, err := referenceaccess.New(credential, principal, httptransport.ReferenceActions())
+	access, err := referenceaccess.New(credential, principal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := httptransport.NewReferenceHandler(service, access, access)
+	handler, err := httptransport.NewReferenceHandler(runtime, access)
 	if err != nil {
 		t.Fatal(err)
 	}

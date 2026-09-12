@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,9 +22,14 @@ import (
 
 	"github.com/ArdurAI/veer/internal/adapters/referenceaccess"
 	"github.com/ArdurAI/veer/internal/adapters/store/memory"
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
+	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/model/v1alpha1"
+	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 	"github.com/ArdurAI/veer/internal/core/service/reference"
+	"github.com/ArdurAI/veer/internal/core/service/referenceauthorization"
 	httptransport "github.com/ArdurAI/veer/internal/transport/http"
 )
 
@@ -67,7 +73,7 @@ func run(ctx context.Context, args []string, output io.Writer, listen listenFunc
 	if err != nil {
 		return fmt.Errorf("construct reference principal: %w", err)
 	}
-	access, err := referenceaccess.New(credential, principal, httptransport.ReferenceActions())
+	access, err := referenceaccess.New(credential, principal)
 	if err != nil {
 		return fmt.Errorf("construct reference access boundary: %w", err)
 	}
@@ -75,14 +81,18 @@ func run(ctx context.Context, args []string, output io.Writer, listen listenFunc
 	if _, err := io.ReadFull(entropy, pageTokenKey); err != nil {
 		return errors.New("read reference page-token entropy")
 	}
-	service, err := reference.New(reference.Config{
+	rawService, err := reference.New(reference.Config{
 		Store: memory.NewStore(), Clock: reference.ClockFunc(func() time.Time { return time.Now().UTC() }),
 		Issuer: &reference.SequentialIssuer{}, PageTokenKey: pageTokenKey,
 	})
 	if err != nil {
 		return fmt.Errorf("construct reference service: %w", err)
 	}
-	handler, err := httptransport.NewReferenceHandler(service, access, access)
+	service, err := seedAuthorizationRuntime(ctx, rawService, principal)
+	if err != nil {
+		return fmt.Errorf("seed reference authorization runtime: %w", err)
+	}
+	handler, err := httptransport.NewReferenceHandler(service, access)
 	if err != nil {
 		return fmt.Errorf("construct reference handler: %w", err)
 	}
@@ -166,12 +176,70 @@ func loadCredential(path string) (ports.BearerCredential, error) {
 }
 
 func referencePrincipal() (identity.Principal, error) {
-	workload, err := identity.NewWorkloadIdentity("veer-reference-server")
-	if err != nil {
-		return identity.Principal{}, err
-	}
 	return identity.NewPrincipal(identity.PrincipalInput{
-		Kind: identity.KindWorkload, Issuer: "https://reference.veer.invalid",
-		Subject: "local-reference-harness", Audiences: []string{"veer-api"}, WorkloadIdentity: &workload,
+		Kind: identity.KindHuman, Issuer: "https://reference.veer.invalid",
+		Subject: "local-reference-operator", Audiences: []string{"veer-api"},
+	})
+}
+
+func seedAuthorizationRuntime(
+	ctx context.Context,
+	service *reference.Service,
+	principal identity.Principal,
+) (*referenceauthorization.Service, error) {
+	workspaceBody, err := json.Marshal(v1alpha1.WorkspaceWrite{
+		APIVersion: v1alpha1.APIVersion,
+		Kind:       hierarchy.KindWorkspace.String(),
+		Metadata:   v1alpha1.WriteMetadata{DisplayName: "Reference Workspace"},
+		Spec:       v1alpha1.WorkspaceWriteSpec{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	workspace, err := service.Create(ctx, reference.CreateCommand{
+		Principal: principal, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "reference:bootstrap:workspace", IdempotencyKey: "reference-bootstrap-workspace-v1",
+		Body: workspaceBody,
+	})
+	if err != nil {
+		return nil, err
+	}
+	memberID, err := resource.ParseID("mem_reference_admin_0001")
+	if err != nil {
+		return nil, err
+	}
+	member, err := authorization.NewMemberRecord(authorization.MemberInput{
+		ID: memberID, WorkspaceID: workspace.ResourceID, Kind: principal.Kind(),
+		LogicalIdentity: principal.LogicalIdentity(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	directory, err := authorization.NewMemberDirectory(workspace.ResourceID, []authorization.MemberRecord{member})
+	if err != nil {
+		return nil, err
+	}
+	policyBody, err := json.Marshal(v1alpha1.PolicyWrite{
+		APIVersion: v1alpha1.APIVersion,
+		Kind:       hierarchy.KindPolicy.String(),
+		Metadata:   v1alpha1.WriteMetadata{DisplayName: "Reference Workspace Administrator"},
+		Spec: authorization.PolicySpec{Bindings: []authorization.RoleBinding{{
+			MemberID: memberID, Role: authorization.RoleWorkspaceAdministrator,
+			Scope: authorization.Scope{Kind: authorization.ScopeKindWorkspace},
+		}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	parentID := workspace.ResourceID
+	if _, err := service.Create(ctx, reference.CreateCommand{
+		Principal: principal, Kind: hierarchy.KindPolicy, WorkspaceID: workspace.ResourceID, ParentID: &parentID,
+		CanonicalTarget: "reference:bootstrap:policy", IdempotencyKey: "reference-bootstrap-policy-v1",
+		Body: policyBody, Members: directory,
+	}); err != nil {
+		return nil, err
+	}
+	return referenceauthorization.New(referenceauthorization.Config{
+		Reference: service, MemberDirectories: []authorization.MemberDirectory{directory},
 	})
 }
