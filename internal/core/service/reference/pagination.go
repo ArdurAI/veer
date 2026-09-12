@@ -128,7 +128,7 @@ func (service *Service) listWhere(
 			return authorizationStateFor(values, workspaceID, members)
 		}
 		for _, value := range values {
-			if !matchesList(value, query) || (cursor != nil && !afterCursor(value, *cursor)) {
+			if !matchesList(value, query) {
 				continue
 			}
 			if retain != nil {
@@ -139,6 +139,9 @@ func (service *Service) listWhere(
 				if !keep {
 					continue
 				}
+			}
+			if cursor != nil && !afterCursor(value, *cursor) {
+				continue
 			}
 			candidates = append(candidates, cloneResource(value))
 		}

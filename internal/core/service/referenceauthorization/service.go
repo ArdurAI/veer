@@ -39,9 +39,16 @@ type Config struct {
 }
 
 type admission struct {
-	principal identity.Principal
-	action    authorization.Action
-	decision  authorization.Decision
+	principal       identity.Principal
+	action          authorization.Action
+	decision        authorization.Decision
+	resourceTarget  authorization.Target
+	operationTarget authorization.Target
+}
+
+type requestAdmission struct {
+	operationID resource.ID
+	resourceID  resource.ID
 }
 
 // Service serializes membership changes, policy evaluation, lifecycle
@@ -52,8 +59,10 @@ type Service struct {
 	reference   *reference.Service
 	directories map[resource.ID]authorization.MemberDirectory
 	admissions  map[resource.ID]admission
-	requests    map[[sha256.Size]byte]resource.ID
+	requests    map[[sha256.Size]byte]requestAdmission
 	maximum     int
+
+	beforeReplaceMembersLock func()
 }
 
 // New validates and takes ownership of the supplied runtime configuration.
@@ -83,7 +92,7 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		reference: config.Reference, directories: directories,
 		admissions: make(map[resource.ID]admission, maximum),
-		requests:   make(map[[sha256.Size]byte]resource.ID, maximum), maximum: maximum,
+		requests:   make(map[[sha256.Size]byte]requestAdmission, maximum), maximum: maximum,
 	}, nil
 }
 
@@ -93,6 +102,9 @@ func New(config Config) (*Service, error) {
 func (service *Service) ReplaceMembers(directory authorization.MemberDirectory) error {
 	if service == nil || authorization.ValidateMemberDirectory(directory) != nil {
 		return ErrInvalidConfiguration
+	}
+	if service.beforeReplaceMembersLock != nil {
+		service.beforeReplaceMembersLock()
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -155,7 +167,7 @@ func (service *Service) Get(
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	value, _, err := service.authorizeResource(ctx, principal, authorization.ActionResourceGet, id)
+	value, _, _, _, err := service.authorizeResource(ctx, principal, authorization.ActionResourceGet, id)
 	return value, err
 }
 
@@ -182,7 +194,7 @@ func (service *Service) Replace(
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	value, decision, err := service.authorizeResource(
+	value, state, target, decision, err := service.authorizeResource(
 		ctx, command.Principal, authorization.ActionResourceReplace, command.ResourceID,
 	)
 	if err != nil {
@@ -190,7 +202,7 @@ func (service *Service) Replace(
 	}
 	command.Members = service.directories[value.Metadata.WorkspaceID()]
 	return service.mutate(ctx, command.Principal, authorization.ActionResourceReplace,
-		command.CanonicalTarget, command.IdempotencyKey, decision,
+		command.CanonicalTarget, command.IdempotencyKey, state, target, decision,
 		func() (reference.MutationReceipt, error) { return service.reference.Replace(ctx, command) })
 }
 
@@ -205,14 +217,17 @@ func (service *Service) Delete(
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	_, decision, err := service.authorizeResource(
+	if receipt, replay, err := service.replayDelete(ctx, command); replay {
+		return receipt, err
+	}
+	_, state, target, decision, err := service.authorizeResource(
 		ctx, command.Principal, authorization.ActionResourceDelete, command.ResourceID,
 	)
 	if err != nil {
 		return reference.MutationReceipt{}, err
 	}
 	return service.mutate(ctx, command.Principal, authorization.ActionResourceDelete,
-		command.CanonicalTarget, command.IdempotencyKey, decision,
+		command.CanonicalTarget, command.IdempotencyKey, state, target, decision,
 		func() (reference.MutationReceipt, error) { return service.reference.Delete(ctx, command) })
 }
 
@@ -241,6 +256,9 @@ func (service *Service) GetOperation(
 	defer service.mu.Unlock()
 	value, err := service.reference.GetOperation(ctx, principal, id)
 	if err != nil {
+		if errors.Is(err, reference.ErrNotFound) {
+			return reference.Operation{}, ErrDenied
+		}
 		return reference.Operation{}, err
 	}
 	state, err := service.authorizationState(ctx, value.Value.WorkspaceID)
@@ -252,7 +270,14 @@ func (service *Service) GetOperation(
 		value.Value.EnvironmentID, value.Value.ProviderConnectionID,
 	)
 	if err != nil {
-		return reference.Operation{}, fmt.Errorf("%w: resolve Operation target", ErrUnavailable)
+		if _, lookupErr := state.Snapshot.Lookup(value.Value.ResourceID); lookupErr == nil {
+			return reference.Operation{}, fmt.Errorf("%w: resolve Operation target", ErrUnavailable)
+		}
+		record, exists := service.admissions[id]
+		if !exists || !operationTargetMatches(record.operationTarget, value) {
+			return reference.Operation{}, fmt.Errorf("%w: resolve deleted Operation target", ErrUnavailable)
+		}
+		target = record.operationTarget
 	}
 	decision, err := evaluate(state, principal, authorization.ActionOperationGet, target)
 	if err != nil {
@@ -297,6 +322,9 @@ func (service *Service) NewPlan(
 // WithExecutionAuthorization reloads current retained state, re-evaluates the
 // admission action, validates its exact Plan bindings, and invokes effect only
 // while membership/policy mutation remains excluded by this runtime.
+//
+// effect runs while the Service mutex is held and must not call back into this
+// Service because the mutex is deliberately non-reentrant.
 func (service *Service) WithExecutionAuthorization(
 	ctx context.Context,
 	plan reconciliation.Plan,
@@ -326,16 +354,23 @@ func (service *Service) WithExecutionAuthorization(
 		currentOperation.Value.Generation != plan.Generation() {
 		return ErrStaleAuthorization
 	}
-	currentResource, err := service.reference.Get(ctx, record.principal, plan.ResourceID())
-	if err != nil || currentResource.Metadata.Generation().Int64() != plan.Generation() {
-		return ErrStaleAuthorization
-	}
 	state, err := service.authorizationState(ctx, plan.WorkspaceID())
 	if err != nil {
 		return err
 	}
-	target, err := authorization.ResolveResourceTarget(state.Snapshot, plan.ResourceID())
-	if err != nil {
+	target := record.resourceTarget
+	if record.action != authorization.ActionResourceDelete {
+		currentResource, err := service.reference.Get(ctx, record.principal, plan.ResourceID())
+		if err != nil || currentResource.Metadata.Generation().Int64() != plan.Generation() {
+			return ErrStaleAuthorization
+		}
+		target, err = authorization.ResolveResourceTarget(state.Snapshot, plan.ResourceID())
+		if err != nil {
+			return ErrStaleAuthorization
+		}
+	} else if authorization.ValidateTarget(target) != nil ||
+		target.ObjectKind() != authorization.ObjectKindResource ||
+		target.ResourceID() != plan.ResourceID() || target.WorkspaceID() != plan.WorkspaceID() {
 		return ErrStaleAuthorization
 	}
 	decision, err := evaluate(state, record.principal, record.action, target)
@@ -357,27 +392,30 @@ func (service *Service) authorizeResource(
 	principal identity.Principal,
 	action authorization.Action,
 	id resource.ID,
-) (reference.Resource, authorization.Decision, error) {
+) (reference.Resource, reference.AuthorizationState, authorization.Target, authorization.Decision, error) {
 	value, err := service.reference.Get(ctx, principal, id)
 	if err != nil {
-		return reference.Resource{}, authorization.Decision{}, err
+		if errors.Is(err, reference.ErrNotFound) {
+			return reference.Resource{}, reference.AuthorizationState{}, authorization.Target{}, authorization.Decision{}, ErrDenied
+		}
+		return reference.Resource{}, reference.AuthorizationState{}, authorization.Target{}, authorization.Decision{}, err
 	}
 	state, err := service.authorizationState(ctx, value.Metadata.WorkspaceID())
 	if err != nil {
-		return reference.Resource{}, authorization.Decision{}, err
+		return reference.Resource{}, reference.AuthorizationState{}, authorization.Target{}, authorization.Decision{}, err
 	}
 	target, err := authorization.ResolveResourceTarget(state.Snapshot, value.Metadata.ID())
 	if err != nil {
-		return reference.Resource{}, authorization.Decision{}, fmt.Errorf("%w: resolve resource target", ErrUnavailable)
+		return reference.Resource{}, reference.AuthorizationState{}, authorization.Target{}, authorization.Decision{}, fmt.Errorf("%w: resolve resource target", ErrUnavailable)
 	}
 	decision, err := evaluate(state, principal, action, target)
 	if err != nil {
-		return reference.Resource{}, authorization.Decision{}, err
+		return reference.Resource{}, reference.AuthorizationState{}, authorization.Target{}, authorization.Decision{}, err
 	}
 	if !decision.Allowed() {
-		return reference.Resource{}, authorization.Decision{}, ErrDenied
+		return reference.Resource{}, reference.AuthorizationState{}, authorization.Target{}, authorization.Decision{}, ErrDenied
 	}
-	return value, decision, nil
+	return value, state, target, decision, nil
 }
 
 func (service *Service) authorizationState(
@@ -416,11 +454,21 @@ func (service *Service) mutate(
 	action authorization.Action,
 	target string,
 	idempotencyKey string,
+	state reference.AuthorizationState,
+	resourceTarget authorization.Target,
 	decision authorization.Decision,
 	mutation func() (reference.MutationReceipt, error),
 ) (reference.MutationReceipt, error) {
 	key := admissionRequestKey(principal, action, target, idempotencyKey)
-	existingOperationID, replay := service.requests[key]
+	existing, replay := service.requests[key]
+	if replay {
+		if existing.resourceID != resourceTarget.ResourceID() {
+			return reference.MutationReceipt{}, fmt.Errorf("%w: admission replay target mismatch", ErrUnavailable)
+		}
+		if _, exists := service.admissions[existing.operationID]; !exists {
+			return reference.MutationReceipt{}, fmt.Errorf("%w: admission replay record missing", ErrUnavailable)
+		}
+	}
 	if !replay && len(service.admissions) >= service.maximum {
 		return reference.MutationReceipt{}, reference.ErrCapacity
 	}
@@ -428,17 +476,85 @@ func (service *Service) mutate(
 	if err != nil {
 		return reference.MutationReceipt{}, err
 	}
-	if replay {
-		if existingOperationID != receipt.OperationID {
-			return reference.MutationReceipt{}, fmt.Errorf("%w: admission replay mismatch", ErrUnavailable)
-		}
+	if receipt.ResourceID != resourceTarget.ResourceID() {
+		return reference.MutationReceipt{}, fmt.Errorf("%w: admission result target mismatch", ErrUnavailable)
+	}
+	if replay && existing.operationID == receipt.OperationID {
 		return receipt, nil
+	}
+	operationValue, err := service.reference.GetOperation(ctx, principal, receipt.OperationID)
+	if err != nil {
+		return reference.MutationReceipt{}, fmt.Errorf("%w: load admitted Operation", ErrUnavailable)
+	}
+	operationTarget, err := authorization.ResolveOperationTarget(
+		state.Snapshot, operationValue.Value.ID, operationValue.Value.ResourceID,
+		operationValue.Value.WorkspaceID, operationValue.Value.EnvironmentID,
+		operationValue.Value.ProviderConnectionID,
+	)
+	if err != nil {
+		return reference.MutationReceipt{}, fmt.Errorf("%w: seal admitted Operation", ErrUnavailable)
+	}
+	if replay {
+		delete(service.admissions, existing.operationID)
 	}
 	service.admissions[receipt.OperationID] = admission{
 		principal: identity.ClonePrincipal(principal), action: action, decision: decision,
+		resourceTarget: resourceTarget, operationTarget: operationTarget,
 	}
-	service.requests[key] = receipt.OperationID
+	service.requests[key] = requestAdmission{operationID: receipt.OperationID, resourceID: receipt.ResourceID}
 	return receipt, nil
+}
+
+func (service *Service) replayDelete(
+	ctx context.Context,
+	command reference.DeleteCommand,
+) (reference.MutationReceipt, bool, error) {
+	key := admissionRequestKey(
+		command.Principal, authorization.ActionResourceDelete,
+		command.CanonicalTarget, command.IdempotencyKey,
+	)
+	existing, replay := service.requests[key]
+	if !replay {
+		return reference.MutationReceipt{}, false, nil
+	}
+	record, exists := service.admissions[existing.operationID]
+	if !exists || record.action != authorization.ActionResourceDelete ||
+		existing.resourceID != command.ResourceID || record.resourceTarget.ResourceID() != command.ResourceID {
+		return reference.MutationReceipt{}, true, fmt.Errorf("%w: invalid delete replay", ErrUnavailable)
+	}
+	receipt, err := service.reference.Delete(ctx, command)
+	if errors.Is(err, reference.ErrNotFound) {
+		return reference.MutationReceipt{}, true, ErrDenied
+	}
+	if err != nil {
+		return reference.MutationReceipt{}, true, err
+	}
+	if receipt.OperationID != existing.operationID || receipt.ResourceID != existing.resourceID {
+		return reference.MutationReceipt{}, true, fmt.Errorf("%w: delete replay mismatch", ErrUnavailable)
+	}
+	return receipt, true, nil
+}
+
+func operationTargetMatches(target authorization.Target, value reference.Operation) bool {
+	if authorization.ValidateTarget(target) != nil || target.ObjectKind() != authorization.ObjectKindOperation ||
+		target.ObjectID() != value.Value.ID || target.ResourceID() != value.Value.ResourceID ||
+		target.WorkspaceID() != value.Value.WorkspaceID {
+		return false
+	}
+	providerID, providerPresent := target.ProviderConnectionID()
+	if value.Value.EnvironmentID == nil && value.Value.ProviderConnectionID == nil {
+		return !providerPresent
+	}
+	environmentID, environmentPresent := target.EnvironmentID()
+	return optionalIDEqual(environmentID, environmentPresent, value.Value.EnvironmentID) &&
+		optionalIDEqual(providerID, providerPresent, value.Value.ProviderConnectionID)
+}
+
+func optionalIDEqual(value resource.ID, present bool, expected *resource.ID) bool {
+	if expected == nil {
+		return !present
+	}
+	return present && value == *expected
 }
 
 func admissionRequestKey(

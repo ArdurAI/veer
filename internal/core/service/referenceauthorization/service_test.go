@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +23,7 @@ import (
 type authorizationFixture struct {
 	raw             *reference.Service
 	runtime         *Service
+	clock           *authorizationClock
 	principal       identity.Principal
 	member          authorization.MemberRecord
 	directory       authorization.MemberDirectory
@@ -28,6 +31,23 @@ type authorizationFixture struct {
 	resourceVersion string
 	policyID        resource.ID
 	policyVersion   string
+}
+
+type authorizationClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (clock *authorizationClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *authorizationClock) Advance(duration time.Duration) {
+	clock.mu.Lock()
+	clock.now = clock.now.Add(duration)
+	clock.mu.Unlock()
 }
 
 func TestDeniedMutationLeavesResourceAndOperationIssuerUntouched(t *testing.T) {
@@ -157,6 +177,60 @@ func TestResourceAndOperationReadsUseCurrentPolicy(t *testing.T) {
 	}
 }
 
+func TestMissingResourceAndOperationReadsAreIndistinguishableFromDenial(t *testing.T) {
+	fixture := newAuthorizationFixture(t, false)
+	ctx := context.Background()
+	if _, err := fixture.runtime.Get(
+		ctx, fixture.principal, resource.ID("wsp_missing_runtime_0001"),
+	); !errors.Is(err, ErrDenied) {
+		t.Fatalf("Get(missing) error = %v, want denial", err)
+	}
+	if _, err := fixture.runtime.GetOperation(
+		ctx, fixture.principal, resource.ID("op_missing_runtime_0001"),
+	); !errors.Is(err, ErrDenied) {
+		t.Fatalf("GetOperation(missing) error = %v, want denial", err)
+	}
+}
+
+func TestDeleteReplayAndExecutionUseRetainedAuthorizationTargets(t *testing.T) {
+	fixture, environment := newDeleteAuthorizationFixture(t)
+	ctx := context.Background()
+	command := reference.DeleteCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindEnvironment, ResourceID: environment.ResourceID,
+		ExpectedResourceVersion: environment.ResourceVersion,
+		CanonicalTarget:         "reference:test:delete-environment", IdempotencyKey: "delete-environment-0001",
+	}
+	receipt, err := fixture.runtime.Delete(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := fixture.runtime.Delete(ctx, command)
+	if err != nil || replay != receipt {
+		t.Fatalf("Delete(replay) = %#v, %v; want %#v", replay, err, receipt)
+	}
+	if _, err := fixture.runtime.Get(ctx, fixture.principal, environment.ResourceID); !errors.Is(err, ErrDenied) {
+		t.Fatalf("Get(deleted) error = %v, want denial", err)
+	}
+	operationValue, err := fixture.runtime.GetOperation(ctx, fixture.principal, receipt.OperationID)
+	if err != nil || operationValue.Value.ResourceID != environment.ResourceID {
+		t.Fatalf("GetOperation(delete) resource/error = %s/%v", operationValue.Value.ResourceID, err)
+	}
+	plan, err := fixture.runtime.NewPlan(ctx, receipt.OperationID, planInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var effects atomic.Int32
+	if err := fixture.runtime.WithExecutionAuthorization(ctx, plan, func() error {
+		effects.Add(1)
+		return nil
+	}); err != nil {
+		t.Fatalf("WithExecutionAuthorization(delete) error = %v", err)
+	}
+	if effects.Load() != 1 {
+		t.Fatalf("delete effect calls = %d, want 1", effects.Load())
+	}
+}
+
 func TestConfigurationAndFailureClassification(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	if _, err := New(Config{}); !errors.Is(err, ErrInvalidConfiguration) {
@@ -273,6 +347,47 @@ func TestPlanBindsAdmissionAndExecutionRejectsPolicyDriftAndRevocation(t *testin
 	}
 }
 
+func TestMemberRevocationPreservesRemainingAdministratorAccess(t *testing.T) {
+	fixture := newAuthorizationFixture(t, false)
+	ctx := context.Background()
+	remainingPrincipal := testPrincipal(t, "remaining-administrator")
+	remainingMember := testMember(
+		t, resource.ID("mem_reference_admin_0002"), fixture.workspaceID, remainingPrincipal,
+	)
+	both, err := authorization.NewMemberDirectory(
+		fixture.workspaceID, []authorization.MemberRecord{fixture.member, remainingMember},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.runtime.ReplaceMembers(both); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindPolicy, ResourceID: fixture.policyID,
+		ExpectedResourceVersion: fixture.policyVersion,
+		CanonicalTarget:         "reference:test:two-administrators", IdempotencyKey: "two-administrators-0001",
+		Body: policyBody(fixture.member.ID(), remainingMember.ID()),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := authorization.NewMemberDirectory(
+		fixture.workspaceID, []authorization.MemberRecord{remainingMember},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.runtime.ReplaceMembers(remaining); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.runtime.Get(ctx, fixture.principal, fixture.workspaceID); !errors.Is(err, ErrDenied) {
+		t.Fatalf("Get(revoked administrator) error = %v, want denial", err)
+	}
+	if _, err := fixture.runtime.Get(ctx, remainingPrincipal, fixture.workspaceID); err != nil {
+		t.Fatalf("Get(remaining administrator) error = %v", err)
+	}
+}
+
 func TestExecutionRejectsResourceGenerationDrift(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
@@ -346,6 +461,44 @@ func TestAdmissionCapacityFailsBeforePersistence(t *testing.T) {
 	}
 	if receipt.OperationID != resource.ID("op_0000000000000004") {
 		t.Fatalf("post-capacity Operation ID = %s, want untouched next issuer value", receipt.OperationID)
+	}
+}
+
+func TestExpiredReplayRotatesAdmissionToNewOperation(t *testing.T) {
+	fixture := newAuthorizationFixture(t, false)
+	ctx := context.Background()
+	command := reference.ReplaceCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		ExpectedResourceVersion: fixture.resourceVersion,
+		CanonicalTarget:         "reference:test:replay-epoch", IdempotencyKey: "replay-epoch-0001",
+		Body: workspaceBody("first replay epoch", true),
+	}
+	first, err := fixture.runtime.Replace(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.runtime.NewPlan(ctx, first.OperationID, planInput(t)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.Advance(reconciliation.HTTPIdempotencyWindow)
+	command.ExpectedResourceVersion = first.ResourceVersion
+	command.Body = workspaceBody("second replay epoch", false)
+	second, err := fixture.runtime.Replace(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.OperationID == first.OperationID {
+		t.Fatalf("expired replay Operation ID = %s, want a new epoch", second.OperationID)
+	}
+	if _, err := fixture.runtime.NewPlan(ctx, first.OperationID, planInput(t)); !errors.Is(err, ErrDenied) {
+		t.Fatalf("NewPlan(retired epoch) error = %v, want denial", err)
+	}
+	if _, err := fixture.runtime.NewPlan(ctx, second.OperationID, planInput(t)); err != nil {
+		t.Fatalf("NewPlan(current epoch) error = %v", err)
+	}
+	if len(fixture.runtime.admissions) != 1 || len(fixture.runtime.requests) != 1 {
+		t.Fatalf("rotated admission/request sizes = %d/%d, want 1/1",
+			len(fixture.runtime.admissions), len(fixture.runtime.requests))
 	}
 }
 
@@ -445,12 +598,17 @@ func TestExecutionCallbackExcludesConcurrentRevocation(t *testing.T) {
 	}()
 	<-entered
 	revocationResult := make(chan error, 1)
-	revocationStarted := make(chan struct{})
+	revocationReached := make(chan struct{})
+	fixture.runtime.beforeReplaceMembersLock = func() { close(revocationReached) }
 	go func() {
-		close(revocationStarted)
 		revocationResult <- fixture.runtime.ReplaceMembers(revoked)
 	}()
-	<-revocationStarted
+	<-revocationReached
+	select {
+	case err := <-revocationResult:
+		t.Fatalf("ReplaceMembers completed while execution callback held the lock: %v", err)
+	default:
+	}
 	close(release)
 	if err := <-executionResult; err != nil {
 		t.Fatal(err)
@@ -467,11 +625,25 @@ func TestExecutionCallbackExcludesConcurrentRevocation(t *testing.T) {
 
 func newAuthorizationFixture(t *testing.T, includeHiddenWorkspace bool) authorizationFixture {
 	t.Helper()
+	fixture, _ := newAuthorizationFixtureWithOptions(t, includeHiddenWorkspace, false)
+	return fixture
+}
+
+func newDeleteAuthorizationFixture(t *testing.T) (authorizationFixture, reference.MutationReceipt) {
+	t.Helper()
+	return newAuthorizationFixtureWithOptions(t, false, true)
+}
+
+func newAuthorizationFixtureWithOptions(
+	t *testing.T,
+	includeHiddenWorkspace bool,
+	includeEnvironment bool,
+) (authorizationFixture, reference.MutationReceipt) {
+	t.Helper()
 	principal := testPrincipal(t, "administrator")
+	clock := &authorizationClock{now: time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)}
 	raw, err := reference.New(reference.Config{
-		Store: memory.NewStore(), Clock: reference.ClockFunc(func() time.Time {
-			return time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-		}),
+		Store: memory.NewStore(), Clock: clock,
 		Issuer: &reference.SequentialIssuer{}, PageTokenKey: bytes.Repeat([]byte{0x31}, 32),
 		MaximumPageTokens: 32, MaximumReplays: 64,
 	})
@@ -492,13 +664,29 @@ func newAuthorizationFixture(t *testing.T, includeHiddenWorkspace bool) authoriz
 		t.Fatal(err)
 	}
 	parentID := workspace.ResourceID
+	policyDocument := policyBody(member.ID())
+	if includeEnvironment {
+		policyDocument = operatorAdministratorPolicyBody(member.ID())
+	}
 	policy, err := raw.Create(context.Background(), reference.CreateCommand{
 		Principal: principal, Kind: hierarchy.KindPolicy, WorkspaceID: workspace.ResourceID, ParentID: &parentID,
 		CanonicalTarget: "reference:test:policy", IdempotencyKey: "policy-create-0001",
-		Body: policyBody(member.ID()), Members: directory,
+		Body: policyDocument, Members: directory,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var environment reference.MutationReceipt
+	if includeEnvironment {
+		environment, err = raw.Create(context.Background(), reference.CreateCommand{
+			Principal: principal, Kind: hierarchy.KindEnvironment,
+			WorkspaceID: workspace.ResourceID, ParentID: &parentID,
+			CanonicalTarget: "reference:test:environment", IdempotencyKey: "environment-create-0001",
+			Body: environmentBody("deletable"), Members: directory,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if includeHiddenWorkspace {
 		if _, err := raw.Create(context.Background(), reference.CreateCommand{
@@ -516,10 +704,10 @@ func newAuthorizationFixture(t *testing.T, includeHiddenWorkspace bool) authoriz
 		t.Fatal(err)
 	}
 	return authorizationFixture{
-		raw: raw, runtime: runtime, principal: principal, member: member, directory: directory,
+		raw: raw, runtime: runtime, clock: clock, principal: principal, member: member, directory: directory,
 		workspaceID: workspace.ResourceID, resourceVersion: workspace.ResourceVersion,
 		policyID: policy.ResourceID, policyVersion: policy.ResourceVersion,
-	}
+	}, environment
 }
 
 func testPrincipal(t *testing.T, subject string) identity.Principal {
@@ -558,8 +746,27 @@ func workspaceBody(name string, suspended bool) []byte {
 	return []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"` + name + `"},"spec":{"suspendReconciliation":` + value + `}}`)
 }
 
-func policyBody(memberID resource.ID) []byte {
-	return []byte(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"administrator"},"spec":{"bindings":[{"memberId":"` + memberID.String() + `","role":"WorkspaceAdministrator","scope":{"kind":"Workspace"}}]}}`)
+func environmentBody(name string) []byte {
+	return []byte(`{"apiVersion":"v1alpha1","kind":"Environment","metadata":{"displayName":"` + name + `"},"spec":{}}`)
+}
+
+func policyBody(memberIDs ...resource.ID) []byte {
+	identifiers := make([]string, len(memberIDs))
+	for index, memberID := range memberIDs {
+		identifiers[index] = memberID.String()
+	}
+	sort.Strings(identifiers)
+	bindings := make([]string, len(identifiers))
+	for index, memberID := range identifiers {
+		bindings[index] = `{"memberId":"` + memberID + `","role":"WorkspaceAdministrator","scope":{"kind":"Workspace"}}`
+	}
+	return []byte(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"administrator"},"spec":{"bindings":[` + strings.Join(bindings, ",") + `]}}`)
+}
+
+func operatorAdministratorPolicyBody(memberID resource.ID) []byte {
+	return []byte(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"operator administrator"},"spec":{"bindings":[` +
+		`{"memberId":"` + memberID.String() + `","role":"Operator","scope":{"kind":"Workspace"}},` +
+		`{"memberId":"` + memberID.String() + `","role":"WorkspaceAdministrator","scope":{"kind":"Workspace"}}]}}`)
 }
 
 func planInput(t *testing.T) reconciliation.PlanInput {

@@ -623,6 +623,17 @@ func TestSealedTargetResolution(t *testing.T) {
 		resolvedOperation.ResourceID() != testComponentA {
 		t.Fatalf("ResolveOperationTarget() = %v, %v", resolvedOperation, err)
 	}
+	unboundOperation, err := ResolveOperationTarget(
+		fixture.snapshot,
+		testOperationA,
+		testComponentA,
+		testWorkspaceAID,
+		nil,
+		nil,
+	)
+	if err != nil || ValidateTarget(unboundOperation) != nil {
+		t.Fatalf("ResolveOperationTarget(unbound) = %v, %v", unboundOperation, err)
+	}
 	for _, test := range []struct {
 		name        string
 		workspaceID resource.ID
@@ -631,7 +642,8 @@ func TestSealedTargetResolution(t *testing.T) {
 	}{
 		{name: "workspace substitution", workspaceID: testWorkspaceBID, environment: idPointer(testEnvironmentA), provider: idPointer(testProviderA)},
 		{name: "environment substitution", workspaceID: testWorkspaceAID, environment: idPointer(testEnvironmentB), provider: idPointer(testProviderA)},
-		{name: "provider environment substitution", workspaceID: testWorkspaceAID, environment: idPointer(testEnvironmentA), provider: idPointer(resource.ID("prv_01J11111111111111111111111"))},
+		{name: "provider environment substitution", workspaceID: testWorkspaceAID, environment: idPointer(testEnvironmentA), provider: idPointer(testProviderB)},
+		{name: "incomplete provider binding", workspaceID: testWorkspaceAID, environment: idPointer(testEnvironmentA)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := ResolveOperationTarget(

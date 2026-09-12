@@ -72,10 +72,12 @@ its published routes to current retained hierarchy, private membership, and
 PolicySet evaluation. Lists authorize each retained row before pagination;
 denied and reserved mutations make no resource or Operation change. Accepted
 mutations bind the actor and decision into immutable Plans, and a process-local
-execution callback rejects revocation, policy/input drift, and generation
-drift immediately before its effect. This does not establish production OIDC,
-durable membership/policy state, distributed exclusion, queue/worker
-integration, provider-effect enforcement, or durable audit/outbox atomicity.
+execution callback rejects revocation, policy/input drift, and applicable
+generation drift immediately before its effect. Delete execution uses its
+server-sealed pre-delete target after the resource tombstone and still
+re-evaluates current policy. This does not establish production OIDC, durable
+membership/policy state, distributed exclusion, queue/worker integration,
+provider-effect enforcement, or durable audit/outbox atomicity.
 
 ## Secrets and provider credentials
 

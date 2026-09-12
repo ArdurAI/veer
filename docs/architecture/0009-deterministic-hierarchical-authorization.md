@@ -71,6 +71,13 @@ admission reports missing references as `reference-not-found` and wrong or
 incompatible kinds as `reference-kind-mismatch`; neither is an `invalid-spec`
 failure.
 
+Membership revocation makes existing bindings to the removed member inactive
+at evaluation time without invalidating the retained Policy resource or its
+generation. New and replaced Policy documents still reject references that
+are absent from the active private member directory. This lets revocation take
+effect immediately without allowing one removed member to make unrelated,
+still-valid administrator bindings unevaluable.
+
 ### Roles and inheritance
 
 Inheritance is an explicit star, not a transitive job hierarchy. `Developer`,
@@ -99,8 +106,8 @@ implementation must seal and evaluate each candidate retained row against that
 row's Workspace policy state before including it in a response; a parent target
 never authorizes its children, and an empty result does not create a synthetic
 collection target. Pagination, filters, and counts cannot turn a denied row into
-response data. Retained Plan, Operation, and resource-anchored Audit rows remain
-unavailable until issue #24 adds their authoritative binding resolver.
+response data. Retained Plan and resource-anchored Audit rows remain unavailable
+until their owning runtimes add authoritative binding resolvers.
 
 | Actions | Object | Direct role and resource-kind grants |
 | --- | --- | --- |
@@ -146,9 +153,13 @@ Membership or Audit objects; callers cannot assert their Workspace or
 Environment ownership. Issue #24 added an Operation resolver that accepts only
 an Operation loaded by the runtime and independently cross-checks its immutable
 resource, Workspace, Environment, and ProviderConnection bindings against the
-retained hierarchy. No public resolver for a retained Plan or resource-anchored
-Audit exists; those action-matrix entries remain fail closed until their owning
-runtime can prove the separate object-ID-to-resource binding.
+retained hierarchy. A successful mutation seals that derived target in its
+bounded process-local admission record, so a retained delete Operation can
+still be read, planned, and reauthorized after its resource is tombstoned; the
+caller never supplies that fallback target. No public resolver for a retained
+Plan or resource-anchored Audit exists; those action-matrix entries remain fail
+closed until their owning runtime can prove the separate object-ID-to-resource
+binding.
 
 The immutable PolicySet binds the member directory and at most 2,500 ordered
 Policy revisions, each with a desired-state generation. Its domain-separated

@@ -53,12 +53,15 @@ func ResolveOperationTarget(
 	if err != nil {
 		return Target{}, err
 	}
-	resolvedEnvironment, resolvedEnvironmentPresent := target.EnvironmentID()
-	if !optionalIDMatches(resolvedEnvironment, resolvedEnvironmentPresent, environmentID) {
-		return Target{}, fmt.Errorf("%w: operation environment mismatch", ErrInvalidTarget)
+	if (environmentID == nil) != (providerConnectionID == nil) {
+		return Target{}, fmt.Errorf("%w: incomplete operation provider binding", ErrInvalidTarget)
 	}
 	if providerConnectionID == nil {
 		return target, nil
+	}
+	resolvedEnvironment, resolvedEnvironmentPresent := target.EnvironmentID()
+	if !optionalIDMatches(resolvedEnvironment, resolvedEnvironmentPresent, environmentID) {
+		return Target{}, fmt.Errorf("%w: operation environment mismatch", ErrInvalidTarget)
 	}
 	provider, err := snapshot.Lookup(*providerConnectionID)
 	if err != nil || provider.Kind() != hierarchy.KindProviderConnection ||

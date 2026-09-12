@@ -310,6 +310,18 @@ func TestListFilteringOrderingPaginationAndTokenBinding(t *testing.T) {
 	if err != nil || len(second.Items) != 1 || second.NextPageToken != "" {
 		t.Fatalf("List(second) items/token/error = %d/%q/%v", len(second.Items), second.NextPageToken, err)
 	}
+	retained := 0
+	filteredSecond, err := fixture.service.ListWhere(ctx, query, func(
+		reference.Resource,
+		reference.AuthorizationStateResolver,
+	) (bool, error) {
+		retained++
+		return true, nil
+	})
+	if err != nil || len(filteredSecond.Items) != 1 || retained != 3 {
+		t.Fatalf("ListWhere(second) items/retained/error = %d/%d/%v, want 1/3/nil",
+			len(filteredSecond.Items), retained, err)
+	}
 	if first.Items[0].Metadata.ID() == first.Items[1].Metadata.ID() ||
 		first.Items[1].Metadata.ID() == second.Items[0].Metadata.ID() {
 		t.Fatal("pagination duplicated a resource")

@@ -24,6 +24,7 @@ const (
 	testApplicationB = resource.ID("app_01J11111111111111111111111")
 	testComponentA   = resource.ID("cmp_01J00000000000000000000000")
 	testProviderA    = resource.ID("prv_01J00000000000000000000000")
+	testProviderB    = resource.ID("prv_01J11111111111111111111111")
 	testOperationA   = resource.ID("opx_01J00000000000000000000000")
 	testPlanA        = resource.ID("pln_01J00000000000000000000000")
 	testAuditA       = resource.ID("aud_01J00000000000000000000000")
@@ -60,6 +61,7 @@ func newHierarchyFixture(t testing.TB, workspaceID resource.ID) hierarchyFixture
 		{kind: hierarchy.KindApplication, id: testApplicationB, parent: idPointer(testEnvironmentB)},
 		{kind: hierarchy.KindComponent, id: testComponentA, parent: idPointer(testApplicationA)},
 		{kind: hierarchy.KindProviderConnection, id: testProviderA, parent: idPointer(testEnvironmentA)},
+		{kind: hierarchy.KindProviderConnection, id: testProviderB, parent: idPointer(testEnvironmentB)},
 	}
 	records := make(map[resource.ID]hierarchy.Record, len(ids))
 	ordered := make([]hierarchy.Record, 0, len(ids))

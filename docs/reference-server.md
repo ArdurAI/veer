@@ -45,11 +45,15 @@ Accepted mutations retain a bounded process-local admission record. Plan
 construction replaces caller-supplied actor, decision, and Operation fields
 with that record and current retained Operation. Immediately before a
 process-local execution callback, the runtime reloads current membership,
-PolicySet, resource generation, and Operation, then requires exact actor,
-policy-version, and authorization-input bindings. Revocation, policy drift,
-or generation drift prevents the callback. This is executable reference
-evidence, not a queue, worker, provider adapter, production OIDC path, or
-cross-process authorization guarantee.
+PolicySet, and Operation, then requires exact actor, policy-version, and
+authorization-input bindings. Non-delete execution also reloads the current
+resource generation. Delete replay and execution use only the server-sealed
+pre-delete targets retained with the admission because the resource has
+already been tombstoned. Revocation, policy drift, or applicable generation
+drift prevents the callback. Expired idempotency epochs replace their prior
+admission instead of leaving the new Operation unplannable. This is executable
+reference evidence, not a queue, worker, provider adapter, production OIDC
+path, or cross-process authorization guarantee.
 
 ## Run locally
 
@@ -114,7 +118,9 @@ admission/revocation races, and effect/revocation exclusion.
   a proxy, container port, tunnel, or public listener is unsupported.
 - The bearer adapter is a fixed local verifier, not OIDC. The preseeded private
   member directory is process-local configuration rather than a membership
-  API or durable identity store.
+  API or durable identity store. Removing a member makes its retained Policy
+  bindings inactive; new Policy writes still require every referenced member
+  to exist.
 - The execution callback serializes only this process's configured membership,
   policy mutations, and effect. It is not a distributed transaction or proof
   that an external provider call can be cancelled after dispatch.

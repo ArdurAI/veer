@@ -2,6 +2,7 @@ package reference
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
@@ -84,6 +85,10 @@ func authorizationStateFor(
 		if err != nil {
 			return AuthorizationState{}, fmt.Errorf("%w: decode Policy spec", ErrInternal)
 		}
+		spec, err = effectivePolicySpec(spec, members)
+		if err != nil {
+			return AuthorizationState{}, err
+		}
 		record, err := hierarchyRecord(value)
 		if err != nil {
 			return AuthorizationState{}, err
@@ -97,4 +102,29 @@ func authorizationStateFor(
 		return AuthorizationState{}, fmt.Errorf("%w: compile authorization state: %w", ErrInternal, err)
 	}
 	return AuthorizationState{Snapshot: snapshot, Policies: set}, nil
+}
+
+// effectivePolicySpec makes bindings to removed members inactive while
+// retaining the Policy resource and generation in the PolicySet version. New
+// Policy admission still rejects references absent from the active directory.
+func effectivePolicySpec(
+	spec model.PolicySpec,
+	members authorization.MemberDirectory,
+) (model.PolicySpec, error) {
+	result := authorization.ClonePolicySpec(spec)
+	if result.Bindings == nil {
+		return result, nil
+	}
+	active := make([]authorization.RoleBinding, 0, len(result.Bindings))
+	for _, binding := range result.Bindings {
+		if _, err := members.Lookup(binding.MemberID); err != nil {
+			if errors.Is(err, authorization.ErrMemberNotFound) {
+				continue
+			}
+			return model.PolicySpec{}, fmt.Errorf("%w: resolve active Policy member", ErrInternal)
+		}
+		active = append(active, binding)
+	}
+	result.Bindings = active
+	return result, nil
 }
