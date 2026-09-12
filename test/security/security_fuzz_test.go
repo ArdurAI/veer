@@ -11,11 +11,11 @@ import (
 	"testing"
 
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
-	"github.com/ArdurAI/veer/internal/core/service/reference"
 )
 
 const (
 	fuzzWorkspaceTarget        = "/__security_fixture_workspace__"
+	fuzzOperationTarget        = "/__security_fixture_operation__"
 	fuzzWorkspaceResourceMatch = "__security_fixture_resource_version__"
 )
 
@@ -28,13 +28,17 @@ var retainedSecurityAuthenticationChallenges = map[string]string{
 type securityFuzzSeed struct {
 	method, target, authorization, contentType, idempotencyKey, ifMatch, requestID string
 	body                                                                           []byte
-	rejectionStatus                                                                int
+	expectedStatus                                                                 int
 }
 
 func FuzzReferencePublicBoundary(f *testing.F) {
 	seeds := []securityFuzzSeed{
 		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-list", nil, 0},
+		{"", "/api/v1alpha1/workspaces", "BeArer " + securityBearerCanary, "", "0", "0", "0", nil, http.StatusOK},
 		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", securityPolicyCanary, nil, 0},
+		{http.MethodGet, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-workspace", nil, http.StatusOK},
+		{http.MethodGet, fuzzOperationTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-operation", nil, http.StatusOK},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-replace-00001", fuzzWorkspaceResourceMatch, "req-fuzz-replace", validWorkspaceBody("replacement"), http.StatusAccepted},
 		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + url.QueryEscape(invalidBearerCanary), "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, http.StatusUnauthorized},
 		{http.MethodGet, "/api/v1alpha1/workspaces/%2e%2e", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-encoded-path", nil, http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-duplicate-0001", fuzzWorkspaceResourceMatch, "req-fuzz-duplicate", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusBadRequest},
@@ -52,6 +56,7 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 	for _, seed := range seeds {
 		f.Add(seed.method, seed.target, seed.authorization, seed.contentType, seed.idempotencyKey, seed.ifMatch, seed.requestID, seed.body)
 	}
+	successResponseLimits := loadSecuritySuccessResponseLimits(f)
 
 	f.Fuzz(func(
 		t *testing.T,
@@ -63,7 +68,7 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 			len(requestID) > 512 || len(body) > 2*resource.MaxCanonicalBytes {
 			t.Skip()
 		}
-		retainedRejectionStatus := retainedSecurityFuzzRejectionStatus(
+		retainedExpectedStatus := retainedSecurityFuzzExpectedStatus(
 			seeds, method, target, authorization, contentType, idempotencyKey, ifMatch, requestID, body,
 		)
 		fixture := newSecurityFixture(t)
@@ -72,6 +77,9 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		authorizedFixtureMutation := authorizedFixtureTarget && ifMatch == fuzzWorkspaceResourceMatch
 		if target == fuzzWorkspaceTarget {
 			target = "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
+		}
+		if target == fuzzOperationTarget {
+			target = "/api/v1alpha1/operations/" + fixture.operationID.String()
 		}
 		if ifMatch == fuzzWorkspaceResourceMatch {
 			ifMatch = `"` + fixture.resourceVersion + `"`
@@ -108,15 +116,15 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		if authorizedFixtureMutation && response.Code == http.StatusForbidden {
 			t.Fatalf("authorized fixture mutation was denied before reaching admission: body=%s", response.Body.String())
 		}
-		if retainedRejectionStatus != 0 && response.Code != retainedRejectionStatus {
+		if retainedExpectedStatus != 0 && response.Code != retainedExpectedStatus {
 			t.Fatalf(
-				"retained negative seed status = %d, want %d; body=%s",
-				response.Code, retainedRejectionStatus, response.Body.String(),
+				"retained seed status = %d, want %d; body=%s",
+				response.Code, retainedExpectedStatus, response.Body.String(),
 			)
 		}
 		if response.Code == http.StatusUnauthorized {
 			expectedChallenge := ""
-			if retainedRejectionStatus == http.StatusUnauthorized {
+			if retainedExpectedStatus == http.StatusUnauthorized {
 				var exists bool
 				expectedChallenge, exists = retainedSecurityAuthenticationChallenges[requestID]
 				if !exists {
@@ -131,8 +139,16 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		switch {
 		case response.Code >= http.StatusOK && response.Code < http.StatusMultipleChoices:
 			assertSingletonHeader(t, response, "Content-Type", "application/json")
-			if response.Body.Len() > reference.MaxPageBytes || !json.Valid(response.Body.Bytes()) {
-				t.Fatalf("success response contract failed: status=%d bytes=%d headers=%#v", response.Code, response.Body.Len(), response.Header())
+			operationID := securityOperationIDForRequest(request.Method, request.URL.Path)
+			maximumBytes, exists := successResponseLimits[operationID]
+			if operationID == "" || !exists {
+				t.Fatalf("successful response has no matched OpenAPI operation limit: method=%q path=%q", request.Method, request.URL.Path)
+			}
+			if response.Body.Len() > maximumBytes || !json.Valid(response.Body.Bytes()) {
+				t.Fatalf(
+					"success response contract failed: operation=%s status=%d bytes=%d maximum=%d headers=%#v",
+					operationID, response.Code, response.Body.Len(), maximumBytes, response.Header(),
+				)
 			}
 			assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			assertNoSuccessfulFixtureSecrets(t, response, fixture)
@@ -150,17 +166,17 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 	})
 }
 
-func retainedSecurityFuzzRejectionStatus(
+func retainedSecurityFuzzExpectedStatus(
 	seeds []securityFuzzSeed,
 	method, target, authorization, contentType, idempotencyKey, ifMatch, requestID string,
 	body []byte,
 ) int {
 	for _, seed := range seeds {
-		if seed.rejectionStatus != 0 && method == seed.method && target == seed.target &&
+		if seed.expectedStatus != 0 && method == seed.method && target == seed.target &&
 			authorization == seed.authorization && contentType == seed.contentType &&
 			idempotencyKey == seed.idempotencyKey && ifMatch == seed.ifMatch && requestID == seed.requestID &&
 			bytes.Equal(body, seed.body) {
-			return seed.rejectionStatus
+			return seed.expectedStatus
 		}
 	}
 	return 0

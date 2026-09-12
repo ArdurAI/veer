@@ -101,17 +101,24 @@ type securityRoute struct {
 }
 
 type securityFixture struct {
-	memberHandler       http.Handler
-	outsiderHandler     http.Handler
-	workspaceID         resource.ID
-	outsiderWorkspaceID resource.ID
-	resourceVersion     string
-	operationID         resource.ID
-	policyID            resource.ID
-	memberID            resource.ID
+	memberHandler           http.Handler
+	outsiderHandler         http.Handler
+	workspaceID             resource.ID
+	outsiderWorkspaceID     resource.ID
+	resourceVersion         string
+	outsiderResourceVersion string
+	operationID             resource.ID
+	outsiderOperationID     resource.ID
+	policyID                resource.ID
+	memberID                resource.ID
 }
 
 type securityRuntimeSnapshot struct {
+	member   securityPrincipalRuntimeSnapshot
+	outsider securityPrincipalRuntimeSnapshot
+}
+
+type securityPrincipalRuntimeSnapshot struct {
 	workspaceList string
 	workspace     string
 	workspaceETag string
@@ -267,6 +274,19 @@ func TestSecurityProblemMemberPresence(t *testing.T) {
 				t.Fatalf("validateSecurityProblemMembers() error = %v, wantErr %t", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestSecuritySuccessResponseLimitsCoverPublicRoutes(t *testing.T) {
+	limits := loadSecuritySuccessResponseLimits(t)
+	routes := publicSecurityRoutes()
+	if len(limits) != len(routes) {
+		t.Fatalf("success response limit operations = %d, want %d public routes", len(limits), len(routes))
+	}
+	for _, route := range routes {
+		if limits[route.operationID] <= 0 {
+			t.Fatalf("operation %q has no positive success response limit", route.operationID)
+		}
 	}
 }
 
@@ -456,7 +476,9 @@ func publicSecurityRoutes() []securityRoute {
 			memberStatus: http.StatusOK, memberOutcome: "allowed",
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
-				assertWorkspaceObject(t, response, fixture.workspaceID)
+				assertWorkspaceObject(
+					t, response, fixture.workspaceID, securityResourceCanary, fixture.resourceVersion,
+				)
 				assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 		},
@@ -470,7 +492,24 @@ func publicSecurityRoutes() []securityRoute {
 			workspaceAdminOnly: true,
 			staleOutsiderCheck: true,
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
-				assertMutationReceipt(t, response, fixture.workspaceID)
+				receipt := assertMutationReceipt(t, response, fixture.workspaceID)
+				if receipt.ResourceVersion == fixture.resourceVersion {
+					t.Fatalf("replacement resource version = %q, want advancement from %q", receipt.ResourceVersion, fixture.resourceVersion)
+				}
+				memberWorkspace := securityAuthorizedGet(
+					t, fixture.memberHandler, "/api/v1alpha1/workspaces/"+fixture.workspaceID.String(),
+				)
+				assertWorkspaceObject(t, memberWorkspace, fixture.workspaceID, "replacement", receipt.ResourceVersion)
+				outsiderWorkspace := securityAuthorizedGet(
+					t, fixture.outsiderHandler, "/api/v1alpha1/workspaces/"+fixture.outsiderWorkspaceID.String(),
+				)
+				assertWorkspaceObject(
+					t,
+					outsiderWorkspace,
+					fixture.outsiderWorkspaceID,
+					securityOutsiderCanary,
+					fixture.outsiderResourceVersion,
+				)
 				assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 		},
@@ -576,7 +615,8 @@ func newSecurityFixtureForRole(t testing.TB, memberRole authorization.Role) secu
 	return securityFixture{
 		memberHandler: memberHandler, outsiderHandler: outsiderHandler,
 		workspaceID: workspace.ResourceID, outsiderWorkspaceID: outsiderWorkspace.ResourceID,
-		resourceVersion: workspace.ResourceVersion, operationID: workspace.OperationID,
+		resourceVersion: workspace.ResourceVersion, outsiderResourceVersion: outsiderWorkspace.ResourceVersion,
+		operationID: workspace.OperationID, outsiderOperationID: outsiderWorkspace.OperationID,
 		policyID: memberPolicy.ResourceID, memberID: resource.ID(securityMemberCanary),
 	}
 }
@@ -690,13 +730,17 @@ func securityRequestWithStateInvariant(
 	request func() *httptest.ResponseRecorder,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	if route.method == http.MethodGet || expectedStatus < http.StatusBadRequest {
+	if route.method == http.MethodGet {
 		return request()
 	}
 	before := observeSecurityRuntimeState(t, fixture, fixture.operationID)
 	response := request()
 	after := observeSecurityRuntimeState(t, fixture, fixture.operationID)
-	assertSecurityRuntimeStateUnchanged(t, before, after)
+	if expectedStatus >= http.StatusBadRequest {
+		assertSecurityRuntimeStateUnchanged(t, before, after)
+	} else if route.operationID == "replaceWorkspace" {
+		assertSecurityPrincipalRuntimeStateUnchanged(t, "outsider", before.outsider, after.outsider)
+	}
 	return response
 }
 
@@ -706,23 +750,31 @@ func observeSecurityRuntimeState(
 	operationIDs ...resource.ID,
 ) securityRuntimeSnapshot {
 	t.Helper()
-	get := func(target string) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodGet, target, nil)
-		request.Header.Set("Authorization", "Bearer "+securityBearerCanary)
-		response := httptest.NewRecorder()
-		fixture.memberHandler.ServeHTTP(response, request)
-		assertSecurityResponse(t, response, http.StatusOK, "")
-		return response
+	return securityRuntimeSnapshot{
+		member: observeSecurityPrincipalRuntimeState(
+			t, fixture.memberHandler, fixture.workspaceID, operationIDs...,
+		),
+		outsider: observeSecurityPrincipalRuntimeState(
+			t, fixture.outsiderHandler, fixture.outsiderWorkspaceID, fixture.outsiderOperationID,
+		),
 	}
+}
 
-	list := get("/api/v1alpha1/workspaces")
-	workspace := get("/api/v1alpha1/workspaces/" + fixture.workspaceID.String())
+func observeSecurityPrincipalRuntimeState(
+	t testing.TB,
+	handler http.Handler,
+	workspaceID resource.ID,
+	operationIDs ...resource.ID,
+) securityPrincipalRuntimeSnapshot {
+	t.Helper()
+	list := securityAuthorizedGet(t, handler, "/api/v1alpha1/workspaces")
+	workspace := securityAuthorizedGet(t, handler, "/api/v1alpha1/workspaces/"+workspaceID.String())
 	var operations strings.Builder
 	for _, operationID := range operationIDs {
-		operationResponse := get("/api/v1alpha1/operations/" + operationID.String())
+		operationResponse := securityAuthorizedGet(t, handler, "/api/v1alpha1/operations/"+operationID.String())
 		fmt.Fprintf(&operations, "%s\x00%s\x00%q\n", operationID, operationResponse.Body.String(), operationResponse.Header().Values("ETag"))
 	}
-	return securityRuntimeSnapshot{
+	return securityPrincipalRuntimeSnapshot{
 		workspaceList: list.Body.String(),
 		workspace:     workspace.Body.String(),
 		workspaceETag: fmt.Sprintf("%q", workspace.Header().Values("ETag")),
@@ -730,18 +782,38 @@ func observeSecurityRuntimeState(
 	}
 }
 
+func securityAuthorizedGet(t testing.TB, handler http.Handler, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, target, nil)
+	request.Header.Set("Authorization", "Bearer "+securityBearerCanary)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertSecurityResponse(t, response, http.StatusOK, "")
+	return response
+}
+
 func assertSecurityRuntimeStateUnchanged(
 	t testing.TB,
 	before, after securityRuntimeSnapshot,
 ) {
 	t.Helper()
+	assertSecurityPrincipalRuntimeStateUnchanged(t, "member", before.member, after.member)
+	assertSecurityPrincipalRuntimeStateUnchanged(t, "outsider", before.outsider, after.outsider)
+}
+
+func assertSecurityPrincipalRuntimeStateUnchanged(
+	t testing.TB,
+	principal string,
+	before, after securityPrincipalRuntimeSnapshot,
+) {
+	t.Helper()
 	switch {
 	case before.workspaceList != after.workspaceList:
-		t.Fatal("denied mutation changed the authorized workspace list")
+		t.Fatalf("denied mutation changed the %s workspace list", principal)
 	case before.workspace != after.workspace || before.workspaceETag != after.workspaceETag:
-		t.Fatal("denied mutation changed the canonical workspace or resource version")
+		t.Fatalf("denied mutation changed the %s workspace or resource version", principal)
 	case before.operations != after.operations:
-		t.Fatal("denied mutation changed observed operation state")
+		t.Fatalf("denied mutation changed the %s operation state", principal)
 	}
 }
 
@@ -1008,19 +1080,32 @@ func assertWorkspacePage(
 	assertNoSuccessfulResponseCanary(t, response, forbiddenCanary)
 }
 
-func assertWorkspaceObject(t testing.TB, response *httptest.ResponseRecorder, wantID resource.ID) {
+func assertWorkspaceObject(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	wantID resource.ID,
+	wantDisplayName, wantResourceVersion string,
+) {
 	t.Helper()
 	var workspace struct {
 		Metadata struct {
-			ID string `json:"id"`
+			ID              string `json:"id"`
+			DisplayName     string `json:"displayName"`
+			ResourceVersion string `json:"resourceVersion"`
 		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &workspace); err != nil {
 		t.Fatalf("decode workspace: %v; body=%s", err, response.Body.String())
 	}
-	if workspace.Metadata.ID != wantID.String() {
-		t.Fatalf("workspace ID = %q, want %q; body=%s", workspace.Metadata.ID, wantID, response.Body.String())
+	if workspace.Metadata.ID != wantID.String() || workspace.Metadata.DisplayName != wantDisplayName ||
+		workspace.Metadata.ResourceVersion != wantResourceVersion {
+		t.Fatalf(
+			"workspace identity = id:%q displayName:%q resourceVersion:%q, want %q/%q/%q; body=%s",
+			workspace.Metadata.ID, workspace.Metadata.DisplayName, workspace.Metadata.ResourceVersion,
+			wantID, wantDisplayName, wantResourceVersion, response.Body.String(),
+		)
 	}
+	assertSingletonHeader(t, response, "ETag", strconv.Quote(workspace.Metadata.ResourceVersion))
 }
 
 func assertOperationObject(
@@ -1030,9 +1115,10 @@ func assertOperationObject(
 ) {
 	t.Helper()
 	var operation struct {
-		ID          string `json:"id"`
-		WorkspaceID string `json:"workspaceId"`
-		ResourceID  string `json:"resourceId"`
+		ID              string `json:"id"`
+		WorkspaceID     string `json:"workspaceId"`
+		ResourceID      string `json:"resourceId"`
+		ResourceVersion string `json:"resourceVersion"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &operation); err != nil {
 		t.Fatalf("decode operation: %v; body=%s", err, response.Body.String())
@@ -1045,6 +1131,10 @@ func assertOperationObject(
 			wantID, wantWorkspaceID, wantResourceID, response.Body.String(),
 		)
 	}
+	if operation.ResourceVersion == "" {
+		t.Fatalf("operation resource version is empty; body=%s", response.Body.String())
+	}
+	assertSingletonHeader(t, response, "ETag", strconv.Quote(operation.ResourceVersion))
 }
 
 func assertMutationReceipt(
@@ -1286,6 +1376,119 @@ func safeSecurityProblemText(value string, maximum int, required bool) bool {
 	for index := range len(value) {
 		character := value[index]
 		if character < 0x20 || character > 0x7e || strings.ContainsRune(`"&<>\`, rune(character)) {
+			return false
+		}
+	}
+	return true
+}
+
+func loadSecuritySuccessResponseLimits(t testing.TB) map[string]int {
+	t.Helper()
+	data, err := openapi.Load(filepath.Join(repositoryRoot(t), "api/openapi/veer-v1alpha1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := openapi.Validate(data); err != nil {
+		t.Fatal(err)
+	}
+	type referenceObject struct {
+		Reference string `json:"$ref"`
+	}
+	type operationObject struct {
+		OperationID string                     `json:"operationId"`
+		Responses   map[string]referenceObject `json:"responses"`
+	}
+	var document struct {
+		Paths      map[string]map[string]json.RawMessage `json:"paths"`
+		Components struct {
+			Responses map[string]struct {
+				Content map[string]struct {
+					Schema referenceObject `json:"schema"`
+				} `json:"content"`
+			} `json:"responses"`
+			Schemas map[string]struct {
+				MaximumJSONBytes int `json:"x-veer-maximum-json-bytes"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	limits := make(map[string]int)
+	for path, item := range document.Paths {
+		for method, raw := range item {
+			if !isHTTPMethod(method) {
+				continue
+			}
+			var operation operationObject
+			if err := json.Unmarshal(raw, &operation); err != nil {
+				t.Fatalf("decode %s %s operation: %v", strings.ToUpper(method), path, err)
+			}
+			var successReference string
+			for status, response := range operation.Responses {
+				statusCode, err := strconv.Atoi(status)
+				if err != nil || statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+					continue
+				}
+				if successReference != "" {
+					t.Fatalf("%s %s has multiple successful response contracts", strings.ToUpper(method), path)
+				}
+				successReference = response.Reference
+			}
+			responseName, ok := strings.CutPrefix(successReference, "#/components/responses/")
+			if !ok || responseName == "" || strings.Contains(responseName, "/") {
+				t.Fatalf("%s %s success response reference = %q", strings.ToUpper(method), path, successReference)
+			}
+			response, ok := document.Components.Responses[responseName]
+			if !ok {
+				t.Fatalf("%s %s success response component %q is missing", strings.ToUpper(method), path, responseName)
+			}
+			media, ok := response.Content["application/json"]
+			if !ok {
+				t.Fatalf("%s %s success response %q has no application/json schema", strings.ToUpper(method), path, responseName)
+			}
+			schemaName, ok := strings.CutPrefix(media.Schema.Reference, "#/components/schemas/")
+			if !ok || schemaName == "" || strings.Contains(schemaName, "/") {
+				t.Fatalf("%s %s success schema reference = %q", strings.ToUpper(method), path, media.Schema.Reference)
+			}
+			schema, ok := document.Components.Schemas[schemaName]
+			if !ok || schema.MaximumJSONBytes <= 0 {
+				t.Fatalf("%s %s success schema %q has no positive JSON byte limit", strings.ToUpper(method), path, schemaName)
+			}
+			if operation.OperationID == "" {
+				t.Fatalf("%s %s has no operationId", strings.ToUpper(method), path)
+			}
+			if _, exists := limits[operation.OperationID]; exists {
+				t.Fatalf("operationId %q is duplicated", operation.OperationID)
+			}
+			limits[operation.OperationID] = schema.MaximumJSONBytes
+		}
+	}
+	return limits
+}
+
+func securityOperationIDForRequest(method, path string) string {
+	for _, route := range publicSecurityRoutes() {
+		if route.method == method && securityPathMatches(route.pathTemplate, path) {
+			return route.operationID
+		}
+	}
+	return ""
+}
+
+func securityPathMatches(template, path string) bool {
+	templateParts := strings.Split(strings.Trim(template, "/"), "/")
+	pathParts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(templateParts) != len(pathParts) {
+		return false
+	}
+	for index, templatePart := range templateParts {
+		parameter := strings.HasPrefix(templatePart, "{") && strings.HasSuffix(templatePart, "}")
+		if parameter && pathParts[index] != "" {
+			continue
+		}
+		if templatePart != pathParts[index] {
 			return false
 		}
 	}
