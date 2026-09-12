@@ -103,6 +103,13 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 				response.Code, retainedRejectionStatus, response.Body.String(),
 			)
 		}
+		if response.Code == http.StatusUnauthorized {
+			expectedChallenge := ""
+			if retainedRejectionStatus == http.StatusUnauthorized {
+				expectedChallenge = `Bearer realm="veer", error="invalid_request"`
+			}
+			assertSecurityAuthenticationChallenge(t, response, expectedChallenge)
+		}
 
 		if response.Header().Get("Cache-Control") != "no-store" ||
 			response.Header().Get("X-Content-Type-Options") != "nosniff" {

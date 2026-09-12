@@ -445,6 +445,9 @@ func publicSecurityRoutes() []securityRoute {
 			},
 			memberStatus: http.StatusOK, memberOutcome: "allowed",
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
+			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
+				assertOperationObject(t, response, fixture.operationID, fixture.workspaceID, fixture.workspaceID)
+			},
 		},
 	}
 }
@@ -730,8 +733,30 @@ func assertOutputsDoNotContainCanaries(t testing.TB, outputs []string, canaries 
 func assertAuthenticationDenial(t testing.TB, response *httptest.ResponseRecorder, challenge string) {
 	t.Helper()
 	assertSecurityResponse(t, response, http.StatusUnauthorized, "authentication-required")
-	if response.Header().Get("WWW-Authenticate") != challenge {
-		t.Fatalf("WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), challenge)
+	assertSecurityAuthenticationChallenge(t, response, challenge)
+}
+
+func assertSecurityAuthenticationChallenge(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	want string,
+) {
+	t.Helper()
+	challenges := response.Header().Values("WWW-Authenticate")
+	if len(challenges) != 1 {
+		t.Fatalf("WWW-Authenticate values = %q, want exactly one", challenges)
+	}
+	if want != "" && challenges[0] != want {
+		t.Fatalf("WWW-Authenticate = %q, want %q", challenges[0], want)
+	}
+	if want == "" {
+		switch challenges[0] {
+		case `Bearer realm="veer"`,
+			`Bearer realm="veer", error="invalid_request"`,
+			`Bearer realm="veer", error="invalid_token"`:
+		default:
+			t.Fatalf("WWW-Authenticate = %q, want a canonical bearer challenge", challenges[0])
+		}
 	}
 }
 
@@ -778,6 +803,30 @@ func assertWorkspaceObject(t testing.TB, response *httptest.ResponseRecorder, wa
 	}
 	if workspace.Metadata.ID != wantID.String() {
 		t.Fatalf("workspace ID = %q, want %q; body=%s", workspace.Metadata.ID, wantID, response.Body.String())
+	}
+}
+
+func assertOperationObject(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	wantID, wantWorkspaceID, wantResourceID resource.ID,
+) {
+	t.Helper()
+	var operation struct {
+		ID          string `json:"id"`
+		WorkspaceID string `json:"workspaceId"`
+		ResourceID  string `json:"resourceId"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &operation); err != nil {
+		t.Fatalf("decode operation: %v; body=%s", err, response.Body.String())
+	}
+	if operation.ID != wantID.String() || operation.WorkspaceID != wantWorkspaceID.String() ||
+		operation.ResourceID != wantResourceID.String() {
+		t.Fatalf(
+			"operation identity = id:%q workspace:%q resource:%q, want %q/%q/%q; body=%s",
+			operation.ID, operation.WorkspaceID, operation.ResourceID,
+			wantID, wantWorkspaceID, wantResourceID, response.Body.String(),
+		)
 	}
 }
 
