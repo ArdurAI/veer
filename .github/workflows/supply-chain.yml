@@ -76,9 +76,28 @@ jobs:
         shell: sh
         run: ./hack/dev bootstrap
 
-      - name: Select pinned Go for CodeQL
+      - name: Stage pinned Go outside source tree
         shell: sh
-        run: printf '%s\n' "$GITHUB_WORKSPACE/.tools/bin" >> "$GITHUB_PATH"
+        run: |
+          veer_codeql_goroot="$RUNNER_TEMP/veer-codeql-go"
+          case "$veer_codeql_goroot" in
+            "$GITHUB_WORKSPACE" | "$GITHUB_WORKSPACE"/*)
+              printf '%s\n' 'CodeQL Go root must be outside the source tree' >&2
+              exit 1
+              ;;
+          esac
+          if [ -e "$veer_codeql_goroot" ] || [ -L "$veer_codeql_goroot" ]; then
+            printf '%s\n' 'CodeQL Go root already exists' >&2
+            exit 1
+          fi
+          cp -R -- "$GITHUB_WORKSPACE/.tools/go" "$veer_codeql_goroot"
+          if [ ! -f "$veer_codeql_goroot/bin/go" ] || [ -L "$veer_codeql_goroot/bin/go" ] ||
+            [ ! -x "$veer_codeql_goroot/bin/go" ]; then
+            printf '%s\n' 'staged CodeQL Go binary is unavailable or unsafe' >&2
+            exit 1
+          fi
+          printf 'VEER_CODEQL_GOROOT=%s\n' "$veer_codeql_goroot" >> "$GITHUB_ENV"
+          printf '%s\n' "$veer_codeql_goroot/bin" >> "$GITHUB_PATH"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9

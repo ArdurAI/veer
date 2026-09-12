@@ -79,12 +79,16 @@ repository-relative `paths` entry; broad exceptions and wildcard paths are
 rejected. PURL-scoped exceptions are not accepted until the verifier gains an
 equally strict package-identity contract.
 
-The CodeQL job bootstraps the pinned toolchain before initialization so the
-action can wrap the exact Go binary that Veer selected. Its private build entry
-point then verifies the runner-temporary wrapper path and contents before using
-it inside the same offline, vendored build environment as `./hack/dev build`.
-This prevents a successful untraced build from producing an empty CodeQL
-database.
+The CodeQL job bootstraps the pinned toolchain, copies that verified Go
+distribution under `RUNNER_TEMP`, and puts only the staged binary on `PATH`
+before initialization. This keeps the downloaded standard-library source
+outside the repository source root, so CodeQL does not attribute toolchain code
+to Veer. The private build entry point requires a canonical staged root under
+`RUNNER_TEMP`, rejects roots inside the checkout, and verifies the temporary
+CodeQL wrapper delegates exactly to that staged binary before using it inside
+the same offline, vendored build environment as `./hack/dev build`. This
+prevents both source-root contamination and a successful untraced build from
+producing misleading CodeQL evidence.
 
 Default-branch workflow runs use unique concurrency groups and are not
 automatically canceled by concurrency. This preserves the source-provenance

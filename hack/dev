@@ -920,11 +920,35 @@ codeql_build() {
     [ -x "$expected_codeql_go" ] ||
     fail 'CodeQL Go wrapper must be an executable regular non-symlink file'
 
-  expected_wrapper=$(printf '#!/bin/bash\n\nexec %s "$@"' "$bin_dir/go")
+  case "${VEER_CODEQL_GOROOT:-}" in
+    "$RUNNER_TEMP"/*) ;;
+    *) fail 'VEER_CODEQL_GOROOT must resolve under RUNNER_TEMP and outside the source tree' ;;
+  esac
+  [ -d "$VEER_CODEQL_GOROOT" ] && [ ! -L "$VEER_CODEQL_GOROOT" ] ||
+    fail 'VEER_CODEQL_GOROOT must be a regular directory, not a symbolic link'
+  canonical_codeql_goroot=$(
+    unset CDPATH
+    cd -- "$VEER_CODEQL_GOROOT"
+    pwd -P
+  )
+  [ "$canonical_codeql_goroot" = "$VEER_CODEQL_GOROOT" ] ||
+    fail 'VEER_CODEQL_GOROOT must use its canonical path'
+  case "$canonical_codeql_goroot" in
+    "$repo_root" | "$repo_root"/*)
+      fail 'VEER_CODEQL_GOROOT must resolve under RUNNER_TEMP and outside the source tree'
+      ;;
+  esac
+  codeql_go="$canonical_codeql_goroot/bin/go"
+  [ -f "$codeql_go" ] && [ ! -L "$codeql_go" ] && [ -x "$codeql_go" ] ||
+    fail 'staged CodeQL Go binary must be an executable regular non-symlink file'
+
+  expected_wrapper=$(printf '#!/bin/bash\n\nexec %s "$@"' "$codeql_go")
   actual_wrapper=$(cat -- "$expected_codeql_go")
   [ "$actual_wrapper" = "$expected_wrapper" ] ||
     fail 'CodeQL Go wrapper does not delegate exactly to the pinned toolchain'
 
+  GOROOT=$canonical_codeql_goroot
+  export GOROOT
   "$expected_codeql_go" build -trimpath ./...
 }
 
