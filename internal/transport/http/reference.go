@@ -549,7 +549,7 @@ func (handler *ReferenceHandler) writeMethodNotAllowed(writer http.ResponseWrite
 func (handler *ReferenceHandler) writeAuthenticationRequired(writer http.ResponseWriter, requestID, failure string) {
 	challenge := `Bearer realm="veer"`
 	if failure != "" {
-		challenge += `, error="` + failure + `"`
+		challenge += ", error=" + strconv.Quote(failure)
 	}
 	writer.Header().Set("WWW-Authenticate", challenge)
 	handler.writeProblem(writer, requestID, http.StatusUnauthorized, "authentication-required", "Authentication required", nil)
@@ -587,7 +587,9 @@ func (handler *ReferenceHandler) writeProblem(
 		Instance: "urn:veer:request:" + requestID, Code: code, RequestID: requestID, Errors: violations,
 	})
 	if err != nil || len(encoded) > 1_024 {
-		encoded = []byte(`{"type":"urn:veer:problem:internal-failure","title":"Internal failure","status":500,"instance":"urn:veer:request:` + requestID + `","code":"internal-failure","requestId":"` + requestID + `"}`)
+		quotedInstance := strconv.Quote("urn:veer:request:" + requestID)
+		quotedRequestID := strconv.Quote(requestID)
+		encoded = []byte(`{"type":"urn:veer:problem:internal-failure","title":"Internal failure","status":500,"instance":` + quotedInstance + `,"code":"internal-failure","requestId":` + quotedRequestID + `}`)
 		status = http.StatusInternalServerError
 	}
 	writer.WriteHeader(status)
@@ -628,4 +630,4 @@ func encodeWorkspacePage(page reference.Page) []byte {
 	return encoded.Bytes()
 }
 
-func quoteETag(version string) string { return `"` + version + `"` }
+func quoteETag(version string) string { return strconv.Quote(version) }

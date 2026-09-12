@@ -29,9 +29,10 @@ graceful shutdown. It accepts only a literal IPv4 or IPv6 loopback address,
 uses bounded header and connection timeouts, and requires a bearer credential
 from a regular non-symlink token file with no group or world permissions.
 Bearer syntax is parsed by Veer's fuzz-tested HTTP boundary; the reference
-adapter hashes the configured credential immediately and compares fixed-size
-digests. A closed seven-action gate is invoked after authentication on every
-published operation.
+adapter reduces the configured credential to a per-process, randomly keyed
+HMAC-SHA-256 digest immediately and compares fixed-size digests. A closed
+seven-action gate is invoked after authentication on every published
+operation.
 
 That gate is deliberately not Veer's tenant authorization evaluator. The
 fixed local Workload principal, bearer file, and action allow-list make the

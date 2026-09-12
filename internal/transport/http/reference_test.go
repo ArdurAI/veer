@@ -210,6 +210,33 @@ func TestReferenceHandlerFailsClosedAtAccessBoundaries(t *testing.T) {
 	}
 }
 
+func TestReferenceProblemFallbackAndETagQuoteUnexpectedInput(t *testing.T) {
+	handler := &ReferenceHandler{}
+	response := httptest.NewRecorder()
+	requestID := `unexpected"request`
+	handler.writeProblem(
+		response,
+		requestID,
+		http.StatusBadRequest,
+		"validation-failed",
+		"Request validation failed",
+		[]fieldViolation{{Field: "body", Code: "oversized", Message: strings.Repeat("x", 1_024)}},
+	)
+	if response.Code != http.StatusInternalServerError || !json.Valid(response.Body.Bytes()) {
+		t.Fatalf("fallback status/body = %d/%s", response.Code, response.Body.String())
+	}
+	var fallback problem
+	if err := json.Unmarshal(response.Body.Bytes(), &fallback); err != nil {
+		t.Fatal(err)
+	}
+	if fallback.RequestID != requestID || fallback.Instance != "urn:veer:request:"+requestID {
+		t.Fatalf("fallback request binding = %q/%q", fallback.RequestID, fallback.Instance)
+	}
+	if got := quoteETag(`rv_"unexpected`); got != `"rv_\"unexpected"` {
+		t.Fatalf("quoteETag() = %q", got)
+	}
+}
+
 func referenceFixtureHandler(t *testing.T) http.Handler {
 	t.Helper()
 	principal, err := identity.NewPrincipal(identity.PrincipalInput{
