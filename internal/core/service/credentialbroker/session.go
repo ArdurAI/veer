@@ -230,6 +230,7 @@ func (broker *Broker) runSessionFlight(flight *sessionFlight) {
 	}
 	defer borrow.release()
 	if err := flight.ctx.Err(); err != nil {
+		borrow.release()
 		broker.finishSessionFlight(flight, nil, err)
 		return
 	}
@@ -245,9 +246,11 @@ func (broker *Broker) runSessionFlight(flight *sessionFlight) {
 	issueContextErr := issueCtx.Err()
 	cancelIssue()
 	if issueErr != nil || issueContextErr != nil {
+		borrow.release()
 		broker.finishSessionFlight(flight, issued, contextFailure(flight.ctx))
 		return
 	}
+	borrow.release()
 	broker.finishSessionFlight(flight, issued, nil)
 }
 
