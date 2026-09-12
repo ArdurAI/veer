@@ -40,9 +40,13 @@ commands, resource use, and troubleshooting.
 - [Contributor Covenant 2.1](CODE_OF_CONDUCT.md)
 - [Private vulnerability reporting and response policy](SECURITY.md)
 
-Contributions are reviewed against explicit issue acceptance criteria. Passing
-reference-contract tests does not establish production persistence,
-authorization enforcement, provider execution, or release readiness.
+Contributions are evaluated against explicit issue acceptance criteria.
+Second-person approval is not mandatory for a pull request; authorized
+maintainers may merge their own exact head through the protected pull-request
+path after required CI succeeds and applicable review discussions are resolved.
+Direct pushes to `main` remain prohibited. Passing reference-contract tests
+does not establish production persistence, authorization enforcement, provider
+execution, or release readiness.
 
 ## Design principles
 

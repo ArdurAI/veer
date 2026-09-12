@@ -22,6 +22,7 @@ dev_script="$repo_root/hack/dev"
 branch_verifier="$repo_root/hack/branchprotection/main.go"
 workflow_verifier="$repo_root/hack/workflowpolicy/main.go"
 online_verifier="$repo_root/hack/verify-online-sources.sh"
+supply_chain_doc="$repo_root/docs/security/supply-chain.md"
 
 fail() {
   printf '%s\n' "veer-supply-chain: $*" >&2
@@ -101,6 +102,7 @@ for required_file in \
   "$branch_verifier" \
   "$workflow_verifier" \
   "$online_verifier" \
+  "$supply_chain_doc" \
   "$gosec_suppressions" \
   "$trivy_ignore" \
   "$workflow_dir/bootstrap.yml" \
@@ -674,6 +676,10 @@ require_regular_file "$repo_root/vendor/github.com/go-jose/go-jose/v4/LICENSE"
 require_text "$repo_root/go.mod" 'go.yaml.in/yaml/v3 v3.0.5'
 require_text "$repo_root/vendor/modules.txt" '# go.yaml.in/yaml/v3 v3.0.5'
 require_regular_file "$repo_root/vendor/go.yaml.in/yaml/v3/LICENSE"
+require_text "$supply_chain_doc" 'Second-person approval is not a protected-branch requirement.'
+require_text "$supply_chain_doc" 'enabled with zero required approving reviews and last-push approval disabled'
+require_text "$supply_chain_doc" "direct pushes to \`main\` remain prohibited."
+reject_text "$supply_chain_doc" 'One independent latest-head approval'
 
 (
   cd -- "$repo_root"

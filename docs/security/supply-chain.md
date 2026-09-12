@@ -29,7 +29,7 @@ level claim.
 | Repository risk | Trivy 0.74.0 scans vulnerability, misconfiguration, secret, and license categories | Weekly scan plus GitHub secret scanning and push protection |
 | Workflow integrity | actionlint plus the offline immutable-action and least-privilege verifier; the clean hosted lane resolves every recorded release tag to its locked action SHA | Repository Actions policy requires full-SHA references |
 | Inventory | Checksum-pinned Syft generates an SPDX JSON source/dependency SBOM from the exact source archive, retained for 30 days | GitHub provenance and SBOM attestations bind that same `main` source archive |
-| Review | Exact-head DCO and all protected status checks | One independent latest-head approval, stale approval dismissal, and resolved conversations |
+| Review and merge | Exact-head DCO and all protected status checks | No mandatory second-person approval; resolved conversations and exact-head required checks remain mandatory |
 
 The platform matrix intentionally uses GitHub's standard hosted runner labels,
 not larger runners. Standard GitHub-hosted Actions are free for public
@@ -157,7 +157,16 @@ models it as an alternative to the fine-grained `checks` representation. Each
 `checks` entry prevents another status producer from satisfying a protected
 context name.
 
-The rule keeps `main` writable through reviewed merges with `lock_branch` set
+Second-person approval is not a protected-branch requirement. An authorized
+maintainer can merge their own pull request after the exact-head checks succeed
+and applicable conversations are resolved. The pull-request review rule remains
+enabled with zero required approving reviews and last-push approval disabled, so
+direct pushes to `main` remain prohibited. This owner-selected policy removes
+protection against a single compromised or mistaken maintainer; app-bound CI,
+administrator enforcement, conversation resolution, and force-push/deletion
+bans remain the compensating controls.
+
+The rule keeps `main` writable through validated merges with `lock_branch` set
 to `false`. Its `allow_fork_syncing` value is therefore also `false`: GitHub
 only applies fork syncing when a branch is locked and normalizes the flag to
 the effective disabled value on an unlocked branch. This does not prevent a

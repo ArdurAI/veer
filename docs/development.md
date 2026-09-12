@@ -125,7 +125,7 @@ change the normal offline build contract.
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev coverage` | Run all Go tests with atomic coverage and require at least 80.0% aggregate statement coverage. |
 | `./hack/dev race` | Run all Go tests with the race detector; requires a host C compiler. |
-| `./hack/dev security` | Validate workflow syntax, immutable action locks, scanner/review/SBOM/branch policy, 67 negative fixtures, and Go security analysis. |
+| `./hack/dev security` | Validate workflow syntax, immutable action locks, scanner/review/SBOM/branch policy, 69 negative fixtures, and Go security analysis. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
 | `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization/audit/reconciliation projections, schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify community policy, DCO regressions, architecture, cost, stack, and security evidence, including negative contract fixtures. |
@@ -211,9 +211,11 @@ control and evidence boundary. The short operational rules are:
   plain Git archive cannot represent their source. These attestations are not
   release signatures or proof of a runnable control plane; and
 - `.github/branch-protection.json` is the reviewable desired policy for strict
-  required checks bound to GitHub Actions app ID `15368`, one independent
-  latest-head approval, stale-review dismissal, conversation resolution,
-  administrator enforcement, and disabled force pushes/deletion.
+  required checks bound to GitHub Actions app ID `15368`, a retained
+  pull-request review rule with zero required approving reviews and no
+  last-push approval, conversation resolution, administrator enforcement, and
+  disabled force pushes/deletion. Second-person approval is not a
+  protected-branch requirement. Direct pushes to `main` remain prohibited.
 
 The repository settings are part of the control. The in-tree JSON is not proof
 that GitHub applied it; live API readback after the bootstrap merge is required.
@@ -228,12 +230,12 @@ therefore a one-time trust bootstrap and must follow this sequence:
 
 1. Record the repository owner's license, DCO, governance, conduct, and security
    decisions before implementation.
-2. Validate the candidate exact head independently with the full-SHA DCO range,
-   `./hack/dev check`, `go test -race ./...`, actionlint, and exact-head reviews.
-3. Only after those reviews pass, calculate the candidate workflow, policy
+2. Validate the candidate exact head with the full-SHA DCO range,
+   `./hack/dev check`, `go test -race ./...`, actionlint, and exact-head evidence.
+3. Only after that validation passes, calculate the candidate workflow, policy
    bundle, and verifier digests; set all three repository Actions variables;
    and read them back to confirm their exact values.
-4. Merge the reviewed head with an exact-head guard. Do not configure the DCO
+4. Merge the validated head with an exact-head guard. Do not configure the DCO
    check as required before this merge, because that would make installation
    impossible.
 5. Require the next ordinary pull request to receive a successful

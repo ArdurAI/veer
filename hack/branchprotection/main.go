@@ -31,10 +31,10 @@ const expectedPolicy = `{
   "enforce_admins": true,
   "required_pull_request_reviews": {
     "dismissal_restrictions": {},
-    "dismiss_stale_reviews": true,
+    "dismiss_stale_reviews": false,
     "require_code_owner_reviews": false,
-    "required_approving_review_count": 1,
-    "require_last_push_approval": true
+    "required_approving_review_count": 0,
+    "require_last_push_approval": false
   },
   "restrictions": null,
   "required_linear_history": false,
@@ -76,6 +76,9 @@ func verifyPolicy(policy []byte) error {
 	if err := verifyNoLegacyStatusContexts(actual); err != nil {
 		return err
 	}
+	if err := verifyPullRequestGateWithoutRequiredApprovals(actual); err != nil {
+		return err
+	}
 	if err := verifyForkSyncingRequiresLockedBranch(actual); err != nil {
 		return err
 	}
@@ -85,6 +88,26 @@ func verifyPolicy(policy []byte) error {
 	}
 	if !reflect.DeepEqual(actual, required) {
 		return errors.New("policy differs from required effective policy")
+	}
+	return nil
+}
+
+func verifyPullRequestGateWithoutRequiredApprovals(policy any) error {
+	root, ok := policy.(map[string]any)
+	if !ok {
+		return nil
+	}
+	reviews, ok := root["required_pull_request_reviews"].(map[string]any)
+	if !ok {
+		return errors.New("required_pull_request_reviews must preserve the pull-request gate")
+	}
+	approvalCount, ok := reviews["required_approving_review_count"].(json.Number)
+	if !ok || approvalCount.String() != "0" {
+		return errors.New("required_approving_review_count must be 0")
+	}
+	requireLastPushApproval, ok := reviews["require_last_push_approval"].(bool)
+	if !ok || requireLastPushApproval {
+		return errors.New("require_last_push_approval must be false")
 	}
 	return nil
 }

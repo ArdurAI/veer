@@ -73,9 +73,12 @@ A pull request should:
   durable provider behavior; and
 - resolve applicable review discussions before merge.
 
-Maintainers merge only from a reviewed, validated head revision according to
-[GOVERNANCE.md](GOVERNANCE.md). Passing tests are evidence for the behavior
-they exercise, not proof of broader production readiness.
+Maintainers merge only from a validated exact head revision according to
+[GOVERNANCE.md](GOVERNANCE.md). Second-person approval is not mandatory for a
+pull request, but the protected pull-request path, exact-head required checks,
+and resolved applicable discussions remain mandatory. Passing tests are
+evidence for the behavior they exercise, not proof of broader production
+readiness.
 
 ## License and community standards
 

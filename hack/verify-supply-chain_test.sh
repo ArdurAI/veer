@@ -40,6 +40,7 @@ new_fixture() {
   rm -rf -- "$test_root"
   mkdir -p \
     "$test_root/api" \
+    "$test_root/docs/security" \
     "$test_root/hack/branchprotection" \
     "$test_root/hack/workflowpolicy" \
     "$test_root/internal" \
@@ -50,6 +51,7 @@ new_fixture() {
   cp "$repo_root/.gitattributes" "$test_root/.gitattributes"
   cp "$repo_root/.trivyignore.yaml" "$test_root/.trivyignore.yaml"
   cp "$repo_root/go.mod" "$test_root/go.mod"
+  cp "$repo_root/docs/security/supply-chain.md" "$test_root/docs/security/supply-chain.md"
   cp "$repo_root/hack/dev" "$test_root/hack/dev"
   cp "$repo_root/hack/branchprotection/main.go" "$test_root/hack/branchprotection/main.go"
   cp "$repo_root/hack/workflowpolicy/main.go" "$test_root/hack/workflowpolicy/main.go"
@@ -510,9 +512,24 @@ expect_rejection monthly-go-dependabot-schedule \
 
 new_fixture
 replace_once .github/branch-protection.json \
-  '"required_approving_review_count": 1' '"required_approving_review_count": 0'
-expect_rejection missing-independent-approval \
-  'policy differs from required effective policy'
+  '"required_approving_review_count": 0' \
+  '"required_approving_review_count": 1'
+expect_rejection restored-required-approval \
+  'required_approving_review_count must be 0'
+
+new_fixture
+replace_once .github/branch-protection.json \
+  '"require_last_push_approval": false' \
+  '"require_last_push_approval": true'
+expect_rejection restored-last-push-approval \
+  'require_last_push_approval must be false'
+
+new_fixture
+replace_once docs/security/supply-chain.md \
+  'Second-person approval is not a protected-branch requirement.' \
+  'Second-person approval is a protected-branch requirement.'
+expect_rejection required-approval-documentation \
+  'is missing required policy: Second-person approval is not a protected-branch requirement.'
 
 new_fixture
 replace_once .github/branch-protection.json \
@@ -652,4 +669,4 @@ replace_once hack/dev \
 expect_rejection excluded-generated-go \
   'contains forbidden policy: -exclude-generated'
 
-printf '%s\n' 'veer-supply-chain-tests cases=67 status=passed'
+printf '%s\n' 'veer-supply-chain-tests cases=69 status=passed'
