@@ -15,12 +15,12 @@ import (
 	"sync/atomic"
 
 	"github.com/ArdurAI/veer/internal/core/domain/admission"
-	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 	"github.com/ArdurAI/veer/internal/core/service/reference"
+	"github.com/ArdurAI/veer/internal/core/service/referenceauthorization"
 )
 
 const maxRequestBodyBytes = resource.MaxCanonicalBytes
@@ -32,25 +32,23 @@ var (
 )
 
 // ReferenceHandler exposes only the routes published by veer-v1alpha1.json.
-// Authentication and action authorization are mandatory injected boundaries;
-// issue #24 still owns authoritative tenant-policy enforcement.
+// Authentication is injected and every service call is bound to the concrete
+// policy-enforcing reference runtime.
 type ReferenceHandler struct {
-	service       *reference.Service
+	service       *referenceauthorization.Service
 	authenticator ports.Authenticator
-	authorizer    ReferenceAuthorizer
 	requests      atomic.Uint64
 }
 
 // NewReferenceHandler creates a deterministic provider-free contract handler.
 func NewReferenceHandler(
-	service *reference.Service,
+	service *referenceauthorization.Service,
 	authenticator ports.Authenticator,
-	authorizer ReferenceAuthorizer,
 ) (*ReferenceHandler, error) {
-	if service == nil || authenticator == nil || authorizer == nil {
+	if service == nil || authenticator == nil {
 		return nil, reference.ErrInvalidConfiguration
 	}
-	return &ReferenceHandler{service: service, authenticator: authenticator, authorizer: authorizer}, nil
+	return &ReferenceHandler{service: service, authenticator: authenticator}, nil
 }
 
 func (handler *ReferenceHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -122,28 +120,6 @@ func (handler *ReferenceHandler) authenticate(
 	return identity.Principal{}, false
 }
 
-func (handler *ReferenceHandler) authorize(
-	writer http.ResponseWriter,
-	request *http.Request,
-	requestID string,
-	principal identity.Principal,
-	action authorization.Action,
-) bool {
-	err := handler.authorizer.Authorize(request.Context(), principal, action)
-	switch {
-	case err == nil:
-		return true
-	case errors.Is(err, ErrReferenceAuthorizationDenied):
-		handler.writeProblem(writer, requestID, http.StatusForbidden, "authorization-denied", "Authorization denied", nil)
-	case errors.Is(err, ErrReferenceAuthorizationUnavailable),
-		errors.Is(err, request.Context().Err()) && request.Context().Err() != nil:
-		handler.writeUnavailable(writer, requestID)
-	default:
-		handler.writeProblem(writer, requestID, http.StatusInternalServerError, "internal-failure", "Internal failure", nil)
-	}
-	return false
-}
-
 func (handler *ReferenceHandler) serveWorkspaceCollection(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -152,9 +128,6 @@ func (handler *ReferenceHandler) serveWorkspaceCollection(
 ) {
 	switch request.Method {
 	case http.MethodGet:
-		if !handler.authorize(writer, request, requestID, principal, authorization.ActionResourceList) {
-			return
-		}
 		query, err := parseListQuery(request.URL.RawQuery)
 		if err != nil {
 			handler.writeProblem(writer, requestID, http.StatusBadRequest, "validation-failed", "Request validation failed", nil)
@@ -171,9 +144,6 @@ func (handler *ReferenceHandler) serveWorkspaceCollection(
 		encoded := encodeWorkspacePage(page)
 		handler.writeJSON(writer, http.StatusOK, encoded)
 	case http.MethodPost:
-		if !handler.authorize(writer, request, requestID, principal, authorization.ActionResourceCreate) {
-			return
-		}
 		if request.URL.RawQuery != "" {
 			handler.writeProblem(writer, requestID, http.StatusBadRequest, "validation-failed", "Request validation failed", nil)
 			return
@@ -230,9 +200,6 @@ func (handler *ReferenceHandler) serveWorkspaceItem(
 
 	switch request.Method {
 	case http.MethodGet:
-		if !handler.authorize(writer, request, requestID, principal, authorization.ActionResourceGet) {
-			return
-		}
 		value, err := handler.service.Get(request.Context(), principal, id)
 		if err != nil {
 			handler.writeServiceError(writer, requestID, err)
@@ -245,9 +212,6 @@ func (handler *ReferenceHandler) serveWorkspaceItem(
 		writer.Header().Set("ETag", quoteETag(value.Metadata.ResourceVersion().String()))
 		handler.writeJSON(writer, http.StatusOK, value.Canonical)
 	case http.MethodPut:
-		if !handler.authorize(writer, request, requestID, principal, authorization.ActionResourceReplace) {
-			return
-		}
 		key, ok := idempotencyKey(request)
 		if !ok {
 			handler.writeProblem(writer, requestID, http.StatusBadRequest, "validation-failed", "Request validation failed", nil)
@@ -274,9 +238,6 @@ func (handler *ReferenceHandler) serveWorkspaceItem(
 		writer.Header().Set("Location", "/api/v1alpha1/operations/"+receipt.OperationID.String())
 		handler.writeJSONValue(writer, http.StatusAccepted, receipt)
 	case http.MethodDelete:
-		if !handler.authorize(writer, request, requestID, principal, authorization.ActionResourceDelete) {
-			return
-		}
 		key, ok := idempotencyKey(request)
 		if !ok {
 			handler.writeProblem(writer, requestID, http.StatusBadRequest, "validation-failed", "Request validation failed", nil)
@@ -311,9 +272,6 @@ func (handler *ReferenceHandler) serveWorkspaceStatus(
 ) {
 	if request.Method != http.MethodPut {
 		handler.writeMethodNotAllowed(writer, requestID, "PUT")
-		return
-	}
-	if !handler.authorize(writer, request, requestID, principal, authorization.ActionResourceStatusReplace) {
 		return
 	}
 	key, ok := idempotencyKey(request)
@@ -351,9 +309,6 @@ func (handler *ReferenceHandler) serveOperation(
 ) {
 	if request.Method != http.MethodGet {
 		handler.writeMethodNotAllowed(writer, requestID, "GET")
-		return
-	}
-	if !handler.authorize(writer, request, requestID, principal, authorization.ActionOperationGet) {
 		return
 	}
 	value := strings.TrimPrefix(request.URL.Path, "/api/v1alpha1/operations/")
@@ -517,6 +472,11 @@ func (handler *ReferenceHandler) writeServiceError(writer http.ResponseWriter, r
 	case errors.Is(err, reference.ErrLifecycleConflict):
 		handler.writeProblem(writer, requestID, http.StatusConflict, "lifecycle-conflict", "Resource lifecycle conflict", nil)
 	case errors.Is(err, reference.ErrCapacity):
+		handler.writeUnavailable(writer, requestID)
+	case errors.Is(err, referenceauthorization.ErrDenied),
+		errors.Is(err, referenceauthorization.ErrStaleAuthorization):
+		handler.writeProblem(writer, requestID, http.StatusForbidden, "authorization-denied", "Authorization denied", nil)
+	case errors.Is(err, referenceauthorization.ErrUnavailable):
 		handler.writeUnavailable(writer, requestID)
 	case errors.Is(err, reference.ErrInvalidPageToken), errors.Is(err, reference.ErrInvalidCommand):
 		handler.writeProblem(writer, requestID, http.StatusBadRequest, "validation-failed", "Request validation failed", nil)

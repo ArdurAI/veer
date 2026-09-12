@@ -29,6 +29,49 @@ func ResolveResourceTarget(snapshot hierarchy.Snapshot, id resource.ID) (Target,
 	return targetFromRecord(snapshot, ObjectKindResource, id, record, nil)
 }
 
+// ResolveOperationTarget seals an Operation target only after independently
+// re-deriving and cross-checking its retained resource and optional provider
+// binding against the current hierarchy snapshot.
+func ResolveOperationTarget(
+	snapshot hierarchy.Snapshot,
+	operationID resource.ID,
+	resourceID resource.ID,
+	workspaceID resource.ID,
+	environmentID *resource.ID,
+	providerConnectionID *resource.ID,
+) (Target, error) {
+	for _, id := range []resource.ID{operationID, resourceID, workspaceID} {
+		if _, err := resource.ParseID(id.String()); err != nil {
+			return Target{}, ErrInvalidTarget
+		}
+	}
+	record, err := snapshot.Lookup(resourceID)
+	if err != nil || record.WorkspaceID() != workspaceID || snapshot.WorkspaceID() != workspaceID {
+		return Target{}, fmt.Errorf("%w: operation resource lookup", ErrInvalidTarget)
+	}
+	target, err := targetFromRecord(snapshot, ObjectKindOperation, operationID, record, providerConnectionID)
+	if err != nil {
+		return Target{}, err
+	}
+	resolvedEnvironment, resolvedEnvironmentPresent := target.EnvironmentID()
+	if !optionalIDMatches(resolvedEnvironment, resolvedEnvironmentPresent, environmentID) {
+		return Target{}, fmt.Errorf("%w: operation environment mismatch", ErrInvalidTarget)
+	}
+	if providerConnectionID == nil {
+		return target, nil
+	}
+	provider, err := snapshot.Lookup(*providerConnectionID)
+	if err != nil || provider.Kind() != hierarchy.KindProviderConnection ||
+		provider.WorkspaceID() != workspaceID {
+		return Target{}, fmt.Errorf("%w: provider connection lookup", ErrInvalidTarget)
+	}
+	providerEnvironment, err := resolveRecordEnvironment(snapshot, provider)
+	if err != nil || providerEnvironment == nil || environmentID == nil || *providerEnvironment != *environmentID {
+		return Target{}, fmt.Errorf("%w: provider connection environment mismatch", ErrInvalidTarget)
+	}
+	return target, nil
+}
+
 // ResolveCreateTarget seals one server-derived hierarchy Placement. A root
 // Workspace placement is self-authenticating but remains a reserved action;
 // every non-root placement is re-derived against the supplied snapshot.
@@ -342,4 +385,11 @@ func equalPlacement(left, right hierarchy.Placement) bool {
 
 func idPointer(id resource.ID) *resource.ID {
 	return cloneIDPointer(&id)
+}
+
+func optionalIDMatches(value resource.ID, present bool, expected *resource.ID) bool {
+	if expected == nil {
+		return !present
+	}
+	return present && value == *expected
 }

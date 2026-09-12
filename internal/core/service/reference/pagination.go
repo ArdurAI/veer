@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
@@ -41,6 +42,28 @@ type pageTokenRecord struct {
 
 // List returns one deterministic keyset page ordered by (createdAt, id).
 func (service *Service) List(ctx context.Context, query ListQuery) (Page, error) {
+	return service.listWhere(ctx, query, nil)
+}
+
+// ListWhere returns one deterministic page after applying retain to every
+// matching row. Filtering precedes ordering, page-size accounting, and cursor
+// issuance so an unauthorized row cannot influence the caller's page shape.
+func (service *Service) ListWhere(
+	ctx context.Context,
+	query ListQuery,
+	retain func(Resource, AuthorizationStateResolver) (bool, error),
+) (Page, error) {
+	if retain == nil {
+		return Page{}, ErrInvalidConfiguration
+	}
+	return service.listWhere(ctx, query, retain)
+}
+
+func (service *Service) listWhere(
+	ctx context.Context,
+	query ListQuery,
+	retain func(Resource, AuthorizationStateResolver) (bool, error),
+) (Page, error) {
 	if service == nil {
 		return Page{}, ErrInvalidConfiguration
 	}
@@ -98,9 +121,24 @@ func (service *Service) List(ctx context.Context, query ListQuery) (Page, error)
 			return err
 		}
 		candidates = make([]Resource, 0, len(values))
+		resolve := func(
+			workspaceID resource.ID,
+			members authorization.MemberDirectory,
+		) (AuthorizationState, error) {
+			return authorizationStateFor(values, workspaceID, members)
+		}
 		for _, value := range values {
 			if !matchesList(value, query) || (cursor != nil && !afterCursor(value, *cursor)) {
 				continue
+			}
+			if retain != nil {
+				keep, err := retain(cloneResource(value), resolve)
+				if err != nil {
+					return err
+				}
+				if !keep {
+					continue
+				}
 			}
 			candidates = append(candidates, cloneResource(value))
 		}

@@ -32,10 +32,12 @@ Each of the seven existing operations carries one scalar
 `x-veer-authorization-action`. The OpenAPI document remains at four paths and
 seven operations.
 
-This is a pure reference contract, not runtime request enforcement. No API
-server or worker currently invokes the evaluator. Route integration,
-execution-time reauthorization, persistence, and audit emission remain work for
-their owning issues. In particular, the documented `createWorkspace` operation
+At acceptance, this was a pure reference contract rather than runtime request
+enforcement. Issue #24 subsequently bound the loopback reference handler to
+retained PolicySet evaluation and added process-local execution-time
+reauthorization. Production OIDC, durable persistence, worker/provider
+dispatch, and audit emission remain work for their owning issues. In
+particular, the documented `createWorkspace` operation
 maps to `resource.create`, but Workspace creation is reserved and default
 denied to every tenant role. Platform provisioning and bootstrap authority are
 deferred to a separate governance decision.
@@ -138,15 +140,15 @@ The current transport projection is exact:
 ### Evaluation and canonical decisions
 
 Evaluation accepts only a validated principal, a registered action, and a
-hierarchy-sealed target. Public resolvers currently seal retained hierarchy
-resources, server-derived create placements, and Workspace-scoped Membership or
-Audit objects; callers cannot assert their Workspace or Environment ownership.
-No public resolver for a retained Plan, Operation, or resource-anchored Audit
-exists in this issue because a hierarchy snapshot cannot prove the separate
-object-ID-to-resource binding. Those action-matrix entries remain fail closed.
-Issue #24 must load the object by ID from authoritative persistence, derive its
-immutable binding, and add the corresponding target-construction boundary before
-runtime enforcement.
+hierarchy-sealed target. At acceptance, public resolvers sealed retained
+hierarchy resources, server-derived create placements, and Workspace-scoped
+Membership or Audit objects; callers cannot assert their Workspace or
+Environment ownership. Issue #24 added an Operation resolver that accepts only
+an Operation loaded by the runtime and independently cross-checks its immutable
+resource, Workspace, Environment, and ProviderConnection bindings against the
+retained hierarchy. No public resolver for a retained Plan or resource-anchored
+Audit exists; those action-matrix entries remain fail closed until their owning
+runtime can prove the separate object-ID-to-resource binding.
 
 The immutable PolicySet binds the member directory and at most 2,500 ordered
 Policy revisions, each with a desired-state generation. Its domain-separated

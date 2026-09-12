@@ -12,24 +12,17 @@ import (
 
 	"github.com/ArdurAI/veer/internal/adapters/store/memory"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
+	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 	"github.com/ArdurAI/veer/internal/core/service/reference"
+	"github.com/ArdurAI/veer/internal/core/service/referenceauthorization"
 )
 
 const referenceBearerToken = "reference-http-token"
 
 type referenceTestAccess struct{ principal identity.Principal }
-
-type referenceAuthorizerFunc func(context.Context, identity.Principal, authorization.Action) error
-
-func (function referenceAuthorizerFunc) Authorize(
-	ctx context.Context,
-	principal identity.Principal,
-	action authorization.Action,
-) error {
-	return function(ctx, principal, action)
-}
 
 func (access referenceTestAccess) Authenticate(
 	ctx context.Context,
@@ -44,14 +37,6 @@ func (access referenceTestAccess) Authenticate(
 	return identity.ClonePrincipal(access.principal), nil
 }
 
-func (access referenceTestAccess) Authorize(
-	ctx context.Context,
-	_ identity.Principal,
-	_ authorization.Action,
-) error {
-	return ctx.Err()
-}
-
 type referenceProblem struct {
 	Code      string `json:"code"`
 	RequestID string `json:"requestId"`
@@ -63,18 +48,9 @@ type referenceMutationReceipt struct {
 }
 
 func TestReferenceHandlerRejectsBoundaryViolations(t *testing.T) {
-	handler := referenceFixtureHandler(t)
-	created := referenceRequest(t, handler, http.MethodPost, "/api/v1alpha1/workspaces", validWorkspaceBody("initial"), map[string]string{
-		"Content-Type": "application/json", "Idempotency-Key": "boundary-create-0001",
-	})
-	if created.Code != http.StatusAccepted {
-		t.Fatalf("seed create status = %d, body = %s", created.Code, created.Body.String())
-	}
-	var receipt referenceMutationReceipt
-	if err := json.Unmarshal(created.Body.Bytes(), &receipt); err != nil {
-		t.Fatal(err)
-	}
-	target := "/api/v1alpha1/workspaces/" + receipt.ResourceID
+	fixture := newReferenceFixture(t)
+	handler := fixture.handler
+	target := "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
 
 	tests := []struct {
 		name    string
@@ -93,7 +69,7 @@ func TestReferenceHandlerRejectsBoundaryViolations(t *testing.T) {
 		{
 			name: "weak precondition", method: http.MethodPut, target: target, body: validWorkspaceBody("changed"),
 			headers: map[string]string{
-				"Content-Type": "application/json", "Idempotency-Key": "weak-etag-0000001", "If-Match": `W/"` + receipt.ResourceVersion + `"`,
+				"Content-Type": "application/json", "Idempotency-Key": "weak-etag-0000001", "If-Match": `W/"` + fixture.resourceVersion + `"`,
 			},
 			status: http.StatusBadRequest, code: "validation-failed",
 		},
@@ -121,6 +97,13 @@ func TestReferenceHandlerRejectsBoundaryViolations(t *testing.T) {
 			headers: map[string]string{"Content-Type": "application/json", "Idempotency-Key": "oversized-body-0001"},
 			status:  http.StatusRequestEntityTooLarge, code: "request-too-large",
 		},
+		{
+			name: "reserved workspace create", method: http.MethodPost, target: "/api/v1alpha1/workspaces",
+			body: validWorkspaceBody("reserved"), headers: map[string]string{
+				"Content-Type": "application/json", "Idempotency-Key": "reserved-create-0001",
+			},
+			status: http.StatusForbidden, code: "authorization-denied",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -133,35 +116,41 @@ func TestReferenceHandlerRejectsBoundaryViolations(t *testing.T) {
 	}
 }
 
-func TestReferenceHandlerMapsIdempotencyAndObservationConflicts(t *testing.T) {
-	handler := referenceFixtureHandler(t)
-	headers := map[string]string{"Content-Type": "application/json", "Idempotency-Key": "conflict-create-0001"}
-	first := referenceRequest(t, handler, http.MethodPost, "/api/v1alpha1/workspaces", validWorkspaceBody("one"), headers)
-	if first.Code != http.StatusAccepted {
-		t.Fatalf("first create = %d, %s", first.Code, first.Body.String())
+func TestReferenceHandlerMapsIdempotencyAndReservedStatus(t *testing.T) {
+	fixture := newReferenceFixture(t)
+	handler := fixture.handler
+	target := "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
+	headers := map[string]string{
+		"Content-Type": "application/json", "Idempotency-Key": "conflict-replace-0001",
+		"If-Match": `"` + fixture.resourceVersion + `"`,
 	}
-	conflict := referenceRequest(t, handler, http.MethodPost, "/api/v1alpha1/workspaces", validWorkspaceBody("two"), headers)
+	first := referenceRequest(t, handler, http.MethodPut, target, validWorkspaceBody("one"), headers)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first replace = %d, %s", first.Code, first.Body.String())
+	}
+	replay := referenceRequest(t, handler, http.MethodPut, target, validWorkspaceBody("one"), headers)
+	if replay.Code != http.StatusAccepted || replay.Body.String() != first.Body.String() {
+		t.Fatalf("replace replay = %d/%s, want %d/%s", replay.Code, replay.Body.String(), first.Code, first.Body.String())
+	}
+	conflict := referenceRequest(t, handler, http.MethodPut, target, validWorkspaceBody("two"), headers)
 	assertReferenceProblem(t, conflict, http.StatusConflict, "idempotency-key-reused")
 
 	var receipt referenceMutationReceipt
 	if err := json.Unmarshal(first.Body.Bytes(), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	target := "/api/v1alpha1/workspaces/" + receipt.ResourceID
 	status := referenceRequest(t, handler, http.MethodPut, target+"/status", []byte(
 		`{"apiVersion":"v1alpha1","kind":"Workspace","status":{"observedGeneration":2,"conditions":[]}}`,
 	), map[string]string{
 		"Content-Type": "application/json", "Idempotency-Key": "future-status-0001",
 		"If-Match": `"` + receipt.ResourceVersion + `"`,
 	})
-	assertReferenceProblem(t, status, http.StatusBadRequest, "validation-failed")
-	if !strings.Contains(status.Body.String(), `"code":"future-observation"`) {
-		t.Fatalf("future status field violation missing: %s", status.Body.String())
-	}
+	assertReferenceProblem(t, status, http.StatusForbidden, "authorization-denied")
 }
 
 func TestReferenceHandlerFailsClosedAtAccessBoundaries(t *testing.T) {
-	handler := referenceFixtureHandler(t).(*ReferenceHandler)
+	fixture := newReferenceFixture(t)
+	handler := fixture.handler
 
 	missing := httptest.NewRequest(http.MethodGet, "/api/v1alpha1/workspaces", nil)
 	missingResponse := httptest.NewRecorder()
@@ -180,34 +169,20 @@ func TestReferenceHandlerFailsClosedAtAccessBoundaries(t *testing.T) {
 		t.Fatalf("invalid challenge = %q", invalidResponse.Header().Get("WWW-Authenticate"))
 	}
 
-	deniedHandler := &ReferenceHandler{
-		service: handler.service, authenticator: handler.authenticator,
-		authorizer: referenceAuthorizerFunc(func(
-			context.Context,
-			identity.Principal,
-			authorization.Action,
-		) error {
-			return ErrReferenceAuthorizationDenied
-		}),
+	outsider, err := identity.NewPrincipal(identity.PrincipalInput{
+		Kind: identity.KindHuman, Issuer: "https://issuer.example", Subject: "outsider", Audiences: []string{"veer-api"},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	denied := referenceRequest(t, deniedHandler, http.MethodGet, "/api/v1alpha1/workspaces", nil, nil)
+	deniedHandler, err := NewReferenceHandler(handler.service, referenceTestAccess{principal: outsider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := referenceRequest(
+		t, deniedHandler, http.MethodGet, "/api/v1alpha1/workspaces/"+fixture.workspaceID.String(), nil, nil,
+	)
 	assertReferenceProblem(t, denied, http.StatusForbidden, "authorization-denied")
-
-	unavailableHandler := &ReferenceHandler{
-		service: handler.service, authenticator: handler.authenticator,
-		authorizer: referenceAuthorizerFunc(func(
-			context.Context,
-			identity.Principal,
-			authorization.Action,
-		) error {
-			return ErrReferenceAuthorizationUnavailable
-		}),
-	}
-	unavailable := referenceRequest(t, unavailableHandler, http.MethodGet, "/api/v1alpha1/workspaces", nil, nil)
-	assertReferenceProblem(t, unavailable, http.StatusServiceUnavailable, "unavailable")
-	if unavailable.Header().Get("Retry-After") != "10" || !strings.Contains(unavailable.Body.String(), `"retryAfterSeconds":10`) {
-		t.Fatalf("unavailable retry contract = %q, %s", unavailable.Header().Get("Retry-After"), unavailable.Body.String())
-	}
 }
 
 func TestReferenceProblemFallbackAndETagQuoteUnexpectedInput(t *testing.T) {
@@ -242,9 +217,18 @@ func TestReferenceProblemFallbackAndETagQuoteUnexpectedInput(t *testing.T) {
 	if capacity.Header().Get("Retry-After") != "10" {
 		t.Fatalf("capacity Retry-After = %q", capacity.Header().Get("Retry-After"))
 	}
+	unavailable := httptest.NewRecorder()
+	handler.writeServiceError(unavailable, "req-unavailable", referenceauthorization.ErrUnavailable)
+	assertReferenceProblem(t, unavailable, http.StatusServiceUnavailable, "unavailable")
 }
 
-func referenceFixtureHandler(t *testing.T) http.Handler {
+type referenceFixture struct {
+	handler         *ReferenceHandler
+	workspaceID     resource.ID
+	resourceVersion string
+}
+
+func newReferenceFixture(t *testing.T) referenceFixture {
 	t.Helper()
 	principal, err := identity.NewPrincipal(identity.PrincipalInput{
 		Kind: identity.KindHuman, Issuer: "https://issuer.example", Subject: "http-user", Audiences: []string{"veer-api"},
@@ -262,12 +246,47 @@ func referenceFixtureHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	access := referenceTestAccess{principal: principal}
-	handler, err := NewReferenceHandler(service, access, access)
+	workspace, err := service.Create(context.Background(), reference.CreateCommand{
+		Principal: principal, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "reference:test:workspace", IdempotencyKey: "reference-test-workspace-0001",
+		Body: validWorkspaceBody("initial"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return handler
+	memberID := resource.ID("mem_reference_test_0001")
+	member, err := authorization.NewMemberRecord(authorization.MemberInput{
+		ID: memberID, WorkspaceID: workspace.ResourceID, Kind: principal.Kind(),
+		LogicalIdentity: principal.LogicalIdentity(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := authorization.NewMemberDirectory(workspace.ResourceID, []authorization.MemberRecord{member})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := workspace.ResourceID
+	policyBody := []byte(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"test administrator"},"spec":{"bindings":[{"memberId":"` + memberID.String() + `","role":"WorkspaceAdministrator","scope":{"kind":"Workspace"}}]}}`)
+	if _, err := service.Create(context.Background(), reference.CreateCommand{
+		Principal: principal, Kind: hierarchy.KindPolicy, WorkspaceID: workspace.ResourceID, ParentID: &parentID,
+		CanonicalTarget: "reference:test:policy", IdempotencyKey: "reference-test-policy-0001",
+		Body: policyBody, Members: directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := referenceauthorization.New(referenceauthorization.Config{
+		Reference: service, MemberDirectories: []authorization.MemberDirectory{directory}, MaximumAdmissions: 32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := referenceTestAccess{principal: principal}
+	handler, err := NewReferenceHandler(runtime, access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return referenceFixture{handler: handler, workspaceID: workspace.ResourceID, resourceVersion: workspace.ResourceVersion}
 }
 
 func referenceRequest(

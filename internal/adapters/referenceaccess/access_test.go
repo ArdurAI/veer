@@ -5,16 +5,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
 	"github.com/ArdurAI/veer/internal/core/ports"
-	httptransport "github.com/ArdurAI/veer/internal/transport/http"
 )
 
-func TestAccessAuthenticatesExactCredentialAndClosedActions(t *testing.T) {
+func TestAccessAuthenticatesExactCredential(t *testing.T) {
 	credential := testCredential(t, "reference-access-token")
 	principal := testPrincipal(t, "reference-access")
-	access, err := New(credential, principal, []authorization.Action{authorization.ActionResourceGet})
+	access, err := New(credential, principal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,25 +24,15 @@ func TestAccessAuthenticatesExactCredentialAndClosedActions(t *testing.T) {
 	if _, err := access.Authenticate(context.Background(), testCredential(t, "different-access-token")); !errors.Is(err, ports.ErrAuthenticationInvalid) {
 		t.Fatalf("Authenticate(wrong) error = %v", err)
 	}
-	if err := access.Authorize(context.Background(), got, authorization.ActionResourceGet); err != nil {
-		t.Fatalf("Authorize(allowed) error = %v", err)
-	}
-	if err := access.Authorize(context.Background(), got, authorization.ActionResourceDelete); !errors.Is(err, httptransport.ErrReferenceAuthorizationDenied) {
-		t.Fatalf("Authorize(disallowed) error = %v", err)
-	}
-	other := testPrincipal(t, "other-reference-access")
-	if err := access.Authorize(context.Background(), other, authorization.ActionResourceGet); !errors.Is(err, httptransport.ErrReferenceAuthorizationDenied) {
-		t.Fatalf("Authorize(other principal) error = %v", err)
-	}
 }
 
 func TestAccessHonorsCancellationAndRejectsInvalidConfiguration(t *testing.T) {
 	credential := testCredential(t, "reference-access-token")
 	principal := testPrincipal(t, "reference-access")
-	if _, err := New(ports.BearerCredential{}, principal, []authorization.Action{authorization.ActionResourceGet}); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := New(ports.BearerCredential{}, principal); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("New(invalid) error = %v", err)
 	}
-	access, err := New(credential, principal, []authorization.Action{authorization.ActionResourceGet})
+	access, err := New(credential, principal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,9 +40,6 @@ func TestAccessHonorsCancellationAndRejectsInvalidConfiguration(t *testing.T) {
 	cancel()
 	if _, err := access.Authenticate(ctx, credential); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Authenticate(canceled) error = %v", err)
-	}
-	if err := access.Authorize(ctx, principal, authorization.ActionResourceGet); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Authorize(canceled) error = %v", err)
 	}
 }
 
