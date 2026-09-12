@@ -117,7 +117,7 @@ func TestEveryResourceKindCompletesPositiveAndNegativeLifecycle(t *testing.T) {
 		}
 		ids[test.kind] = receipt.ResourceID
 		receipts[test.kind] = receipt
-		got, err := fixture.service.Get(ctx, fixture.principal, receipt.ResourceID)
+		got, err := fixture.service.Get(ctx, fixture.principal, workspaceReceipt.ResourceID, receipt.ResourceID)
 		if err != nil || got.Kind != test.kind || got.Metadata.Generation().Int64() != 1 {
 			t.Fatalf("Get(%s) = %q/%d, %v", test.kind, got.Kind, got.Metadata.Generation(), err)
 		}
@@ -151,13 +151,14 @@ func TestEveryResourceKindCompletesPositiveAndNegativeLifecycle(t *testing.T) {
 		hierarchy.KindComponent, hierarchy.KindPolicy, hierarchy.KindProviderConnection,
 	}
 	for index, kind := range kinds {
-		before, err := fixture.service.Get(ctx, fixture.principal, ids[kind])
+		before, err := fixture.service.Get(ctx, fixture.principal, workspaceReceipt.ResourceID, ids[kind])
 		if err != nil {
 			t.Fatalf("Get(%s before replace) error = %v", kind, err)
 		}
 		fixture.clock.Advance(time.Millisecond)
 		replace := reference.ReplaceCommand{
-			Principal: fixture.principal, Kind: kind, ResourceID: ids[kind],
+			Principal: fixture.principal, WorkspaceID: workspaceReceipt.ResourceID,
+			Kind: kind, ResourceID: ids[kind],
 			ExpectedResourceVersion: before.Metadata.ResourceVersion().String(),
 			CanonicalTarget:         "reference:replace:" + ids[kind].String(), IdempotencyKey: idempotencyKey("replace", index),
 			Body: intentBody(kind, "updated-"+kind.String(), kind == hierarchy.KindWorkspace), Members: members,
@@ -176,13 +177,14 @@ func TestEveryResourceKindCompletesPositiveAndNegativeLifecycle(t *testing.T) {
 			t.Fatalf("Replace(%s stale) error = %v", kind, err)
 		}
 
-		current, err := fixture.service.Get(ctx, fixture.principal, ids[kind])
+		current, err := fixture.service.Get(ctx, fixture.principal, workspaceReceipt.ResourceID, ids[kind])
 		if err != nil || current.Metadata.DisplayName() != "updated-"+kind.String() {
 			t.Fatalf("Get(%s after replace) name/error = %q/%v", kind, current.Metadata.DisplayName(), err)
 		}
 		fixture.clock.Advance(time.Millisecond)
 		status := reference.StatusCommand{
-			Principal: fixture.principal, Kind: kind, ResourceID: ids[kind],
+			Principal: fixture.principal, WorkspaceID: workspaceReceipt.ResourceID,
+			Kind: kind, ResourceID: ids[kind],
 			ExpectedResourceVersion: current.Metadata.ResourceVersion().String(),
 			CanonicalTarget:         "reference:status:" + ids[kind].String(), IdempotencyKey: idempotencyKey("status", index),
 			Body: statusBody(kind, current.Metadata.Generation().Int64()),
@@ -202,12 +204,15 @@ func TestEveryResourceKindCompletesPositiveAndNegativeLifecycle(t *testing.T) {
 		}
 	}
 
-	workspace, err := fixture.service.Get(ctx, fixture.principal, ids[hierarchy.KindWorkspace])
+	workspace, err := fixture.service.Get(
+		ctx, fixture.principal, workspaceReceipt.ResourceID, ids[hierarchy.KindWorkspace],
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	blockedDelete := reference.DeleteCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: workspace.Metadata.ID(),
+		Principal: fixture.principal, WorkspaceID: workspaceReceipt.ResourceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: workspace.Metadata.ID(),
 		ExpectedResourceVersion: workspace.Metadata.ResourceVersion().String(),
 		CanonicalTarget:         "reference:delete:workspace", IdempotencyKey: "delete-blocked-0001",
 	}
@@ -220,12 +225,13 @@ func TestEveryResourceKindCompletesPositiveAndNegativeLifecycle(t *testing.T) {
 		hierarchy.KindEnvironment, hierarchy.KindPolicy, hierarchy.KindWorkspace,
 	}
 	for index, kind := range deleteOrder {
-		current, err := fixture.service.Get(ctx, fixture.principal, ids[kind])
+		current, err := fixture.service.Get(ctx, fixture.principal, workspaceReceipt.ResourceID, ids[kind])
 		if err != nil {
 			t.Fatalf("Get(%s before delete) error = %v", kind, err)
 		}
 		command := reference.DeleteCommand{
-			Principal: fixture.principal, Kind: kind, ResourceID: ids[kind],
+			Principal: fixture.principal, WorkspaceID: workspaceReceipt.ResourceID,
+			Kind: kind, ResourceID: ids[kind],
 			ExpectedResourceVersion: current.Metadata.ResourceVersion().String(),
 			CanonicalTarget:         "reference:delete:" + ids[kind].String(), IdempotencyKey: idempotencyKey("delete", index),
 		}
@@ -237,10 +243,14 @@ func TestEveryResourceKindCompletesPositiveAndNegativeLifecycle(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(replay, receipt) {
 			t.Fatalf("Delete(%s replay) = %#v, %v; want %#v", kind, replay, err, receipt)
 		}
-		if _, err := fixture.service.Get(ctx, fixture.principal, ids[kind]); !errors.Is(err, reference.ErrNotFound) {
+		if _, err := fixture.service.Get(
+			ctx, fixture.principal, workspaceReceipt.ResourceID, ids[kind],
+		); !errors.Is(err, reference.ErrNotFound) {
 			t.Fatalf("Get(%s deleted) error = %v", kind, err)
 		}
-		operationValue, err := fixture.service.GetOperation(ctx, fixture.principal, receipt.OperationID)
+		operationValue, err := fixture.service.GetOperation(
+			ctx, fixture.principal, workspaceReceipt.ResourceID, receipt.OperationID,
+		)
 		if err != nil || operationValue.Value.ResourceID != ids[kind] {
 			t.Fatalf("GetOperation(%s delete) target/error = %q/%v", kind, operationValue.Value.ResourceID, err)
 		}
@@ -250,6 +260,7 @@ func TestEveryResourceKindCompletesPositiveAndNegativeLifecycle(t *testing.T) {
 func TestListFilteringOrderingPaginationAndTokenBinding(t *testing.T) {
 	fixture := newFixture(t)
 	ctx := context.Background()
+	workspaceIDs := make([]resource.ID, 0, 6)
 	for index, test := range []struct {
 		name string
 		team string
@@ -259,7 +270,7 @@ func TestListFilteringOrderingPaginationAndTokenBinding(t *testing.T) {
 		if index > 0 {
 			fixture.clock.Advance(time.Second)
 		}
-		_, err := fixture.service.Create(ctx, reference.CreateCommand{
+		receipt, err := fixture.service.Create(ctx, reference.CreateCommand{
 			Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
 			CanonicalTarget: "/api/v1alpha1/workspaces", IdempotencyKey: idempotencyKey("page-create", index),
 			Body: workspaceBody(test.name, test.team, false),
@@ -267,25 +278,30 @@ func TestListFilteringOrderingPaginationAndTokenBinding(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create(%s) error = %v", test.name, err)
 		}
+		workspaceIDs = append(workspaceIDs, receipt.ResourceID)
 	}
 	fixture.clock.Advance(time.Second)
-	if _, err := fixture.service.Create(ctx, reference.CreateCommand{
+	receipt, err := fixture.service.Create(ctx, reference.CreateCommand{
 		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
 		CanonicalTarget: "/api/v1alpha1/workspaces", IdempotencyKey: "page-create-missing-label",
 		Body: []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"missing-label"},"spec":{}}`),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Create(missing label) error = %v", err)
 	}
+	workspaceIDs = append(workspaceIDs, receipt.ResourceID)
 	fixture.clock.Advance(time.Second)
-	if _, err := fixture.service.Create(ctx, reference.CreateCommand{
+	receipt, err = fixture.service.Create(ctx, reference.CreateCommand{
 		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
 		CanonicalTarget: "/api/v1alpha1/workspaces", IdempotencyKey: "page-create-empty-label",
 		Body: workspaceBody("empty-label", "", false),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Create(empty label) error = %v", err)
 	}
+	workspaceIDs = append(workspaceIDs, receipt.ResourceID)
 	emptyLabelPage, err := fixture.service.List(ctx, reference.ListQuery{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		Principal: fixture.principal, WorkspaceIDs: workspaceIDs, Kind: hierarchy.KindWorkspace,
 		MatchLabels: map[string]string{"team": ""},
 	})
 	if err != nil || len(emptyLabelPage.Items) != 1 ||
@@ -294,7 +310,7 @@ func TestListFilteringOrderingPaginationAndTokenBinding(t *testing.T) {
 	}
 
 	query := reference.ListQuery{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		Principal: fixture.principal, WorkspaceIDs: workspaceIDs, Kind: hierarchy.KindWorkspace,
 		MatchLabels: map[string]string{"team": "platform"}, PageSize: 2,
 	}
 	first, err := fixture.service.List(ctx, query)
@@ -342,6 +358,157 @@ func TestListFilteringOrderingPaginationAndTokenBinding(t *testing.T) {
 	}
 }
 
+func TestWorkspaceScopeIsMandatoryAcrossCRUDListsAndOperations(t *testing.T) {
+	fixture := newFixture(t)
+	ctx := context.Background()
+
+	workspaceA, err := fixture.service.Create(ctx, reference.CreateCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "reference:isolation:create-a", IdempotencyKey: "isolation-create-a-0001",
+		Body: workspaceBody("shared-display-name", "platform", false),
+	})
+	if err != nil {
+		t.Fatalf("Create(Workspace A) error = %v", err)
+	}
+	fixture.clock.Advance(time.Millisecond)
+	workspaceB, err := fixture.service.Create(ctx, reference.CreateCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "reference:isolation:create-b", IdempotencyKey: "isolation-create-b-0001",
+		Body: workspaceBody("shared-display-name", "platform", false),
+	})
+	if err != nil {
+		t.Fatalf("Create(Workspace B) error = %v", err)
+	}
+
+	if _, err := fixture.service.Get(
+		ctx, fixture.principal, "", workspaceA.ResourceID,
+	); !errors.Is(err, reference.ErrInvalidCommand) {
+		t.Fatalf("Get(missing scope) error = %v, want ErrInvalidCommand", err)
+	}
+	if _, err := fixture.service.GetOperation(
+		ctx, fixture.principal, "", workspaceA.OperationID,
+	); !errors.Is(err, reference.ErrInvalidCommand) {
+		t.Fatalf("GetOperation(missing scope) error = %v, want ErrInvalidCommand", err)
+	}
+	if _, err := fixture.service.Get(
+		ctx, fixture.principal, workspaceB.ResourceID, workspaceA.ResourceID,
+	); !errors.Is(err, reference.ErrNotFound) {
+		t.Fatalf("Get(A through B scope) error = %v, want ErrNotFound", err)
+	}
+	if _, err := fixture.service.GetOperation(
+		ctx, fixture.principal, workspaceB.ResourceID, workspaceA.OperationID,
+	); !errors.Is(err, reference.ErrNotFound) {
+		t.Fatalf("GetOperation(A through B scope) error = %v, want ErrNotFound", err)
+	}
+
+	before, err := fixture.service.Get(ctx, fixture.principal, workspaceA.ResourceID, workspaceA.ResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	correctReplace := reference.ReplaceCommand{
+		Principal: fixture.principal, WorkspaceID: workspaceA.ResourceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: workspaceA.ResourceID,
+		ExpectedResourceVersion: before.Metadata.ResourceVersion().String(),
+		CanonicalTarget:         "reference:isolation:replace", IdempotencyKey: "isolation-replace-0001",
+		Body: workspaceBody("updated-in-workspace-a", "platform", true),
+	}
+	missingScopeReplace := correctReplace
+	missingScopeReplace.WorkspaceID = ""
+	if _, err := fixture.service.Replace(ctx, missingScopeReplace); !errors.Is(err, reference.ErrInvalidCommand) {
+		t.Fatalf("Replace(missing scope) error = %v, want ErrInvalidCommand", err)
+	}
+	receipt, err := fixture.service.Replace(ctx, correctReplace)
+	if err != nil {
+		t.Fatalf("Replace(A through A scope) error = %v", err)
+	}
+	wrongScopeReplace := correctReplace
+	wrongScopeReplace.WorkspaceID = workspaceB.ResourceID
+	if _, err := fixture.service.Replace(ctx, wrongScopeReplace); !errors.Is(err, reference.ErrNotFound) {
+		t.Fatalf("Replace(A replay identity through B scope) error = %v, want ErrNotFound; A receipt was %#v",
+			err, receipt)
+	}
+	current, err := fixture.service.Get(ctx, fixture.principal, workspaceA.ResourceID, workspaceA.ResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.ReplaceStatus(ctx, reference.StatusCommand{
+		Principal: fixture.principal, WorkspaceID: workspaceB.ResourceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: workspaceA.ResourceID,
+		ExpectedResourceVersion: current.Metadata.ResourceVersion().String(),
+		CanonicalTarget:         "reference:isolation:status", IdempotencyKey: "isolation-status-0001",
+		Body: statusBody(hierarchy.KindWorkspace, current.Metadata.Generation().Int64()),
+	}); !errors.Is(err, reference.ErrNotFound) {
+		t.Fatalf("ReplaceStatus(A through B scope) error = %v, want ErrNotFound", err)
+	}
+	if _, err := fixture.service.Delete(ctx, reference.DeleteCommand{
+		Principal: fixture.principal, WorkspaceID: workspaceB.ResourceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: workspaceA.ResourceID,
+		ExpectedResourceVersion: current.Metadata.ResourceVersion().String(),
+		CanonicalTarget:         "reference:isolation:delete", IdempotencyKey: "isolation-delete-0001",
+	}); !errors.Is(err, reference.ErrNotFound) {
+		t.Fatalf("Delete(A through B scope) error = %v, want ErrNotFound", err)
+	}
+	after, err := fixture.service.Get(ctx, fixture.principal, workspaceA.ResourceID, workspaceA.ResourceID)
+	if err != nil || after.Metadata.ResourceVersion() != current.Metadata.ResourceVersion() ||
+		after.Metadata.DisplayName() != "updated-in-workspace-a" {
+		t.Fatalf("Workspace A after rejected writes = %q/%q, %v",
+			after.Metadata.DisplayName(), after.Metadata.ResourceVersion(), err)
+	}
+
+	members, err := authorization.NewMemberDirectory(workspaceA.ResourceID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignParent := workspaceB.ResourceID
+	if _, err := fixture.service.Create(ctx, reference.CreateCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindEnvironment,
+		WorkspaceID: workspaceA.ResourceID, ParentID: &foreignParent,
+		CanonicalTarget: "reference:isolation:cross-parent", IdempotencyKey: "isolation-cross-parent-0001",
+		Body: intentBody(hierarchy.KindEnvironment, "cross-parent", false), Members: members,
+	}); err == nil {
+		t.Fatal("Create(Environment with foreign parent) succeeded")
+	}
+
+	if _, err := fixture.service.List(ctx, reference.ListQuery{
+		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+	}); !errors.Is(err, reference.ErrInvalidCommand) {
+		t.Fatalf("List(missing root scopes) error = %v, want ErrInvalidCommand", err)
+	}
+	if _, err := fixture.service.List(ctx, reference.ListQuery{
+		Principal: fixture.principal, Kind: hierarchy.KindEnvironment,
+	}); !errors.Is(err, reference.ErrInvalidCommand) {
+		t.Fatalf("List(missing child scope) error = %v, want ErrInvalidCommand", err)
+	}
+	if _, err := fixture.service.List(ctx, reference.ListQuery{
+		Principal: fixture.principal, WorkspaceIDs: []resource.ID{workspaceA.ResourceID, workspaceA.ResourceID},
+		Kind: hierarchy.KindWorkspace,
+	}); !errors.Is(err, reference.ErrInvalidCommand) {
+		t.Fatalf("List(duplicate scopes) error = %v, want ErrInvalidCommand", err)
+	}
+	oneScope, err := fixture.service.List(ctx, reference.ListQuery{
+		Principal: fixture.principal, WorkspaceIDs: []resource.ID{workspaceA.ResourceID},
+		Kind: hierarchy.KindWorkspace,
+	})
+	if err != nil || len(oneScope.Items) != 1 || oneScope.Items[0].Metadata.ID() != workspaceA.ResourceID {
+		t.Fatalf("List(A scope) = %d items, %v", len(oneScope.Items), err)
+	}
+	unionQuery := reference.ListQuery{
+		Principal:    fixture.principal,
+		WorkspaceIDs: []resource.ID{workspaceB.ResourceID, workspaceA.ResourceID},
+		Kind:         hierarchy.KindWorkspace, PageSize: 1,
+	}
+	first, err := fixture.service.List(ctx, unionQuery)
+	if err != nil || len(first.Items) != 1 || first.NextPageToken == "" {
+		t.Fatalf("List(A+B first page) = %d/%q, %v", len(first.Items), first.NextPageToken, err)
+	}
+	if _, err := fixture.service.List(ctx, reference.ListQuery{
+		Principal: fixture.principal, WorkspaceIDs: []resource.ID{workspaceA.ResourceID},
+		Kind: hierarchy.KindWorkspace, PageSize: 1, PageToken: first.NextPageToken,
+	}); !errors.Is(err, reference.ErrInvalidPageToken) {
+		t.Fatalf("List(token under narrowed scope) error = %v, want ErrInvalidPageToken", err)
+	}
+}
+
 func TestConcurrentKeyReplayHasOneLogicalMutation(t *testing.T) {
 	fixture := newFixture(t)
 	command := reference.CreateCommand{
@@ -382,7 +549,7 @@ func TestConcurrentKeyReplayHasOneLogicalMutation(t *testing.T) {
 		}
 	}
 	page, err := fixture.service.List(context.Background(), reference.ListQuery{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		Principal: fixture.principal, WorkspaceIDs: []resource.ID{first.ResourceID}, Kind: hierarchy.KindWorkspace,
 	})
 	if err != nil || len(page.Items) != 1 {
 		t.Fatalf("List() after concurrent replay = %d items, %v", len(page.Items), err)
@@ -401,12 +568,14 @@ func TestConcurrentDistinctWritesHaveOneETagWinner(t *testing.T) {
 	}
 	commands := []reference.ReplaceCommand{
 		{
-			Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: created.ResourceID,
+			Principal: fixture.principal, WorkspaceID: created.ResourceID,
+			Kind: hierarchy.KindWorkspace, ResourceID: created.ResourceID,
 			ExpectedResourceVersion: created.ResourceVersion, CanonicalTarget: "reference:race:replace",
 			IdempotencyKey: "etag-racer-one-0001", Body: intentBody(hierarchy.KindWorkspace, "racer-one", true),
 		},
 		{
-			Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: created.ResourceID,
+			Principal: fixture.principal, WorkspaceID: created.ResourceID,
+			Kind: hierarchy.KindWorkspace, ResourceID: created.ResourceID,
 			ExpectedResourceVersion: created.ResourceVersion, CanonicalTarget: "reference:race:replace",
 			IdempotencyKey: "etag-racer-two-0001", Body: intentBody(hierarchy.KindWorkspace, "racer-two", true),
 		},

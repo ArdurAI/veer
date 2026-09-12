@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 
+	"github.com/ArdurAI/veer/internal/core/domain/isolation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
@@ -11,12 +12,13 @@ import (
 // production StateStore described by ADR 0002: issue #30 owns transactions,
 // audit, integrity, outbox, leases, and recovery in that adapter.
 type ReferenceStore interface {
-	// View runs one consistent read-only callback.
-	View(context.Context, func(ReferenceReader) error) error
-	// Update runs one all-or-nothing callback. Returning an error, cancellation,
-	// or deadline expiry commits none of the callback's resource or operation
-	// changes.
-	Update(context.Context, func(ReferenceTransaction) error) error
+	// View runs one consistent read-only callback containing only the explicit,
+	// non-empty Workspace scope set.
+	View(context.Context, isolation.WorkspaceScopeSet, func(ReferenceReader) error) error
+	// Update runs one all-or-nothing callback bound to exactly one Workspace.
+	// Returning an error, cancellation, or deadline expiry commits none of the
+	// callback's resource or operation changes.
+	Update(context.Context, isolation.WorkspaceScope, func(ReferenceTransaction) error) error
 }
 
 // ReferenceReader exposes ownership-safe canonical resource and operation

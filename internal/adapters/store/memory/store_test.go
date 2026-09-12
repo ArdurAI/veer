@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ArdurAI/veer/internal/core/domain/isolation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 )
@@ -16,8 +17,10 @@ func TestUpdateIsAtomicAndOwnershipSafe(t *testing.T) {
 	t.Parallel()
 
 	store := NewStore()
+	scope := mustScope(t, fixtureID)
+	scopes := mustScopes(t, fixtureID)
 	original := []byte(`{"state":"initial"}`)
-	if err := store.Update(context.Background(), func(tx ports.ReferenceTransaction) error {
+	if err := store.Update(context.Background(), scope, func(tx ports.ReferenceTransaction) error {
 		tx.PutResource(fixtureID, original)
 		return nil
 	}); err != nil {
@@ -26,7 +29,7 @@ func TestUpdateIsAtomicAndOwnershipSafe(t *testing.T) {
 	original[0] = 'x'
 
 	wantFailure := errors.New("injected failure")
-	if err := store.Update(context.Background(), func(tx ports.ReferenceTransaction) error {
+	if err := store.Update(context.Background(), scope, func(tx ports.ReferenceTransaction) error {
 		value, exists := tx.GetResource(fixtureID)
 		if !exists {
 			t.Fatal("working transaction did not see seeded resource")
@@ -38,7 +41,7 @@ func TestUpdateIsAtomicAndOwnershipSafe(t *testing.T) {
 		t.Fatalf("failed Update() error = %v, want injected failure", err)
 	}
 
-	if err := store.View(context.Background(), func(reader ports.ReferenceReader) error {
+	if err := store.View(context.Background(), scopes, func(reader ports.ReferenceReader) error {
 		value, exists := reader.GetResource(fixtureID)
 		if !exists || string(value) != `{"state":"initial"}` {
 			t.Fatalf("stored resource = %q / %t", value, exists)
@@ -58,6 +61,8 @@ func TestConcurrentUpdatesAreSerializable(t *testing.T) {
 	t.Parallel()
 
 	store := NewStore()
+	scope := mustScope(t, fixtureID)
+	scopes := mustScopes(t, fixtureID)
 	const workers = 32
 	var group sync.WaitGroup
 	group.Add(workers)
@@ -66,7 +71,7 @@ func TestConcurrentUpdatesAreSerializable(t *testing.T) {
 		go func() {
 			defer group.Done()
 			id := resource.ID("wsp_" + leftPad(index))
-			if err := store.Update(context.Background(), func(tx ports.ReferenceTransaction) error {
+			if err := store.Update(context.Background(), scope, func(tx ports.ReferenceTransaction) error {
 				tx.PutResource(id, []byte(id))
 				return nil
 			}); err != nil {
@@ -76,7 +81,7 @@ func TestConcurrentUpdatesAreSerializable(t *testing.T) {
 	}
 	group.Wait()
 
-	if err := store.View(context.Background(), func(reader ports.ReferenceReader) error {
+	if err := store.View(context.Background(), scopes, func(reader ports.ReferenceReader) error {
 		if got := len(reader.ListResources()); got != workers {
 			t.Fatalf("resource count = %d, want %d", got, workers)
 		}
@@ -84,6 +89,84 @@ func TestConcurrentUpdatesAreSerializable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("View() error = %v", err)
 	}
+}
+
+func TestWorkspaceScopesFailClosedAndCannotCrossRead(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	workspaceA := resource.ID("wsp_01JSTORE000000000000000A")
+	workspaceB := resource.ID("wsp_01JSTORE000000000000000B")
+	sharedID := resource.ID("env_01JSTORE0000000000000000")
+
+	called := false
+	if err := store.Update(context.Background(), isolation.WorkspaceScope{}, func(ports.ReferenceTransaction) error {
+		called = true
+		return nil
+	}); !errors.Is(err, isolation.ErrInvalidWorkspaceScope) || called {
+		t.Fatalf("zero-scope Update() = %v / called %t", err, called)
+	}
+	if err := store.View(context.Background(), isolation.WorkspaceScopeSet{}, func(ports.ReferenceReader) error {
+		called = true
+		return nil
+	}); !errors.Is(err, isolation.ErrInvalidWorkspaceScope) || called {
+		t.Fatalf("zero-scope View() = %v / called %t", err, called)
+	}
+
+	for workspaceID, canonical := range map[resource.ID]string{
+		workspaceA: `{"workspace":"A"}`,
+		workspaceB: `{"workspace":"B"}`,
+	} {
+		if err := store.Update(context.Background(), mustScope(t, workspaceID), func(tx ports.ReferenceTransaction) error {
+			tx.PutResource(sharedID, []byte(canonical))
+			return nil
+		}); err != nil {
+			t.Fatalf("Update(%s) error = %v", workspaceID, err)
+		}
+	}
+
+	if err := store.View(context.Background(), mustScopes(t, workspaceA), func(reader ports.ReferenceReader) error {
+		value, exists := reader.GetResource(sharedID)
+		if !exists || string(value) != `{"workspace":"A"}` {
+			t.Fatalf("Workspace A read = %q / %t", value, exists)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("View(Workspace A) error = %v", err)
+	}
+	if err := store.View(context.Background(), mustScopes(t, workspaceB), func(reader ports.ReferenceReader) error {
+		value, exists := reader.GetResource(sharedID)
+		if !exists || string(value) != `{"workspace":"B"}` {
+			t.Fatalf("Workspace B read = %q / %t", value, exists)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("View(Workspace B) error = %v", err)
+	}
+	if err := store.View(context.Background(), mustScopes(t, workspaceA, workspaceB), func(ports.ReferenceReader) error {
+		called = true
+		return nil
+	}); !errors.Is(err, ErrIdentityCollision) {
+		t.Fatalf("colliding multi-scope View() error = %v", err)
+	}
+}
+
+func mustScope(t *testing.T, workspaceID resource.ID) isolation.WorkspaceScope {
+	t.Helper()
+	scope, err := isolation.NewWorkspaceScope(workspaceID)
+	if err != nil {
+		t.Fatalf("NewWorkspaceScope(%q) error = %v", workspaceID, err)
+	}
+	return scope
+}
+
+func mustScopes(t *testing.T, workspaceIDs ...resource.ID) isolation.WorkspaceScopeSet {
+	t.Helper()
+	scopes, err := isolation.NewWorkspaceScopeSet(workspaceIDs...)
+	if err != nil {
+		t.Fatalf("NewWorkspaceScopeSet(%q) error = %v", workspaceIDs, err)
+	}
+	return scopes
 }
 
 func leftPad(value int) string {

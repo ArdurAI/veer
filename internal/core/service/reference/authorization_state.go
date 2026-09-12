@@ -47,10 +47,14 @@ func (service *Service) LoadAuthorizationState(
 		members.WorkspaceID() != workspaceID {
 		return AuthorizationState{}, ErrInvalidCommand
 	}
+	_, workspaceScopes, err := newWorkspaceScopes(workspaceID)
+	if err != nil {
+		return AuthorizationState{}, ErrInvalidCommand
+	}
 
 	var result AuthorizationState
-	err := service.store.View(ctx, func(reader ports.ReferenceReader) error {
-		resources, err := loadResources(reader)
+	err = service.store.View(ctx, workspaceScopes, func(reader ports.ReferenceReader) error {
+		resources, err := loadResources(reader, workspaceScopes)
 		if err != nil {
 			return err
 		}

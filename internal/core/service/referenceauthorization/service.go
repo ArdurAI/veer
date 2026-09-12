@@ -7,12 +7,16 @@ package referenceauthorization
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
+	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/isolation"
 	"github.com/ArdurAI/veer/internal/core/domain/reconciliation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/service/reference"
@@ -20,7 +24,7 @@ import (
 
 const (
 	defaultMaximumAdmissions = 4_096
-	maximumWorkspaces        = 4_096
+	maximumWorkspaces        = isolation.MaxWorkspaceScopes
 )
 
 var (
@@ -124,6 +128,14 @@ func (service *Service) List(ctx context.Context, query reference.ListQuery) (re
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
+	if query.Kind == hierarchy.KindWorkspace {
+		query.WorkspaceIDs = service.workspaceIDs()
+	} else {
+		query.WorkspaceIDs = nil
+		if _, exists := service.directories[query.WorkspaceID]; !exists {
+			return reference.Page{}, ErrDenied
+		}
+	}
 	states := make(map[resource.ID]reference.AuthorizationState)
 	return service.reference.ListWhere(ctx, query, func(
 		value reference.Resource,
@@ -160,6 +172,7 @@ func (service *Service) List(ctx context.Context, query reference.ListQuery) (re
 func (service *Service) Get(
 	ctx context.Context,
 	principal identity.Principal,
+	workspaceID resource.ID,
 	id resource.ID,
 ) (reference.Resource, error) {
 	if err := validateRequest(service, ctx, principal); err != nil {
@@ -167,7 +180,9 @@ func (service *Service) Get(
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	value, _, _, _, err := service.authorizeResource(ctx, principal, authorization.ActionResourceGet, id)
+	value, _, _, _, err := service.authorizeResource(
+		ctx, principal, authorization.ActionResourceGet, workspaceID, id,
+	)
 	return value, err
 }
 
@@ -195,7 +210,7 @@ func (service *Service) Replace(
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	value, state, target, decision, err := service.authorizeResource(
-		ctx, command.Principal, authorization.ActionResourceReplace, command.ResourceID,
+		ctx, command.Principal, authorization.ActionResourceReplace, command.WorkspaceID, command.ResourceID,
 	)
 	if err != nil {
 		return reference.MutationReceipt{}, err
@@ -221,7 +236,7 @@ func (service *Service) Delete(
 		return receipt, err
 	}
 	_, state, target, decision, err := service.authorizeResource(
-		ctx, command.Principal, authorization.ActionResourceDelete, command.ResourceID,
+		ctx, command.Principal, authorization.ActionResourceDelete, command.WorkspaceID, command.ResourceID,
 	)
 	if err != nil {
 		return reference.MutationReceipt{}, err
@@ -254,12 +269,24 @@ func (service *Service) GetOperation(
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	value, err := service.reference.GetOperation(ctx, principal, id)
-	if err != nil {
+	var value reference.Operation
+	found := false
+	for _, workspaceID := range service.workspaceIDs() {
+		candidate, err := service.reference.GetOperation(ctx, principal, workspaceID, id)
 		if errors.Is(err, reference.ErrNotFound) {
-			return reference.Operation{}, ErrDenied
+			continue
 		}
-		return reference.Operation{}, err
+		if err != nil {
+			return reference.Operation{}, err
+		}
+		if found {
+			return reference.Operation{}, fmt.Errorf("%w: duplicate Operation identity across Workspaces", ErrUnavailable)
+		}
+		value = candidate
+		found = true
+	}
+	if !found {
+		return reference.Operation{}, ErrDenied
 	}
 	state, err := service.authorizationState(ctx, value.Value.WorkspaceID)
 	if err != nil {
@@ -309,7 +336,9 @@ func (service *Service) NewPlan(
 	if !exists {
 		return reconciliation.Plan{}, ErrDenied
 	}
-	current, err := service.reference.GetOperation(ctx, record.principal, operationID)
+	current, err := service.reference.GetOperation(
+		ctx, record.principal, record.operationTarget.WorkspaceID(), operationID,
+	)
 	if err != nil {
 		return reconciliation.Plan{}, err
 	}
@@ -345,7 +374,9 @@ func (service *Service) WithExecutionAuthorization(
 		record.decision.InputDigest().String() != plan.AuthorizationInput() {
 		return ErrStaleAuthorization
 	}
-	currentOperation, err := service.reference.GetOperation(ctx, record.principal, plan.OperationID())
+	currentOperation, err := service.reference.GetOperation(
+		ctx, record.principal, plan.WorkspaceID(), plan.OperationID(),
+	)
 	if err != nil {
 		return err
 	}
@@ -360,7 +391,9 @@ func (service *Service) WithExecutionAuthorization(
 	}
 	target := record.resourceTarget
 	if record.action != authorization.ActionResourceDelete {
-		currentResource, err := service.reference.Get(ctx, record.principal, plan.ResourceID())
+		currentResource, err := service.reference.Get(
+			ctx, record.principal, plan.WorkspaceID(), plan.ResourceID(),
+		)
 		if err != nil || currentResource.Metadata.Generation().Int64() != plan.Generation() {
 			return ErrStaleAuthorization
 		}
@@ -391,9 +424,10 @@ func (service *Service) authorizeResource(
 	ctx context.Context,
 	principal identity.Principal,
 	action authorization.Action,
+	workspaceID resource.ID,
 	id resource.ID,
 ) (reference.Resource, reference.AuthorizationState, authorization.Target, authorization.Decision, error) {
-	value, err := service.reference.Get(ctx, principal, id)
+	value, err := service.reference.Get(ctx, principal, workspaceID, id)
 	if err != nil {
 		if errors.Is(err, reference.ErrNotFound) {
 			return reference.Resource{}, reference.AuthorizationState{}, authorization.Target{}, authorization.Decision{}, ErrDenied
@@ -459,7 +493,9 @@ func (service *Service) mutate(
 	decision authorization.Decision,
 	mutation func() (reference.MutationReceipt, error),
 ) (reference.MutationReceipt, error) {
-	key := admissionRequestKey(principal, action, target, idempotencyKey)
+	key := admissionRequestKey(
+		principal, resourceTarget.WorkspaceID(), action, target, idempotencyKey,
+	)
 	existing, replay := service.requests[key]
 	if replay {
 		if existing.resourceID != resourceTarget.ResourceID() {
@@ -482,7 +518,9 @@ func (service *Service) mutate(
 	if replay && existing.operationID == receipt.OperationID {
 		return receipt, nil
 	}
-	operationValue, err := service.reference.GetOperation(ctx, principal, receipt.OperationID)
+	operationValue, err := service.reference.GetOperation(
+		ctx, principal, resourceTarget.WorkspaceID(), receipt.OperationID,
+	)
 	if err != nil {
 		return reference.MutationReceipt{}, fmt.Errorf("%w: load admitted Operation", ErrUnavailable)
 	}
@@ -510,7 +548,7 @@ func (service *Service) replayDelete(
 	command reference.DeleteCommand,
 ) (reference.MutationReceipt, bool, error) {
 	key := admissionRequestKey(
-		command.Principal, authorization.ActionResourceDelete,
+		command.Principal, command.WorkspaceID, authorization.ActionResourceDelete,
 		command.CanonicalTarget, command.IdempotencyKey,
 	)
 	existing, replay := service.requests[key]
@@ -550,6 +588,19 @@ func operationTargetMatches(target authorization.Target, value reference.Operati
 		optionalIDEqual(providerID, providerPresent, value.Value.ProviderConnectionID)
 }
 
+// workspaceIDs returns the configured stable scopes in deterministic order.
+// The caller holds service.mu.
+func (service *Service) workspaceIDs() []resource.ID {
+	result := make([]resource.ID, 0, len(service.directories))
+	for workspaceID := range service.directories {
+		result = append(result, workspaceID)
+	}
+	sort.Slice(result, func(left, right int) bool {
+		return result[left].String() < result[right].String()
+	})
+	return result
+}
+
 func optionalIDEqual(value resource.ID, present bool, expected *resource.ID) bool {
 	if expected == nil {
 		return !present
@@ -559,12 +610,27 @@ func optionalIDEqual(value resource.ID, present bool, expected *resource.ID) boo
 
 func admissionRequestKey(
 	principal identity.Principal,
+	workspaceID resource.ID,
 	action authorization.Action,
 	target string,
 	idempotencyKey string,
 ) [sha256.Size]byte {
-	return sha256.Sum256([]byte(principal.Fingerprint().String() + "\x00" +
-		action.String() + "\x00" + target + "\x00" + idempotencyKey))
+	hasher := sha256.New()
+	var size [8]byte
+	writeFrame := func(value string) {
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = hasher.Write(size[:])
+		_, _ = hasher.Write([]byte(value))
+	}
+	writeFrame("veer.reference.authorization-request.v1")
+	writeFrame(principal.Fingerprint().String())
+	writeFrame(workspaceID.String())
+	writeFrame(action.String())
+	writeFrame(target)
+	writeFrame(idempotencyKey)
+	var result [sha256.Size]byte
+	copy(result[:], hasher.Sum(nil))
+	return result
 }
 
 func classifyStateError(err error) error {

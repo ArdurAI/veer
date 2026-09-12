@@ -136,6 +136,7 @@ type CreateCommand struct {
 // ReplaceCommand describes a complete caller-owned desired-state replacement.
 type ReplaceCommand struct {
 	Principal               identity.Principal
+	WorkspaceID             resource.ID
 	Kind                    hierarchy.Kind
 	ResourceID              resource.ID
 	ExpectedResourceVersion string
@@ -148,6 +149,7 @@ type ReplaceCommand struct {
 // DeleteCommand describes one generation-fenced RESTRICT deletion.
 type DeleteCommand struct {
 	Principal               identity.Principal
+	WorkspaceID             resource.ID
 	Kind                    hierarchy.Kind
 	ResourceID              resource.ID
 	ExpectedResourceVersion string
@@ -158,6 +160,7 @@ type DeleteCommand struct {
 // StatusCommand describes a status-only replacement.
 type StatusCommand struct {
 	Principal               identity.Principal
+	WorkspaceID             resource.ID
 	Kind                    hierarchy.Kind
 	ResourceID              resource.ID
 	ExpectedResourceVersion string
@@ -199,16 +202,17 @@ type Operation struct {
 }
 
 // ListQuery selects one deterministic resource collection. MatchLabels uses
-// exact AND semantics. Workspace roots may be listed across all workspaces by
-// leaving WorkspaceID empty; child kinds require a WorkspaceID.
+// exact AND semantics. Workspace roots require an explicit non-empty set of
+// stable WorkspaceIDs; child kinds require exactly one WorkspaceID.
 type ListQuery struct {
-	Principal   identity.Principal
-	WorkspaceID resource.ID
-	Kind        hierarchy.Kind
-	ParentID    *resource.ID
-	MatchLabels map[string]string
-	PageSize    int
-	PageToken   string
+	Principal    identity.Principal
+	WorkspaceID  resource.ID
+	WorkspaceIDs []resource.ID
+	Kind         hierarchy.Kind
+	ParentID     *resource.ID
+	MatchLabels  map[string]string
+	PageSize     int
+	PageToken    string
 }
 
 // Page is one keyset-ordered bounded collection page.
