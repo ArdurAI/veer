@@ -99,7 +99,7 @@ actual_license_sha=$(sha256_file "$repo_root/LICENSE")
 [ "$actual_license_sha" = "$expected_license_sha" ] ||
   fail "LICENSE is not the canonical Apache-2.0 text: got $actual_license_sha"
 
-expected_community_policy_sha=41765071849df258c2af56dbc9860cde8b737c02140ac84baa3cafc3c8ed78d0
+expected_community_policy_sha=dd6ab3c7cbf83e738c554531bdc149c85baace1b4e67d083adfb7530b776e69b
 actual_community_policy_sha=$(community_policy_sha)
 [ "$actual_community_policy_sha" = "$expected_community_policy_sha" ] ||
   fail "community policy differs from its reviewed canonical form: got $actual_community_policy_sha"
@@ -107,6 +107,8 @@ actual_community_policy_sha=$(community_policy_sha)
 require_text README.md '[Apache License 2.0](LICENSE)'
 require_text README.md 'Developer Certificate of Origin 1.1'
 require_exact_line README.md 'The authoritative contribution policy is [CONTRIBUTING.md](CONTRIBUTING.md).'
+require_text README.md 'Second-person approval is not mandatory for a pull request'
+require_text README.md "Direct pushes to \`main\` remain prohibited."
 reject_text README.md 'An open-source license has not yet been selected.'
 
 require_text CONTRIBUTING.md 'Developer Certificate of Origin 1.1'
@@ -116,11 +118,17 @@ require_text CONTRIBUTING.md "\`Apache-2.0\`"
 
 dco_required_statement="Every commit in a pull request requires an author-matching \`Signed-off-by\` trailer."
 require_exact_line CONTRIBUTING.md "$dco_required_statement"
+require_text CONTRIBUTING.md 'Second-person approval is not mandatory for a'
 require_exact_line docs/development.md 'The authoritative contribution policy is [CONTRIBUTING.md](../CONTRIBUTING.md).'
+require_text docs/development.md 'Second-person approval is not a'
+require_text docs/development.md 'protected-branch requirement.'
+require_text docs/development.md 'pull-request review rule with zero required approving reviews'
 
 require_text GOVERNANCE.md 'maintainer-led consensus'
 require_text GOVERNANCE.md 'ArdurAI retains final authority'
 require_text GOVERNANCE.md "\`Apache-2.0\`"
+require_exact_line GOVERNANCE.md 'discussions are resolved. Second-person approval is not mandatory during alpha.'
+require_text GOVERNANCE.md "direct pushes to \`main\` remain prohibited."
 
 require_text CODE_OF_CONDUCT.md 'Contributor Covenant'
 require_text CODE_OF_CONDUCT.md 'version 2.1'

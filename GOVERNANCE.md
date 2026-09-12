@@ -54,9 +54,12 @@ restricted participation to protect reporters and affected people.
 
 Changes are merged only when their issue acceptance criteria are evidenced,
 required CI is green for the exact head revision, and applicable review
-discussions are resolved. Maintainers may require additional review for
-security-sensitive, compatibility-sensitive, or high-blast-radius changes.
-Urgency does not waive the documented security or correctness boundary.
+discussions are resolved. Second-person approval is not mandatory during alpha.
+An authorized maintainer may merge their own exact head through the protected
+pull-request path; direct pushes to `main` remain prohibited. Maintainers may
+request non-blocking additional review for security-sensitive,
+compatibility-sensitive, or high-blast-radius changes. Urgency does not waive
+the documented security or correctness boundary.
 
 ## Releases and security embargoes
 

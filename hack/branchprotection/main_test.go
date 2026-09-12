@@ -32,6 +32,35 @@ func TestVerifyPolicyRejectsLegacyStatusContexts(t *testing.T) {
 	}
 }
 
+func TestVerifyPolicyRejectsMissingPullRequestGate(t *testing.T) {
+	changed := strings.Replace(
+		expectedPolicy,
+		`"required_pull_request_reviews": {`,
+		`"removed_pull_request_reviews": {`,
+		1,
+	)
+	if err := verifyPolicy([]byte(changed)); err == nil ||
+		!strings.Contains(err.Error(), "required_pull_request_reviews must preserve the pull-request gate") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVerifyPolicyRejectsRequiredApprovingReview(t *testing.T) {
+	changed := strings.Replace(expectedPolicy, `"required_approving_review_count": 0`, `"required_approving_review_count": 1`, 1)
+	if err := verifyPolicy([]byte(changed)); err == nil ||
+		!strings.Contains(err.Error(), "required_approving_review_count must be 0") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVerifyPolicyRejectsLastPushApproval(t *testing.T) {
+	changed := strings.Replace(expectedPolicy, `"require_last_push_approval": false`, `"require_last_push_approval": true`, 1)
+	if err := verifyPolicy([]byte(changed)); err == nil ||
+		!strings.Contains(err.Error(), "require_last_push_approval must be false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestVerifyPolicyRejectsForkSyncingOnUnlockedBranch(t *testing.T) {
 	changed := strings.Replace(expectedPolicy, `"allow_fork_syncing": false`, `"allow_fork_syncing": true`, 1)
 	if err := verifyPolicy([]byte(changed)); err == nil ||
