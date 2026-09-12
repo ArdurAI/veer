@@ -1,0 +1,85 @@
+{
+  "contract": "veer-security-regression-v1alpha1",
+  "openapiArtifact": "api/openapi/veer-v1alpha1.json",
+  "openapiSha256": "7f7ab682e07e4cd9d4b5e626c2aafdc416efe43cb08ddc8a55b9bc6cf448237e",
+  "openapiValidated": true,
+  "routes": [
+    {
+      "operationId": "listWorkspaces",
+      "method": "GET",
+      "pathTemplate": "/api/v1alpha1/workspaces",
+      "memberStatus": 200,
+      "memberOutcome": "allowed",
+      "outsiderStatus": 200,
+      "outsiderOutcome": "denied-rows-filtered-before-pagination",
+      "missingCredentialStatus": 401,
+      "invalidCredentialStatus": 401
+    },
+    {
+      "operationId": "createWorkspace",
+      "method": "POST",
+      "pathTemplate": "/api/v1alpha1/workspaces",
+      "memberStatus": 403,
+      "memberOutcome": "service-reserved-deny",
+      "outsiderStatus": 403,
+      "outsiderOutcome": "service-reserved-deny",
+      "missingCredentialStatus": 401,
+      "invalidCredentialStatus": 401
+    },
+    {
+      "operationId": "getWorkspace",
+      "method": "GET",
+      "pathTemplate": "/api/v1alpha1/workspaces/{workspaceId}",
+      "memberStatus": 200,
+      "memberOutcome": "allowed",
+      "outsiderStatus": 403,
+      "outsiderOutcome": "authorization-denied",
+      "missingCredentialStatus": 401,
+      "invalidCredentialStatus": 401
+    },
+    {
+      "operationId": "replaceWorkspace",
+      "method": "PUT",
+      "pathTemplate": "/api/v1alpha1/workspaces/{workspaceId}",
+      "memberStatus": 202,
+      "memberOutcome": "allowed",
+      "outsiderStatus": 403,
+      "outsiderOutcome": "authorization-denied",
+      "missingCredentialStatus": 401,
+      "invalidCredentialStatus": 401
+    },
+    {
+      "operationId": "deleteWorkspace",
+      "method": "DELETE",
+      "pathTemplate": "/api/v1alpha1/workspaces/{workspaceId}",
+      "memberStatus": 409,
+      "memberOutcome": "authorization-allowed-lifecycle-denied",
+      "outsiderStatus": 403,
+      "outsiderOutcome": "authorization-denied",
+      "missingCredentialStatus": 401,
+      "invalidCredentialStatus": 401
+    },
+    {
+      "operationId": "replaceWorkspaceStatus",
+      "method": "PUT",
+      "pathTemplate": "/api/v1alpha1/workspaces/{workspaceId}/status",
+      "memberStatus": 403,
+      "memberOutcome": "service-reserved-deny",
+      "outsiderStatus": 403,
+      "outsiderOutcome": "service-reserved-deny",
+      "missingCredentialStatus": 401,
+      "invalidCredentialStatus": 401
+    },
+    {
+      "operationId": "getOperation",
+      "method": "GET",
+      "pathTemplate": "/api/v1alpha1/operations/{operationId}",
+      "memberStatus": 200,
+      "memberOutcome": "allowed",
+      "outsiderStatus": 403,
+      "outsiderOutcome": "authorization-denied",
+      "missingCredentialStatus": 401,
+      "invalidCredentialStatus": 401
+    }
+  ]
+}

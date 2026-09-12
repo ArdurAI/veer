@@ -1,0 +1,183 @@
+package security_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/ArdurAI/veer/internal/core/domain/resource"
+)
+
+const (
+	fuzzWorkspaceTarget        = "/__security_fixture_workspace__"
+	fuzzOperationTarget        = "/__security_fixture_operation__"
+	fuzzWorkspaceResourceMatch = "__security_fixture_resource_version__"
+)
+
+var retainedSecurityAuthenticationChallenges = map[string]string{
+	"req-fuzz-query-token":  `Bearer realm="veer", error="invalid_request"`,
+	"req-fuzz-missing-auth": `Bearer realm="veer"`,
+	"req-fuzz-invalid-auth": `Bearer realm="veer", error="invalid_token"`,
+}
+
+type securityFuzzSeed struct {
+	method, target, authorization, contentType, idempotencyKey, ifMatch, requestID string
+	body                                                                           []byte
+	expectedStatus                                                                 int
+}
+
+func FuzzReferencePublicBoundary(f *testing.F) {
+	seeds := []securityFuzzSeed{
+		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-list", nil, 0},
+		{"", "/api/v1alpha1/workspaces", "BeArer " + securityBearerCanary, "", "0", "0", "0", nil, http.StatusOK},
+		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", securityPolicyCanary, nil, 0},
+		{http.MethodGet, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-workspace", nil, http.StatusOK},
+		{http.MethodGet, fuzzOperationTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-operation", nil, http.StatusOK},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-replace-00001", fuzzWorkspaceResourceMatch, "req-fuzz-replace", validWorkspaceBody("replacement"), http.StatusAccepted},
+		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + url.QueryEscape(invalidBearerCanary), "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1alpha1/workspaces/%2e%2e", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-encoded-path", nil, http.StatusBadRequest},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-duplicate-0001", fuzzWorkspaceResourceMatch, "req-fuzz-duplicate", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusBadRequest},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-unknown-0001", fuzzWorkspaceResourceMatch, "req-fuzz-unknown", []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"x"},"spec":{"credential":"` + invalidBearerCanary + `"}}`), http.StatusBadRequest},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-trailing-0001", fuzzWorkspaceResourceMatch, "req-fuzz-trailing", []byte(`{} {}`), http.StatusBadRequest},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-unicode-0001", fuzzWorkspaceResourceMatch, "req-fuzz-unicode", []byte{'{', '"', 0xff, '"', ':', '0', '}'}, http.StatusBadRequest},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-depth-0000001", fuzzWorkspaceResourceMatch, "req-fuzz-depth", []byte(strings.Repeat("[", 65) + "0" + strings.Repeat("]", 65)), http.StatusBadRequest},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-webhook-0001", fuzzWorkspaceResourceMatch, "req-fuzz-webhook", []byte(`{"webhooks":{"escape":{"post":{"requestBody":{"$ref":"https://attacker.invalid/schema"}}}}}`), http.StatusBadRequest},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-oversized-0001", fuzzWorkspaceResourceMatch, "req-fuzz-oversized", bytes.Repeat([]byte{'x'}, resource.MaxCanonicalBytes+1), http.StatusRequestEntityTooLarge},
+		{http.MethodPut, fuzzWorkspaceTarget, "", "application/json", "fuzz-missing-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-missing-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + invalidBearerCanary, "application/json", "fuzz-invalid-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-invalid-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-stale-0000001", `"rv_security_stale_fuzz_0001"`, "req-fuzz-stale", validWorkspaceBody("replacement"), http.StatusPreconditionFailed},
+		{http.MethodDelete, "/api/v1alpha1/workspaces/wsp_0000000000000001", "Bearer " + invalidBearerCanary, "", "fuzz-delete-00001", `"rv_0000000000000001"`, "req-fuzz-delete", nil, 0},
+	}
+	for _, seed := range seeds {
+		f.Add(seed.method, seed.target, seed.authorization, seed.contentType, seed.idempotencyKey, seed.ifMatch, seed.requestID, seed.body)
+	}
+	successResponseLimits := loadSecuritySuccessResponseLimits(f)
+
+	f.Fuzz(func(
+		t *testing.T,
+		method, target, authorization, contentType, idempotencyKey, ifMatch, requestID string,
+		body []byte,
+	) {
+		if len(method) > 32 || len(target) > 4*1024 || len(authorization) > 16*1024 ||
+			len(contentType) > 512 || len(idempotencyKey) > 2*1024 || len(ifMatch) > 512 ||
+			len(requestID) > 512 || len(body) > 2*resource.MaxCanonicalBytes {
+			t.Skip()
+		}
+		retainedExpectedStatus := retainedSecurityFuzzExpectedStatus(
+			seeds, method, target, authorization, contentType, idempotencyKey, ifMatch, requestID, body,
+		)
+		fixture := newSecurityFixture(t)
+		authorizedFixtureTarget := method == http.MethodPut && target == fuzzWorkspaceTarget &&
+			authorization == "Bearer "+securityBearerCanary
+		authorizedFixtureMutation := authorizedFixtureTarget && ifMatch == fuzzWorkspaceResourceMatch
+		if target == fuzzWorkspaceTarget {
+			target = "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
+		}
+		if target == fuzzOperationTarget {
+			target = "/api/v1alpha1/operations/" + fixture.operationID.String()
+		}
+		if ifMatch == fuzzWorkspaceResourceMatch {
+			ifMatch = `"` + fixture.resourceVersion + `"`
+		}
+		request, err := http.NewRequestWithContext(context.Background(), method, target, bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		request.RequestURI = target
+		for name, value := range map[string]string{
+			"Authorization":   authorization,
+			"Content-Type":    contentType,
+			"Idempotency-Key": idempotencyKey,
+			"If-Match":        ifMatch,
+			"Veer-Request-Id": requestID,
+		} {
+			if value != "" {
+				request.Header.Set(name, value)
+			}
+		}
+		response := httptest.NewRecorder()
+		fixture.memberHandler.ServeHTTP(response, request)
+		responseRequestIDs := response.Header().Values("Veer-Request-Id")
+		if len(responseRequestIDs) != 1 || responseRequestIDs[0] == "" {
+			t.Fatalf("response request ID values = %q, want exactly one non-empty value", responseRequestIDs)
+		}
+		if requestID != "" && securityRequestIDPattern.MatchString(requestID) &&
+			responseRequestIDs[0] != requestID {
+			t.Fatalf(
+				"response request ID = %q, want echoed client value %q",
+				responseRequestIDs[0], requestID,
+			)
+		}
+		if authorizedFixtureMutation && response.Code == http.StatusForbidden {
+			t.Fatalf("authorized fixture mutation was denied before reaching admission: body=%s", response.Body.String())
+		}
+		if retainedExpectedStatus != 0 && response.Code != retainedExpectedStatus {
+			t.Fatalf(
+				"retained seed status = %d, want %d; body=%s",
+				response.Code, retainedExpectedStatus, response.Body.String(),
+			)
+		}
+		if response.Code == http.StatusUnauthorized {
+			expectedChallenge := ""
+			if retainedExpectedStatus == http.StatusUnauthorized {
+				var exists bool
+				expectedChallenge, exists = retainedSecurityAuthenticationChallenges[requestID]
+				if !exists {
+					t.Fatalf("retained 401 seed %q has no expected authentication challenge", requestID)
+				}
+			}
+			assertSecurityAuthenticationChallenge(t, response, expectedChallenge)
+		}
+
+		assertSingletonHeader(t, response, "Cache-Control", "no-store")
+		assertSingletonHeader(t, response, "X-Content-Type-Options", "nosniff")
+		switch {
+		case response.Code >= http.StatusOK && response.Code < http.StatusMultipleChoices:
+			assertSingletonHeader(t, response, "Content-Type", "application/json")
+			operationID := securityOperationIDForRequest(request.Method, request.URL.Path)
+			maximumBytes, exists := successResponseLimits[operationID]
+			if operationID == "" || !exists {
+				t.Fatalf("successful response has no matched OpenAPI operation limit: method=%q path=%q", request.Method, request.URL.Path)
+			}
+			if response.Body.Len() > maximumBytes || !json.Valid(response.Body.Bytes()) {
+				t.Fatalf(
+					"success response contract failed: operation=%s status=%d bytes=%d maximum=%d headers=%#v",
+					operationID, response.Code, response.Body.Len(), maximumBytes, response.Header(),
+				)
+			}
+			assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+			assertNoSuccessfulFixtureSecrets(t, response, fixture)
+		case response.Code >= http.StatusBadRequest && response.Code <= 599:
+			assertSecurityProblemContract(t, response)
+			if response.Code == http.StatusPreconditionFailed && authorizedFixtureTarget {
+				assertNoFixtureCanaryWithCurrentETag(t, response, fixture)
+			} else {
+				assertNoFixtureCanary(t, response, fixture)
+			}
+		default:
+			t.Fatalf("unexpected HTTP status %d", response.Code)
+		}
+		assertNoBearerCanary(t, response)
+	})
+}
+
+func retainedSecurityFuzzExpectedStatus(
+	seeds []securityFuzzSeed,
+	method, target, authorization, contentType, idempotencyKey, ifMatch, requestID string,
+	body []byte,
+) int {
+	for _, seed := range seeds {
+		if seed.expectedStatus != 0 && method == seed.method && target == seed.target &&
+			authorization == seed.authorization && contentType == seed.contentType &&
+			idempotencyKey == seed.idempotencyKey && ifMatch == seed.ifMatch && requestID == seed.requestID &&
+			bytes.Equal(body, seed.body) {
+			return seed.expectedStatus
+		}
+	}
+	return 0
+}
