@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ type securityFuzzSeed struct {
 func FuzzReferencePublicBoundary(f *testing.F) {
 	seeds := []securityFuzzSeed{
 		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-list", nil, 0},
-		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + invalidBearerCanary, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + url.QueryEscape(invalidBearerCanary), "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, http.StatusUnauthorized},
 		{http.MethodGet, "/api/v1alpha1/workspaces/%2e%2e", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-encoded-path", nil, http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-duplicate-0001", fuzzWorkspaceResourceMatch, "req-fuzz-duplicate", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-unknown-0001", fuzzWorkspaceResourceMatch, "req-fuzz-unknown", []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"x"},"spec":{"credential":"` + invalidBearerCanary + `"}}`), http.StatusBadRequest},
@@ -82,6 +83,13 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		}
 		response := httptest.NewRecorder()
 		fixture.memberHandler.ServeHTTP(response, request)
+		if requestID != "" && securityRequestIDPattern.MatchString(requestID) &&
+			response.Header().Get("Veer-Request-Id") != requestID {
+			t.Fatalf(
+				"response request ID = %q, want echoed client value %q",
+				response.Header().Get("Veer-Request-Id"), requestID,
+			)
+		}
 		if authorizedFixtureMutation && response.Code == http.StatusForbidden {
 			t.Fatalf("authorized fixture mutation was denied before reaching admission: body=%s", response.Body.String())
 		}

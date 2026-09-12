@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,8 +46,9 @@ const (
 )
 
 type securityProblemExpectation struct {
-	status int
-	title  string
+	status             int
+	title              string
+	requiresRetryAfter bool
 }
 
 var (
@@ -53,22 +56,26 @@ var (
 	securityRequestIDPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	securityFieldPathPattern    = regexp.MustCompile(`^(/([^~/]|~0|~1)*)+$`)
 	securityProblemExpectations = map[string]securityProblemExpectation{
-		"validation-failed":       {http.StatusBadRequest, "Request validation failed"},
-		"authentication-required": {http.StatusUnauthorized, "Authentication required"},
-		"authorization-denied":    {http.StatusForbidden, "Authorization denied"},
-		"not-found":               {http.StatusNotFound, "Resource not found"},
-		"method-not-allowed":      {http.StatusMethodNotAllowed, "Method not allowed"},
-		"idempotency-key-reused":  {http.StatusConflict, "Request conflicts with a prior mutation"},
-		"uniqueness-conflict":     {http.StatusConflict, "Resource uniqueness conflict"},
-		"lifecycle-conflict":      {http.StatusConflict, "Resource lifecycle conflict"},
-		"policy-conflict":         {http.StatusConflict, "Resource policy conflict"},
-		"precondition-failed":     {http.StatusPreconditionFailed, "Resource version is stale"},
-		"request-too-large":       {http.StatusRequestEntityTooLarge, "Request body is too large"},
-		"unsupported-media-type":  {http.StatusUnsupportedMediaType, "Unsupported request media type"},
-		"precondition-required":   {http.StatusPreconditionRequired, "Mutation precondition required"},
-		"rate-limited":            {http.StatusTooManyRequests, "Request rate limited"},
-		"internal-failure":        {http.StatusInternalServerError, "Internal failure"},
-		"unavailable":             {http.StatusServiceUnavailable, "Service temporarily unavailable"},
+		"validation-failed":       {status: http.StatusBadRequest, title: "Request validation failed"},
+		"authentication-required": {status: http.StatusUnauthorized, title: "Authentication required"},
+		"authorization-denied":    {status: http.StatusForbidden, title: "Authorization denied"},
+		"not-found":               {status: http.StatusNotFound, title: "Resource not found"},
+		"method-not-allowed":      {status: http.StatusMethodNotAllowed, title: "Method not allowed"},
+		"idempotency-key-reused":  {status: http.StatusConflict, title: "Request conflicts with a prior mutation"},
+		"uniqueness-conflict":     {status: http.StatusConflict, title: "Resource uniqueness conflict"},
+		"lifecycle-conflict":      {status: http.StatusConflict, title: "Resource lifecycle conflict"},
+		"policy-conflict":         {status: http.StatusConflict, title: "Resource policy conflict"},
+		"precondition-failed":     {status: http.StatusPreconditionFailed, title: "Resource version is stale"},
+		"request-too-large":       {status: http.StatusRequestEntityTooLarge, title: "Request body is too large"},
+		"unsupported-media-type":  {status: http.StatusUnsupportedMediaType, title: "Unsupported request media type"},
+		"precondition-required":   {status: http.StatusPreconditionRequired, title: "Mutation precondition required"},
+		"rate-limited": {
+			status: http.StatusTooManyRequests, title: "Request rate limited", requiresRetryAfter: true,
+		},
+		"internal-failure": {status: http.StatusInternalServerError, title: "Internal failure"},
+		"unavailable": {
+			status: http.StatusServiceUnavailable, title: "Service temporarily unavailable", requiresRetryAfter: true,
+		},
 	}
 )
 
@@ -154,7 +161,7 @@ type securityProblem struct {
 	Code              string                   `json:"code"`
 	RequestID         string                   `json:"requestId"`
 	Errors            []securityFieldViolation `json:"errors,omitempty"`
-	RetryAfterSeconds int                      `json:"retryAfterSeconds,omitempty"`
+	RetryAfterSeconds *int                     `json:"retryAfterSeconds,omitempty"`
 }
 
 func TestBearerCanariesAreNotRequestIDs(t *testing.T) {
@@ -165,6 +172,64 @@ func TestBearerCanariesAreNotRequestIDs(t *testing.T) {
 		if securityRequestIDPattern.MatchString(canary) {
 			t.Fatalf("bearer canary overlaps the request-ID grammar: %q", canary)
 		}
+	}
+}
+
+func TestSecurityProblemJSONRejectsDuplicateMembers(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "unique", body: `{"detail":"safe","errors":[{"field":"/spec","code":"invalid","message":"safe"}]}`},
+		{name: "duplicate top-level", body: `{"detail":"secret","detail":"safe"}`, wantErr: true},
+		{name: "escaped duplicate", body: `{"detail":"secret","\u0064etail":"safe"}`, wantErr: true},
+		{name: "duplicate nested", body: `{"errors":[{"message":"secret","message":"safe"}]}`, wantErr: true},
+		{name: "malformed", body: `{"detail":`, wantErr: true},
+		{name: "trailing value", body: `{} {}`, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateUniqueJSONMembers([]byte(test.body))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateUniqueJSONMembers() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestSecurityProblemRetryMetadata(t *testing.T) {
+	retry := func(value int) *int { return &value }
+	tests := []struct {
+		name    string
+		code    string
+		body    *int
+		headers []string
+		wantErr bool
+	}{
+		{name: "unavailable", code: "unavailable", body: retry(10), headers: []string{"10"}},
+		{name: "rate limited", code: "rate-limited", body: retry(5), headers: []string{"5"}},
+		{name: "missing body", code: "unavailable", headers: []string{"10"}, wantErr: true},
+		{name: "zero body", code: "unavailable", body: retry(0), headers: []string{"0"}, wantErr: true},
+		{name: "missing header", code: "unavailable", body: retry(10), wantErr: true},
+		{name: "duplicate header", code: "unavailable", body: retry(10), headers: []string{"10", "10"}, wantErr: true},
+		{name: "mismatched header", code: "unavailable", body: retry(10), headers: []string{"11"}, wantErr: true},
+		{name: "non-canonical header", code: "unavailable", body: retry(10), headers: []string{"010"}, wantErr: true},
+		{name: "ordinary problem", code: "validation-failed"},
+		{name: "unexpected body", code: "validation-failed", body: retry(1), wantErr: true},
+		{name: "unexpected header", code: "validation-failed", headers: []string{"1"}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateSecurityRetryAfter(
+				securityProblemExpectations[test.code],
+				securityProblem{RetryAfterSeconds: test.body},
+				test.headers,
+			)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateSecurityRetryAfter() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -517,9 +582,10 @@ func assertSecurityResponse(
 	if response.Code != status {
 		t.Fatalf("response status = %d, want %d; body=%s", response.Code, status, response.Body.String())
 	}
+	requestIDs := response.Header().Values("Veer-Request-Id")
 	if response.Header().Get("Cache-Control") != "no-store" ||
 		response.Header().Get("X-Content-Type-Options") != "nosniff" ||
-		response.Header().Get("Veer-Request-Id") == "" {
+		len(requestIDs) != 1 || requestIDs[0] == "" {
 		t.Fatalf("security headers = %#v", response.Header())
 	}
 	if !json.Valid(response.Body.Bytes()) {
@@ -546,9 +612,22 @@ func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fi
 	outputs := []string{response.Body.String()}
 	problemResponse := response.Header().Get("Content-Type") == "application/problem+json"
 	if problemResponse {
+		if err := validateUniqueJSONMembers(response.Body.Bytes()); err != nil {
+			t.Fatalf("validate problem for confidentiality scan: %v; body=%s", err, response.Body.String())
+		}
+		decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
+		decoder.DisallowUnknownFields()
 		var problem securityProblem
-		if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+		if err := decoder.Decode(&problem); err != nil {
 			t.Fatalf("decode problem for confidentiality scan: %v; body=%s", err, response.Body.String())
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			t.Fatalf("problem has trailing JSON during confidentiality scan: %v; body=%s", err, response.Body.String())
+		}
+		requestIDs := response.Header().Values("Veer-Request-Id")
+		if len(requestIDs) != 1 || problem.RequestID != requestIDs[0] ||
+			problem.Instance != "urn:veer:request:"+problem.RequestID {
+			t.Fatalf("problem correlation fields are not uniquely bound: body=%s headers=%#v", response.Body.String(), response.Header())
 		}
 		problem.RequestID = ""
 		problem.Instance = ""
@@ -647,6 +726,9 @@ func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseReco
 	if response.Body.Len() == 0 || response.Body.Len() > maximumSecurityProblemBytes {
 		t.Fatalf("problem body bytes = %d, want 1..%d", response.Body.Len(), maximumSecurityProblemBytes)
 	}
+	if err := validateUniqueJSONMembers(response.Body.Bytes()); err != nil {
+		t.Fatalf("runtime problem JSON members: %v; body=%s", err, response.Body.String())
+	}
 	decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
 	decoder.DisallowUnknownFields()
 	var problem securityProblem
@@ -666,7 +748,11 @@ func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseReco
 	if problem.Title != want.title {
 		t.Fatalf("runtime problem title = %q, want %q for code %q", problem.Title, want.title, problem.Code)
 	}
-	requestID := response.Header().Get("Veer-Request-Id")
+	requestIDs := response.Header().Values("Veer-Request-Id")
+	if len(requestIDs) != 1 {
+		t.Fatalf("Veer-Request-Id values = %q, want exactly one", requestIDs)
+	}
+	requestID := requestIDs[0]
 	if !securityRequestIDPattern.MatchString(problem.RequestID) || problem.RequestID != requestID ||
 		problem.Instance != "urn:veer:request:"+problem.RequestID ||
 		problem.Type != "urn:veer:problem:"+problem.Code {
@@ -692,10 +778,94 @@ func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseReco
 			t.Fatalf("runtime field violation bounds failed: %#v", violation)
 		}
 	}
-	if problem.RetryAfterSeconds < 0 || problem.RetryAfterSeconds > 86_400 {
-		t.Fatalf("runtime retryAfterSeconds = %d, want 0 or 1..86400", problem.RetryAfterSeconds)
+	if err := validateSecurityRetryAfter(want, problem, response.Header().Values("Retry-After")); err != nil {
+		t.Fatalf("runtime retry metadata: %v", err)
 	}
 	return problem
+}
+
+func validateSecurityRetryAfter(
+	want securityProblemExpectation,
+	problem securityProblem,
+	headers []string,
+) error {
+	if !want.requiresRetryAfter {
+		if problem.RetryAfterSeconds != nil || len(headers) != 0 {
+			return errors.New("non-retryable problem declared retry metadata")
+		}
+		return nil
+	}
+	if problem.RetryAfterSeconds == nil || *problem.RetryAfterSeconds < 1 || *problem.RetryAfterSeconds > 86_400 {
+		return errors.New("retryable problem requires retryAfterSeconds in 1..86400")
+	}
+	if len(headers) != 1 || headers[0] != strconv.Itoa(*problem.RetryAfterSeconds) {
+		return fmt.Errorf("Retry-After values %q do not match retryAfterSeconds %d", headers, *problem.RetryAfterSeconds)
+	}
+	return nil
+}
+
+func validateUniqueJSONMembers(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := scanUniqueJSONValue(decoder, 0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("JSON has a trailing value")
+	}
+	return nil
+}
+
+func scanUniqueJSONValue(decoder *json.Decoder, depth int) error {
+	if depth > 64 {
+		return errors.New("JSON nesting exceeds 64 levels")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, compound := token.(json.Delim)
+	if !compound {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("JSON object member name is not a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return fmt.Errorf("duplicate JSON member %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := scanUniqueJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim('}') {
+			return errors.New("JSON object is not closed")
+		}
+		return nil
+	case '[':
+		for decoder.More() {
+			if err := scanUniqueJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim(']') {
+			return errors.New("JSON array is not closed")
+		}
+		return nil
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
 }
 
 func safeSecurityProblemText(value string, maximum int, required bool) bool {

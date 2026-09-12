@@ -47,9 +47,11 @@ The public-boundary target sends malformed body seeds through the
 member-authorized Workspace replacement route so they reach admission parsing.
 It asserts panic freedom, bounded JSON responses, mandatory
 no-store/nosniff/correlation headers, and bearer-canary absence. Every runtime
-problem response must use a closed code/status/title tuple, bind its request ID and
-problem URNs, stay below 1,024 bytes, contain at most one field violation, and
-respect the field-path and text bounds. The OpenAPI validator independently
+problem response must use unique JSON members and a closed code/status/title
+tuple, bind its request ID and problem URNs, bind required retry body/header
+metadata, stay below 1,024 bytes, contain at most one field violation, and
+respect the field-path and text bounds. Valid client request IDs must be echoed
+exactly. The OpenAPI validator independently
 rejects remote servers, remote references, and webhook expansion. No provider
 response parser exists yet; provider-specific malicious-response corpora belong
 with the adapters introduced by issues #38 and #41.
