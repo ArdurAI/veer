@@ -112,6 +112,17 @@ func TestWorkspaceScopesFailClosedAndCannotCrossRead(t *testing.T) {
 	}); !errors.Is(err, isolation.ErrInvalidWorkspaceScope) || called {
 		t.Fatalf("zero-scope View() = %v / called %t", err, called)
 	}
+	wrongKindScope, err := isolation.NewWorkspaceScope(resource.ID("env_01JSTORE0000000000000000"))
+	if !errors.Is(err, isolation.ErrInvalidWorkspaceScope) {
+		t.Fatalf("NewWorkspaceScope(non-Workspace ID) error = %v", err)
+	}
+	called = false
+	if err := store.Update(context.Background(), wrongKindScope, func(ports.ReferenceTransaction) error {
+		called = true
+		return nil
+	}); !errors.Is(err, isolation.ErrInvalidWorkspaceScope) || called {
+		t.Fatalf("non-Workspace-scope Update() = %v / called %t", err, called)
+	}
 
 	for workspaceID, canonical := range map[resource.ID]string{
 		workspaceA: `{"workspace":"A"}`,

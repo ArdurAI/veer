@@ -15,13 +15,23 @@ var (
 func TestWorkspaceScopeRejectsMissingAndMalformedIDs(t *testing.T) {
 	t.Parallel()
 
-	for _, workspaceID := range []resource.ID{"", "production", "this is a mutable display name"} {
+	for _, workspaceID := range []resource.ID{
+		"",
+		"production",
+		"this is a mutable display name",
+		"env_01JISOLATION000000000000A",
+	} {
 		if _, err := NewWorkspaceScope(workspaceID); !errors.Is(err, ErrInvalidWorkspaceScope) {
 			t.Fatalf("NewWorkspaceScope(%q) error = %v, want ErrInvalidWorkspaceScope", workspaceID, err)
 		}
 	}
 	if err := ValidateWorkspaceScope(WorkspaceScope{}); !errors.Is(err, ErrInvalidWorkspaceScope) {
 		t.Fatalf("ValidateWorkspaceScope(zero) error = %v", err)
+	}
+	if err := ValidateWorkspaceScope(WorkspaceScope{
+		workspaceID: "env_01JISOLATION000000000000A",
+	}); !errors.Is(err, ErrInvalidWorkspaceScope) {
+		t.Fatalf("ValidateWorkspaceScope(non-Workspace ID) error = %v", err)
 	}
 }
 

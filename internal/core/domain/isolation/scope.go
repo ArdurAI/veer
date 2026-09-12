@@ -6,12 +6,15 @@ package isolation
 import (
 	"errors"
 	"sort"
+	"strings"
 
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
 // MaxWorkspaceScopes bounds one explicit multi-Workspace read.
 const MaxWorkspaceScopes = 4_096
+
+const workspaceIDPrefix = "wsp_"
 
 // ErrInvalidWorkspaceScope marks a missing, malformed, duplicate, or otherwise
 // non-canonical Workspace scope.
@@ -24,7 +27,7 @@ type WorkspaceScope struct{ workspaceID resource.ID }
 // NewWorkspaceScope validates one already-issued stable Workspace ID.
 func NewWorkspaceScope(workspaceID resource.ID) (WorkspaceScope, error) {
 	parsed, err := resource.ParseID(workspaceID.String())
-	if err != nil {
+	if err != nil || !strings.HasPrefix(parsed.String(), workspaceIDPrefix) {
 		return WorkspaceScope{}, ErrInvalidWorkspaceScope
 	}
 	return WorkspaceScope{workspaceID: parsed}, nil
@@ -33,7 +36,7 @@ func NewWorkspaceScope(workspaceID resource.ID) (WorkspaceScope, error) {
 // ValidateWorkspaceScope checks a scope received across a package boundary.
 func ValidateWorkspaceScope(scope WorkspaceScope) error {
 	parsed, err := resource.ParseID(scope.workspaceID.String())
-	if err != nil || parsed != scope.workspaceID {
+	if err != nil || parsed != scope.workspaceID || !strings.HasPrefix(parsed.String(), workspaceIDPrefix) {
 		return ErrInvalidWorkspaceScope
 	}
 	return nil
