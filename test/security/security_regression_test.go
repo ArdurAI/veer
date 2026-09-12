@@ -38,31 +38,37 @@ const (
 	securityPolicyCanary         = "security-policy-confidential-canary"
 	securityMemberCanary         = "mem_security_confidential_0001"
 	securityIdentityCanary       = "security-identity-confidential-canary"
+	securityStaleVersionCanary   = "rv_security_stale_0001"
 	maximumSecurityProblemBytes  = 1_024
 	maximumSecurityFieldPathSize = 96
 )
 
+type securityProblemExpectation struct {
+	status int
+	title  string
+}
+
 var (
-	securityProblemCodePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	securityRequestIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	securityFieldPathPattern   = regexp.MustCompile(`^(/([^~/]|~0|~1)*)+$`)
-	securityProblemStatuses    = map[string]int{
-		"validation-failed":       http.StatusBadRequest,
-		"authentication-required": http.StatusUnauthorized,
-		"authorization-denied":    http.StatusForbidden,
-		"not-found":               http.StatusNotFound,
-		"method-not-allowed":      http.StatusMethodNotAllowed,
-		"idempotency-key-reused":  http.StatusConflict,
-		"uniqueness-conflict":     http.StatusConflict,
-		"lifecycle-conflict":      http.StatusConflict,
-		"policy-conflict":         http.StatusConflict,
-		"precondition-failed":     http.StatusPreconditionFailed,
-		"request-too-large":       http.StatusRequestEntityTooLarge,
-		"unsupported-media-type":  http.StatusUnsupportedMediaType,
-		"precondition-required":   http.StatusPreconditionRequired,
-		"rate-limited":            http.StatusTooManyRequests,
-		"internal-failure":        http.StatusInternalServerError,
-		"unavailable":             http.StatusServiceUnavailable,
+	securityProblemCodePattern  = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	securityRequestIDPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	securityFieldPathPattern    = regexp.MustCompile(`^(/([^~/]|~0|~1)*)+$`)
+	securityProblemExpectations = map[string]securityProblemExpectation{
+		"validation-failed":       {http.StatusBadRequest, "Request validation failed"},
+		"authentication-required": {http.StatusUnauthorized, "Authentication required"},
+		"authorization-denied":    {http.StatusForbidden, "Authorization denied"},
+		"not-found":               {http.StatusNotFound, "Resource not found"},
+		"method-not-allowed":      {http.StatusMethodNotAllowed, "Method not allowed"},
+		"idempotency-key-reused":  {http.StatusConflict, "Request conflicts with a prior mutation"},
+		"uniqueness-conflict":     {http.StatusConflict, "Resource uniqueness conflict"},
+		"lifecycle-conflict":      {http.StatusConflict, "Resource lifecycle conflict"},
+		"policy-conflict":         {http.StatusConflict, "Resource policy conflict"},
+		"precondition-failed":     {http.StatusPreconditionFailed, "Resource version is stale"},
+		"request-too-large":       {http.StatusRequestEntityTooLarge, "Request body is too large"},
+		"unsupported-media-type":  {http.StatusUnsupportedMediaType, "Unsupported request media type"},
+		"precondition-required":   {http.StatusPreconditionRequired, "Mutation precondition required"},
+		"rate-limited":            {http.StatusTooManyRequests, "Request rate limited"},
+		"internal-failure":        {http.StatusInternalServerError, "Internal failure"},
+		"unavailable":             {http.StatusServiceUnavailable, "Service temporarily unavailable"},
 	}
 )
 
@@ -80,6 +86,7 @@ type securityRoute struct {
 	outsiderOutcome     string
 	outsiderProblemCode string
 	allRolesDenied      bool
+	staleOutsiderCheck  bool
 	assertMemberBody    func(*testing.T, securityFixture, *httptest.ResponseRecorder)
 	assertOutsiderBody  func(*testing.T, securityFixture, *httptest.ResponseRecorder)
 }
@@ -188,6 +195,24 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 			if route.assertOutsiderBody != nil {
 				route.assertOutsiderBody(t, fixture, outsider)
 			}
+			if route.staleOutsiderCheck {
+				t.Run("outsider-stale-precondition", func(t *testing.T) {
+					staleFixture := newSecurityFixture(t)
+					denied := securityRequestWithHeaderOverrides(
+						t,
+						staleFixture.outsiderHandler,
+						route,
+						staleFixture,
+						securityBearerCanary,
+						map[string]string{
+							"If-Match":        `"` + securityStaleVersionCanary + `"`,
+							"Veer-Request-Id": securityResourceCanary,
+						},
+					)
+					assertSecurityResponse(t, denied, http.StatusForbidden, "authorization-denied")
+					assertNoFixtureCanary(t, denied, staleFixture)
+				})
+			}
 
 			fixture = newSecurityFixture(t)
 			missing := securityRequest(t, fixture.memberHandler, route, fixture, "")
@@ -277,6 +302,7 @@ func publicSecurityRoutes() []securityRoute {
 			headers:      mutationHeaders,
 			memberStatus: http.StatusAccepted, memberOutcome: "allowed",
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
+			staleOutsiderCheck: true,
 		},
 		{
 			operationID: "deleteWorkspace", method: http.MethodDelete,
@@ -284,6 +310,7 @@ func publicSecurityRoutes() []securityRoute {
 			headers:      mutationHeaders,
 			memberStatus: http.StatusConflict, memberOutcome: "authorization-allowed-lifecycle-denied", memberProblemCode: "lifecycle-conflict",
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
+			staleOutsiderCheck: true,
 		},
 		{
 			operationID: "replaceWorkspaceStatus", method: http.MethodPut,
@@ -447,6 +474,18 @@ func securityRequest(
 	token string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
+	return securityRequestWithHeaderOverrides(t, handler, route, fixture, token, nil)
+}
+
+func securityRequestWithHeaderOverrides(
+	t testing.TB,
+	handler http.Handler,
+	route securityRoute,
+	fixture securityFixture,
+	token string,
+	overrides map[string]string,
+) *httptest.ResponseRecorder {
+	t.Helper()
 	var body []byte
 	if route.body != nil {
 		body = route.body(fixture)
@@ -459,6 +498,9 @@ func securityRequest(
 		for name, value := range route.headers(fixture) {
 			request.Header.Set(name, value)
 		}
+	}
+	for name, value := range overrides {
+		request.Header.Set(name, value)
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -501,14 +543,37 @@ func assertNoBearerCanary(t testing.TB, response *httptest.ResponseRecorder) {
 
 func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
 	t.Helper()
-	assertNoResponseCanary(
+	outputs := []string{response.Body.String()}
+	problemResponse := response.Header().Get("Content-Type") == "application/problem+json"
+	if problemResponse {
+		var problem securityProblem
+		if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+			t.Fatalf("decode problem for confidentiality scan: %v; body=%s", err, response.Body.String())
+		}
+		problem.RequestID = ""
+		problem.Instance = ""
+		encoded, err := json.Marshal(problem)
+		if err != nil {
+			t.Fatalf("encode problem for confidentiality scan: %v", err)
+		}
+		outputs[0] = string(encoded)
+	}
+	for name, values := range response.Header() {
+		if problemResponse && strings.EqualFold(name, "Veer-Request-Id") {
+			continue
+		}
+		outputs = append(outputs, values...)
+	}
+	assertOutputsDoNotContainCanaries(
 		t,
-		response,
+		outputs,
 		securityResourceCanary,
 		securityPolicyCanary,
 		securityMemberCanary,
 		securityIdentityCanary,
+		securityStaleVersionCanary,
 		fixture.workspaceID.String(),
+		fixture.resourceVersion,
 		fixture.operationID.String(),
 		fixture.policyID.String(),
 		fixture.memberID.String(),
@@ -521,6 +586,11 @@ func assertNoResponseCanary(t testing.TB, response *httptest.ResponseRecorder, c
 	for _, values := range response.Header() {
 		outputs = append(outputs, values...)
 	}
+	assertOutputsDoNotContainCanaries(t, outputs, canaries...)
+}
+
+func assertOutputsDoNotContainCanaries(t testing.TB, outputs []string, canaries ...string) {
+	t.Helper()
 	for _, output := range outputs {
 		for _, canary := range canaries {
 			if canary != "" && strings.Contains(output, canary) {
@@ -586,12 +656,15 @@ func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseReco
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		t.Fatalf("runtime problem has trailing JSON: %v; body=%s", err, response.Body.String())
 	}
-	wantStatus, codeKnown := securityProblemStatuses[problem.Code]
-	if !codeKnown || wantStatus != response.Code || problem.Status != response.Code {
+	want, codeKnown := securityProblemExpectations[problem.Code]
+	if !codeKnown || want.status != response.Code || problem.Status != response.Code {
 		t.Fatalf(
 			"runtime problem code/status = %q/%d/%d, want a closed code for HTTP %d",
-			problem.Code, problem.Status, wantStatus, response.Code,
+			problem.Code, problem.Status, want.status, response.Code,
 		)
+	}
+	if problem.Title != want.title {
+		t.Fatalf("runtime problem title = %q, want %q for code %q", problem.Title, want.title, problem.Code)
 	}
 	requestID := response.Header().Get("Veer-Request-Id")
 	if !securityRequestIDPattern.MatchString(problem.RequestID) || problem.RequestID != requestID ||

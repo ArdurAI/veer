@@ -47,7 +47,7 @@ The public-boundary target sends malformed body seeds through the
 member-authorized Workspace replacement route so they reach admission parsing.
 It asserts panic freedom, bounded JSON responses, mandatory
 no-store/nosniff/correlation headers, and bearer-canary absence. Every runtime
-problem response must use a closed code/status pair, bind its request ID and
+problem response must use a closed code/status/title tuple, bind its request ID and
 problem URNs, stay below 1,024 bytes, contain at most one field violation, and
 respect the field-path and text bounds. The OpenAPI validator independently
 rejects remote servers, remote references, and webhook expansion. No provider
@@ -68,7 +68,7 @@ go test ./test/security -run '^$' -fuzz '^FuzzReferencePublicBoundary$' -fuzztim
 | Credential state | `TestCredentialValuesRedactAndRejectSerialization`, `FuzzSourceMaterialSafety`, and broker lease/lifecycle tests cover source/session material, requests, brokers, leases, rotation, errors, and destruction | Raw material remains callback-bounded; diagnostics redact; serialization rejected |
 | Identity and bearer state | Identity diagnostic/serialization tests, bearer canary tests, OIDC negative corpus, and the route matrix cover principals, request carriers, challenges, problems, and headers | Raw token and identity claims absent from output; rejected request carriers scrubbed |
 | Audit and privileged state | `TestOpaqueRuntimeValuesForbidLossyGenericSerialization` and `TestAdministrationDiagnosticsAndSerializationAreSafe` cover audit/elevation values, nested containers, errors, formatting, and `slog` | Canaries absent; opaque runtime values reject lossy serialization |
-| HTTP errors | Route matrix and `FuzzReferencePublicBoundary` exercise every public route plus malformed/bounded input | Only closed problem codes and bounded field paths are returned; bearer, workspace, Policy, Member, operation, and identity canaries are absent from denied responses; retained negative seeds must preserve their exact rejection status |
+| HTTP errors | Route matrix and `FuzzReferencePublicBoundary` exercise every public route plus malformed/bounded input | Only closed problem code/status/title tuples and bounded field paths are returned; bearer, workspace, Policy, Member, operation, resource-version, and identity canaries are absent from denied responses outside the required request-ID correlation fields; retained negative seeds must preserve their exact rejection status |
 | Logs | Package redaction tests send every sensitive value through `fmt` and `slog` | Canaries absent from implemented logging surfaces |
 | Traces | No tracer or trace exporter exists | Not applicable at this revision; issue #63 must add canaries with the first implementation |
 | Metrics | No metrics registry or exporter exists | Not applicable at this revision; issue #63 must add label/value canaries and cardinality bounds |

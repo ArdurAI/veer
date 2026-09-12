@@ -27,8 +27,8 @@ type securityFuzzSeed struct {
 func FuzzReferencePublicBoundary(f *testing.F) {
 	seeds := []securityFuzzSeed{
 		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-list", nil, 0},
-		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + invalidBearerCanary, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, 0},
-		{http.MethodGet, "/api/v1alpha1/workspaces/%2e%2e", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-encoded-path", nil, 0},
+		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + invalidBearerCanary, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1alpha1/workspaces/%2e%2e", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-encoded-path", nil, http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-duplicate-0001", fuzzWorkspaceResourceMatch, "req-fuzz-duplicate", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-unknown-0001", fuzzWorkspaceResourceMatch, "req-fuzz-unknown", []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"x"},"spec":{"credential":"` + invalidBearerCanary + `"}}`), http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-trailing-0001", fuzzWorkspaceResourceMatch, "req-fuzz-trailing", []byte(`{} {}`), http.StatusBadRequest},
