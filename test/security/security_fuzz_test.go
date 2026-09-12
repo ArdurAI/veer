@@ -34,6 +34,7 @@ type securityFuzzSeed struct {
 func FuzzReferencePublicBoundary(f *testing.F) {
 	seeds := []securityFuzzSeed{
 		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-list", nil, 0},
+		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", securityPolicyCanary, nil, 0},
 		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + url.QueryEscape(invalidBearerCanary), "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, http.StatusUnauthorized},
 		{http.MethodGet, "/api/v1alpha1/workspaces/%2e%2e", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-encoded-path", nil, http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-duplicate-0001", fuzzWorkspaceResourceMatch, "req-fuzz-duplicate", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusBadRequest},
@@ -45,6 +46,7 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-oversized-0001", fuzzWorkspaceResourceMatch, "req-fuzz-oversized", bytes.Repeat([]byte{'x'}, resource.MaxCanonicalBytes+1), http.StatusRequestEntityTooLarge},
 		{http.MethodPut, fuzzWorkspaceTarget, "", "application/json", "fuzz-missing-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-missing-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + invalidBearerCanary, "application/json", "fuzz-invalid-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-invalid-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-stale-0000001", `"rv_security_stale_fuzz_0001"`, "req-fuzz-stale", validWorkspaceBody("replacement"), http.StatusPreconditionFailed},
 		{http.MethodDelete, "/api/v1alpha1/workspaces/wsp_0000000000000001", "Bearer " + invalidBearerCanary, "", "fuzz-delete-00001", `"rv_0000000000000001"`, "req-fuzz-delete", nil, 0},
 	}
 	for _, seed := range seeds {
@@ -65,8 +67,9 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 			seeds, method, target, authorization, contentType, idempotencyKey, ifMatch, requestID, body,
 		)
 		fixture := newSecurityFixture(t)
-		authorizedFixtureMutation := method == http.MethodPut && target == fuzzWorkspaceTarget &&
-			authorization == "Bearer "+securityBearerCanary && ifMatch == fuzzWorkspaceResourceMatch
+		authorizedFixtureTarget := method == http.MethodPut && target == fuzzWorkspaceTarget &&
+			authorization == "Bearer "+securityBearerCanary
+		authorizedFixtureMutation := authorizedFixtureTarget && ifMatch == fuzzWorkspaceResourceMatch
 		if target == fuzzWorkspaceTarget {
 			target = "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
 		}
@@ -131,11 +134,15 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 			if response.Body.Len() > reference.MaxPageBytes || !json.Valid(response.Body.Bytes()) {
 				t.Fatalf("success response contract failed: status=%d bytes=%d headers=%#v", response.Code, response.Body.Len(), response.Header())
 			}
-			assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+			assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			assertNoSuccessfulFixtureSecrets(t, response, fixture)
 		case response.Code >= http.StatusBadRequest && response.Code <= 599:
 			assertSecurityProblemContract(t, response)
-			assertNoFixtureCanary(t, response, fixture)
+			if response.Code == http.StatusPreconditionFailed && authorizedFixtureTarget {
+				assertNoFixtureCanaryWithCurrentETag(t, response, fixture)
+			} else {
+				assertNoFixtureCanary(t, response, fixture)
+			}
 		default:
 			t.Fatalf("unexpected HTTP status %d", response.Code)
 		}

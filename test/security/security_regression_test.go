@@ -111,6 +111,13 @@ type securityFixture struct {
 	memberID            resource.ID
 }
 
+type securityRuntimeSnapshot struct {
+	workspaceList string
+	workspace     string
+	workspaceETag string
+	operations    string
+}
+
 type securityAccess struct {
 	principal identity.Principal
 }
@@ -272,7 +279,9 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 		route := route
 		t.Run(route.operationID, func(t *testing.T) {
 			fixture := newSecurityFixture(t)
-			member := securityRequest(t, fixture.memberHandler, route, fixture, securityBearerCanary)
+			member := securityRequestWithStateInvariant(t, fixture, route, route.memberStatus, func() *httptest.ResponseRecorder {
+				return securityRequest(t, fixture.memberHandler, route, fixture, securityBearerCanary)
+			})
 			assertSecurityResponse(t, member, route.memberStatus, route.memberProblemCode)
 			if route.memberStatus >= http.StatusBadRequest {
 				assertNoFixtureCanary(t, member, fixture)
@@ -284,7 +293,9 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 			}
 
 			fixture = newSecurityFixture(t)
-			outsider := securityRequest(t, fixture.outsiderHandler, route, fixture, securityBearerCanary)
+			outsider := securityRequestWithStateInvariant(t, fixture, route, route.outsiderStatus, func() *httptest.ResponseRecorder {
+				return securityRequest(t, fixture.outsiderHandler, route, fixture, securityBearerCanary)
+			})
 			assertSecurityResponse(t, outsider, route.outsiderStatus, route.outsiderProblemCode)
 			if route.outsiderStatus >= http.StatusBadRequest {
 				assertNoFixtureCanary(t, outsider, fixture)
@@ -297,29 +308,35 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 			if route.staleOutsiderCheck {
 				t.Run("outsider-stale-precondition", func(t *testing.T) {
 					staleFixture := newSecurityFixture(t)
-					denied := securityRequestWithHeaderOverrides(
-						t,
-						staleFixture.outsiderHandler,
-						route,
-						staleFixture,
-						securityBearerCanary,
-						map[string]string{
-							"If-Match":        `"` + securityStaleVersionCanary + `"`,
-							"Veer-Request-Id": securityResourceCanary,
-						},
-					)
+					denied := securityRequestWithStateInvariant(t, staleFixture, route, http.StatusForbidden, func() *httptest.ResponseRecorder {
+						return securityRequestWithHeaderOverrides(
+							t,
+							staleFixture.outsiderHandler,
+							route,
+							staleFixture,
+							securityBearerCanary,
+							map[string]string{
+								"If-Match":        `"` + securityStaleVersionCanary + `"`,
+								"Veer-Request-Id": securityResourceCanary,
+							},
+						)
+					})
 					assertSecurityResponse(t, denied, http.StatusForbidden, "authorization-denied")
 					assertNoFixtureCanary(t, denied, staleFixture)
 				})
 			}
 
 			fixture = newSecurityFixture(t)
-			missing := securityRequest(t, fixture.memberHandler, route, fixture, "")
+			missing := securityRequestWithStateInvariant(t, fixture, route, http.StatusUnauthorized, func() *httptest.ResponseRecorder {
+				return securityRequest(t, fixture.memberHandler, route, fixture, "")
+			})
 			assertAuthenticationDenial(t, missing, `Bearer realm="veer"`)
 			assertNoFixtureCanary(t, missing, fixture)
 
 			fixture = newSecurityFixture(t)
-			invalid := securityRequest(t, fixture.memberHandler, route, fixture, invalidBearerCanary)
+			invalid := securityRequestWithStateInvariant(t, fixture, route, http.StatusUnauthorized, func() *httptest.ResponseRecorder {
+				return securityRequest(t, fixture.memberHandler, route, fixture, invalidBearerCanary)
+			})
 			assertAuthenticationDenial(t, invalid, `Bearer realm="veer", error="invalid_token"`)
 			assertNoFixtureCanary(t, invalid, fixture)
 
@@ -328,7 +345,9 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 					role := role
 					t.Run("reserved-"+role.String(), func(t *testing.T) {
 						roleFixture := newSecurityFixtureForRole(t, role)
-						denied := securityRequest(t, roleFixture.memberHandler, route, roleFixture, securityBearerCanary)
+						denied := securityRequestWithStateInvariant(t, roleFixture, route, http.StatusForbidden, func() *httptest.ResponseRecorder {
+							return securityRequest(t, roleFixture.memberHandler, route, roleFixture, securityBearerCanary)
+						})
 						assertSecurityResponse(t, denied, http.StatusForbidden, "authorization-denied")
 						assertNoFixtureCanary(t, denied, roleFixture)
 					})
@@ -342,7 +361,9 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 					role := role
 					t.Run("administrator-only-"+role.String(), func(t *testing.T) {
 						roleFixture := newSecurityFixtureForRole(t, role)
-						denied := securityRequest(t, roleFixture.memberHandler, route, roleFixture, securityBearerCanary)
+						denied := securityRequestWithStateInvariant(t, roleFixture, route, http.StatusForbidden, func() *httptest.ResponseRecorder {
+							return securityRequest(t, roleFixture.memberHandler, route, roleFixture, securityBearerCanary)
+						})
 						assertSecurityResponse(t, denied, http.StatusForbidden, "authorization-denied")
 						assertNoFixtureCanary(t, denied, roleFixture)
 					})
@@ -359,6 +380,32 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 	}
 
 	writeOrCompareSecurityMatrix(t, results)
+}
+
+func TestCrossPrincipalMutationReplayDenied(t *testing.T) {
+	fixture := newSecurityFixture(t)
+	var route securityRoute
+	for _, candidate := range publicSecurityRoutes() {
+		if candidate.operationID == "replaceWorkspace" {
+			route = candidate
+			break
+		}
+	}
+	if route.operationID == "" {
+		t.Fatal("replaceWorkspace security route is missing")
+	}
+
+	member := securityRequest(t, fixture.memberHandler, route, fixture, securityBearerCanary)
+	assertSecurityResponse(t, member, http.StatusAccepted, "")
+	receipt := assertMutationReceipt(t, member, fixture.workspaceID)
+	assertNoSuccessfulFixtureSecrets(t, member, fixture)
+
+	before := observeSecurityRuntimeState(t, fixture, fixture.operationID, receipt.OperationID)
+	outsider := securityRequest(t, fixture.outsiderHandler, route, fixture, securityBearerCanary)
+	assertSecurityResponse(t, outsider, http.StatusForbidden, "authorization-denied")
+	assertNoFixtureCanary(t, outsider, fixture)
+	after := observeSecurityRuntimeState(t, fixture, fixture.operationID, receipt.OperationID)
+	assertSecurityRuntimeStateUnchanged(t, before, after)
 }
 
 func publicSecurityRoutes() []securityRoute {
@@ -381,7 +428,7 @@ func publicSecurityRoutes() []securityRoute {
 			outsiderStatus: http.StatusOK, outsiderOutcome: "denied-rows-filtered-before-pagination",
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertWorkspacePage(t, response, fixture.workspaceID, securityOutsiderCanary)
-				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+				assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 			assertOutsiderBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertWorkspacePage(t, response, fixture.outsiderWorkspaceID, securityResourceCanary)
@@ -410,7 +457,7 @@ func publicSecurityRoutes() []securityRoute {
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertWorkspaceObject(t, response, fixture.workspaceID)
-				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+				assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 		},
 		{
@@ -424,7 +471,7 @@ func publicSecurityRoutes() []securityRoute {
 			staleOutsiderCheck: true,
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertMutationReceipt(t, response, fixture.workspaceID)
-				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+				assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 		},
 		{
@@ -458,7 +505,7 @@ func publicSecurityRoutes() []securityRoute {
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertOperationObject(t, response, fixture.operationID, fixture.workspaceID, fixture.workspaceID)
-				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+				assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 		},
 	}
@@ -635,6 +682,69 @@ func securityRequestWithHeaderOverrides(
 	return response
 }
 
+func securityRequestWithStateInvariant(
+	t testing.TB,
+	fixture securityFixture,
+	route securityRoute,
+	expectedStatus int,
+	request func() *httptest.ResponseRecorder,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	if route.method == http.MethodGet || expectedStatus < http.StatusBadRequest {
+		return request()
+	}
+	before := observeSecurityRuntimeState(t, fixture, fixture.operationID)
+	response := request()
+	after := observeSecurityRuntimeState(t, fixture, fixture.operationID)
+	assertSecurityRuntimeStateUnchanged(t, before, after)
+	return response
+}
+
+func observeSecurityRuntimeState(
+	t testing.TB,
+	fixture securityFixture,
+	operationIDs ...resource.ID,
+) securityRuntimeSnapshot {
+	t.Helper()
+	get := func(target string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer "+securityBearerCanary)
+		response := httptest.NewRecorder()
+		fixture.memberHandler.ServeHTTP(response, request)
+		assertSecurityResponse(t, response, http.StatusOK, "")
+		return response
+	}
+
+	list := get("/api/v1alpha1/workspaces")
+	workspace := get("/api/v1alpha1/workspaces/" + fixture.workspaceID.String())
+	var operations strings.Builder
+	for _, operationID := range operationIDs {
+		operationResponse := get("/api/v1alpha1/operations/" + operationID.String())
+		fmt.Fprintf(&operations, "%s\x00%s\x00%q\n", operationID, operationResponse.Body.String(), operationResponse.Header().Values("ETag"))
+	}
+	return securityRuntimeSnapshot{
+		workspaceList: list.Body.String(),
+		workspace:     workspace.Body.String(),
+		workspaceETag: fmt.Sprintf("%q", workspace.Header().Values("ETag")),
+		operations:    operations.String(),
+	}
+}
+
+func assertSecurityRuntimeStateUnchanged(
+	t testing.TB,
+	before, after securityRuntimeSnapshot,
+) {
+	t.Helper()
+	switch {
+	case before.workspaceList != after.workspaceList:
+		t.Fatal("denied mutation changed the authorized workspace list")
+	case before.workspace != after.workspace || before.workspaceETag != after.workspaceETag:
+		t.Fatal("denied mutation changed the canonical workspace or resource version")
+	case before.operations != after.operations:
+		t.Fatal("denied mutation changed observed operation state")
+	}
+}
+
 func assertSecurityResponse(
 	t testing.TB,
 	response *httptest.ResponseRecorder,
@@ -648,8 +758,8 @@ func assertSecurityResponse(
 	assertSingletonHeader(t, response, "Cache-Control", "no-store")
 	assertSingletonHeader(t, response, "X-Content-Type-Options", "nosniff")
 	requestIDs := response.Header().Values("Veer-Request-Id")
-	if len(requestIDs) != 1 || requestIDs[0] == "" {
-		t.Fatalf("Veer-Request-Id values = %q, want exactly one non-empty value", requestIDs)
+	if len(requestIDs) != 1 || !securityRequestIDPattern.MatchString(requestIDs[0]) {
+		t.Fatalf("Veer-Request-Id values = %q, want exactly one canonical value", requestIDs)
 	}
 	if !json.Valid(response.Body.Bytes()) {
 		t.Fatalf("response is not JSON: %q", response.Body.Bytes())
@@ -672,7 +782,7 @@ func assertNoBearerCanary(t testing.TB, response *httptest.ResponseRecorder) {
 
 func assertNoMemberFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
 	t.Helper()
-	assertNoResponseCanary(
+	assertNoSuccessfulResponseCanary(
 		t,
 		response,
 		securityResourceCanary,
@@ -690,7 +800,7 @@ func assertNoMemberFixtureCanary(t testing.TB, response *httptest.ResponseRecord
 
 func assertNoSuccessfulFixtureSecrets(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
 	t.Helper()
-	assertNoResponseCanary(
+	assertNoSuccessfulResponseCanary(
 		t,
 		response,
 		securityPolicyCanary,
@@ -703,6 +813,29 @@ func assertNoSuccessfulFixtureSecrets(t testing.TB, response *httptest.ResponseR
 }
 
 func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
+	assertNoFixtureCanaryExceptHeaders(t, response, fixture, nil)
+}
+
+func assertNoFixtureCanaryWithCurrentETag(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	fixture securityFixture,
+) {
+	t.Helper()
+	assertNoFixtureCanaryExceptHeaders(
+		t,
+		response,
+		fixture,
+		map[string]string{http.CanonicalHeaderKey("ETag"): `"` + fixture.resourceVersion + `"`},
+	)
+}
+
+func assertNoFixtureCanaryExceptHeaders(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	fixture securityFixture,
+	allowedHeaders map[string]string,
+) {
 	t.Helper()
 	outputs := []string{response.Body.String()}
 	problemResponse := response.Header().Get("Content-Type") == "application/problem+json"
@@ -736,6 +869,12 @@ func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fi
 		if problemResponse && strings.EqualFold(name, "Veer-Request-Id") {
 			continue
 		}
+		if want, allowed := allowedHeaders[http.CanonicalHeaderKey(name)]; allowed {
+			if len(values) != 1 || values[0] != want {
+				t.Fatalf("%s values = %q, want exactly one allowed value %q", name, values, want)
+			}
+			continue
+		}
 		outputs = append(outputs, values...)
 	}
 	assertOutputsDoNotContainCanaries(
@@ -754,6 +893,26 @@ func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fi
 		fixture.policyID.String(),
 		fixture.memberID.String(),
 	)
+}
+
+func assertNoSuccessfulResponseCanary(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	canaries ...string,
+) {
+	t.Helper()
+	requestIDs := response.Header().Values("Veer-Request-Id")
+	if len(requestIDs) != 1 || !securityRequestIDPattern.MatchString(requestIDs[0]) {
+		t.Fatalf("Veer-Request-Id values = %q, want exactly one canonical value", requestIDs)
+	}
+	outputs := []string{response.Body.String()}
+	for name, values := range response.Header() {
+		if strings.EqualFold(name, "Veer-Request-Id") {
+			continue
+		}
+		outputs = append(outputs, values...)
+	}
+	assertOutputsDoNotContainCanaries(t, outputs, canaries...)
 }
 
 func assertNoResponseCanary(t testing.TB, response *httptest.ResponseRecorder, canaries ...string) {
@@ -846,7 +1005,7 @@ func assertWorkspacePage(
 			len(page.Items), firstID, page.NextPageToken, wantID, response.Body.String(),
 		)
 	}
-	assertNoResponseCanary(t, response, forbiddenCanary)
+	assertNoSuccessfulResponseCanary(t, response, forbiddenCanary)
 }
 
 func assertWorkspaceObject(t testing.TB, response *httptest.ResponseRecorder, wantID resource.ID) {
@@ -892,7 +1051,7 @@ func assertMutationReceipt(
 	t testing.TB,
 	response *httptest.ResponseRecorder,
 	wantResourceID resource.ID,
-) {
+) reference.MutationReceipt {
 	t.Helper()
 	var receipt reference.MutationReceipt
 	decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
@@ -915,6 +1074,7 @@ func assertMutationReceipt(
 		"Location",
 		"/api/v1alpha1/operations/"+receipt.OperationID.String(),
 	)
+	return receipt
 }
 
 func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseRecorder) securityProblem {
