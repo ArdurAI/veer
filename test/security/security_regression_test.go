@@ -32,8 +32,8 @@ import (
 )
 
 const (
-	securityBearerCanary         = "security-route-bearer-canary"
-	invalidBearerCanary          = "invalid-security-route-bearer-canary"
+	securityBearerCanary         = "security-route-bearer+canary"
+	invalidBearerCanary          = "invalid-security-route-bearer+canary"
 	securityResourceCanary       = "security-resource-confidential-canary"
 	securityPolicyCanary         = "security-policy-confidential-canary"
 	securityMemberCanary         = "mem_security_confidential_0001"
@@ -148,6 +148,17 @@ type securityProblem struct {
 	RequestID         string                   `json:"requestId"`
 	Errors            []securityFieldViolation `json:"errors,omitempty"`
 	RetryAfterSeconds int                      `json:"retryAfterSeconds,omitempty"`
+}
+
+func TestBearerCanariesAreNotRequestIDs(t *testing.T) {
+	for _, canary := range []string{securityBearerCanary, invalidBearerCanary} {
+		if _, err := ports.NewBearerCredential(canary); err != nil {
+			t.Fatalf("bearer canary is not a valid credential: %v", err)
+		}
+		if securityRequestIDPattern.MatchString(canary) {
+			t.Fatalf("bearer canary overlaps the request-ID grammar: %q", canary)
+		}
+	}
 }
 
 func TestPublicRouteSecurityMatrix(t *testing.T) {
