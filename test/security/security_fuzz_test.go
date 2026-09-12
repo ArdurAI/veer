@@ -83,11 +83,15 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		}
 		response := httptest.NewRecorder()
 		fixture.memberHandler.ServeHTTP(response, request)
+		responseRequestIDs := response.Header().Values("Veer-Request-Id")
+		if len(responseRequestIDs) != 1 || responseRequestIDs[0] == "" {
+			t.Fatalf("response request ID values = %q, want exactly one non-empty value", responseRequestIDs)
+		}
 		if requestID != "" && securityRequestIDPattern.MatchString(requestID) &&
-			response.Header().Get("Veer-Request-Id") != requestID {
+			responseRequestIDs[0] != requestID {
 			t.Fatalf(
 				"response request ID = %q, want echoed client value %q",
-				response.Header().Get("Veer-Request-Id"), requestID,
+				responseRequestIDs[0], requestID,
 			)
 		}
 		if authorizedFixtureMutation && response.Code == http.StatusForbidden {
@@ -101,8 +105,7 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		}
 
 		if response.Header().Get("Cache-Control") != "no-store" ||
-			response.Header().Get("X-Content-Type-Options") != "nosniff" ||
-			response.Header().Get("Veer-Request-Id") == "" {
+			response.Header().Get("X-Content-Type-Options") != "nosniff" {
 			t.Fatalf("security headers = %#v", response.Header())
 		}
 		switch {

@@ -37,6 +37,7 @@ const (
 	securityBearerCanary         = "security-route-bearer+canary"
 	invalidBearerCanary          = "invalid-security-route-bearer+canary"
 	securityResourceCanary       = "security-resource-confidential-canary"
+	securityOutsiderCanary       = "security-outsider-workspace-confidential-canary"
 	securityPolicyCanary         = "security-policy-confidential-canary"
 	securityMemberCanary         = "mem_security_confidential_0001"
 	securityIdentityCanary       = "security-identity-confidential-canary"
@@ -93,6 +94,7 @@ type securityRoute struct {
 	outsiderOutcome     string
 	outsiderProblemCode string
 	allRolesDenied      bool
+	workspaceAdminOnly  bool
 	staleOutsiderCheck  bool
 	assertMemberBody    func(*testing.T, securityFixture, *httptest.ResponseRecorder)
 	assertOutsiderBody  func(*testing.T, securityFixture, *httptest.ResponseRecorder)
@@ -233,6 +235,32 @@ func TestSecurityProblemRetryMetadata(t *testing.T) {
 	}
 }
 
+func TestSecurityProblemMemberPresence(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "minimal", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test"}`},
+		{name: "field violation", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test","detail":"safe","errors":[{"field":"/spec","code":"invalid","message":"safe"}]}`},
+		{name: "missing required", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","requestId":"req-test"}`, wantErr: true},
+		{name: "null required", body: `{"type":"urn:veer:problem:validation-failed","title":null,"status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test"}`, wantErr: true},
+		{name: "null detail", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test","detail":null}`, wantErr: true},
+		{name: "null errors", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test","errors":null}`, wantErr: true},
+		{name: "null retry", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test","retryAfterSeconds":null}`, wantErr: true},
+		{name: "missing violation member", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test","errors":[{"field":"/spec","code":"invalid"}]}`, wantErr: true},
+		{name: "null violation member", body: `{"type":"urn:veer:problem:validation-failed","title":"Request validation failed","status":400,"instance":"urn:veer:request:req-test","code":"validation-failed","requestId":"req-test","errors":[{"field":"/spec","code":"invalid","message":null}]}`, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateSecurityProblemMembers([]byte(test.body))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateSecurityProblemMembers() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestPublicRouteSecurityMatrix(t *testing.T) {
 	routes := publicSecurityRoutes()
 	assertOpenAPIRouteCoverage(t, routes)
@@ -300,6 +328,20 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 					})
 				}
 			}
+			if route.workspaceAdminOnly {
+				for _, role := range authorization.Roles() {
+					if role == authorization.RoleWorkspaceAdministrator {
+						continue
+					}
+					role := role
+					t.Run("administrator-only-"+role.String(), func(t *testing.T) {
+						roleFixture := newSecurityFixtureForRole(t, role)
+						denied := securityRequest(t, roleFixture.memberHandler, route, roleFixture, securityBearerCanary)
+						assertSecurityResponse(t, denied, http.StatusForbidden, "authorization-denied")
+						assertNoFixtureCanary(t, denied, roleFixture)
+					})
+				}
+			}
 
 			results = append(results, securityRouteResult{
 				OperationID: route.operationID, Method: route.method, PathTemplate: route.pathTemplate,
@@ -332,7 +374,7 @@ func publicSecurityRoutes() []securityRoute {
 			memberStatus: http.StatusOK, memberOutcome: "allowed",
 			outsiderStatus: http.StatusOK, outsiderOutcome: "denied-rows-filtered-before-pagination",
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
-				assertWorkspacePage(t, response, fixture.workspaceID, "security outsider workspace")
+				assertWorkspacePage(t, response, fixture.workspaceID, securityOutsiderCanary)
 			},
 			assertOutsiderBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertWorkspacePage(t, response, fixture.outsiderWorkspaceID, securityResourceCanary)
@@ -359,6 +401,10 @@ func publicSecurityRoutes() []securityRoute {
 			pathTemplate: "/api/v1alpha1/workspaces/{workspaceId}", target: workspaceTarget,
 			memberStatus: http.StatusOK, memberOutcome: "allowed",
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
+			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
+				assertWorkspaceObject(t, response, fixture.workspaceID)
+				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+			},
 		},
 		{
 			operationID: "replaceWorkspace", method: http.MethodPut,
@@ -367,6 +413,7 @@ func publicSecurityRoutes() []securityRoute {
 			headers:      mutationHeaders,
 			memberStatus: http.StatusAccepted, memberOutcome: "allowed",
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
+			workspaceAdminOnly: true,
 			staleOutsiderCheck: true,
 		},
 		{
@@ -375,6 +422,7 @@ func publicSecurityRoutes() []securityRoute {
 			headers:      mutationHeaders,
 			memberStatus: http.StatusConflict, memberOutcome: "authorization-allowed-lifecycle-denied", memberProblemCode: "lifecycle-conflict",
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
+			workspaceAdminOnly: true,
 			staleOutsiderCheck: true,
 		},
 		{
@@ -433,7 +481,7 @@ func newSecurityFixtureForRole(t testing.TB, memberRole authorization.Role) secu
 	outsiderWorkspace, err := service.Create(context.Background(), reference.CreateCommand{
 		Principal: outsider, Kind: hierarchy.KindWorkspace,
 		CanonicalTarget: "security:bootstrap:outsider-workspace", IdempotencyKey: "security-bootstrap-workspace-0002",
-		Body: validWorkspaceBody("security outsider workspace"),
+		Body: validWorkspaceBody(securityOutsiderCanary),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -718,6 +766,21 @@ func assertWorkspacePage(
 	assertNoResponseCanary(t, response, forbiddenCanary)
 }
 
+func assertWorkspaceObject(t testing.TB, response *httptest.ResponseRecorder, wantID resource.ID) {
+	t.Helper()
+	var workspace struct {
+		Metadata struct {
+			ID string `json:"id"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &workspace); err != nil {
+		t.Fatalf("decode workspace: %v; body=%s", err, response.Body.String())
+	}
+	if workspace.Metadata.ID != wantID.String() {
+		t.Fatalf("workspace ID = %q, want %q; body=%s", workspace.Metadata.ID, wantID, response.Body.String())
+	}
+}
+
 func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseRecorder) securityProblem {
 	t.Helper()
 	if response.Header().Get("Content-Type") != "application/problem+json" {
@@ -728,6 +791,9 @@ func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseReco
 	}
 	if err := validateUniqueJSONMembers(response.Body.Bytes()); err != nil {
 		t.Fatalf("runtime problem JSON members: %v; body=%s", err, response.Body.String())
+	}
+	if err := validateSecurityProblemMembers(response.Body.Bytes()); err != nil {
+		t.Fatalf("runtime problem required members: %v; body=%s", err, response.Body.String())
 	}
 	decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
 	decoder.DisallowUnknownFields()
@@ -802,6 +868,55 @@ func validateSecurityRetryAfter(
 		return fmt.Errorf("Retry-After values %q do not match retryAfterSeconds %d", headers, *problem.RetryAfterSeconds)
 	}
 	return nil
+}
+
+func validateSecurityProblemMembers(data []byte) error {
+	var problem map[string]json.RawMessage
+	if err := json.Unmarshal(data, &problem); err != nil {
+		return err
+	}
+	if err := requireNonNullJSONMembers(
+		problem,
+		[]string{"type", "title", "status", "instance", "code", "requestId"},
+	); err != nil {
+		return err
+	}
+	for _, optional := range []string{"detail", "errors", "retryAfterSeconds"} {
+		if raw, exists := problem[optional]; exists && isJSONNull(raw) {
+			return fmt.Errorf("problem member %q is null", optional)
+		}
+	}
+	rawErrors, exists := problem["errors"]
+	if !exists {
+		return nil
+	}
+	var violations []map[string]json.RawMessage
+	if err := json.Unmarshal(rawErrors, &violations); err != nil {
+		return fmt.Errorf("decode problem errors: %w", err)
+	}
+	for index, violation := range violations {
+		if err := requireNonNullJSONMembers(violation, []string{"field", "code", "message"}); err != nil {
+			return fmt.Errorf("problem errors[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func requireNonNullJSONMembers(object map[string]json.RawMessage, names []string) error {
+	for _, name := range names {
+		raw, exists := object[name]
+		if !exists {
+			return fmt.Errorf("required member %q is missing", name)
+		}
+		if isJSONNull(raw) {
+			return fmt.Errorf("required member %q is null", name)
+		}
+	}
+	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func validateUniqueJSONMembers(data []byte) error {
