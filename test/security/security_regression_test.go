@@ -187,6 +187,8 @@ func TestSecurityProblemJSONRejectsDuplicateMembers(t *testing.T) {
 		{name: "duplicate top-level", body: `{"detail":"secret","detail":"safe"}`, wantErr: true},
 		{name: "escaped duplicate", body: `{"detail":"secret","\u0064etail":"safe"}`, wantErr: true},
 		{name: "duplicate nested", body: `{"errors":[{"message":"secret","message":"safe"}]}`, wantErr: true},
+		{name: "case-variant top-level", body: `{"Title":"secret","title":"safe"}`, wantErr: true},
+		{name: "case-variant nested", body: `{"errors":[{"Message":"secret","message":"safe"}]}`, wantErr: true},
 		{name: "malformed", body: `{"detail":`, wantErr: true},
 		{name: "trailing value", body: `{} {}`, wantErr: true},
 	}
@@ -274,6 +276,8 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 			assertSecurityResponse(t, member, route.memberStatus, route.memberProblemCode)
 			if route.memberStatus >= http.StatusBadRequest {
 				assertNoFixtureCanary(t, member, fixture)
+			} else {
+				assertNoSuccessfulFixtureSecrets(t, member, fixture)
 			}
 			if route.assertMemberBody != nil {
 				route.assertMemberBody(t, fixture, member)
@@ -284,6 +288,8 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 			assertSecurityResponse(t, outsider, route.outsiderStatus, route.outsiderProblemCode)
 			if route.outsiderStatus >= http.StatusBadRequest {
 				assertNoFixtureCanary(t, outsider, fixture)
+			} else {
+				assertNoSuccessfulFixtureSecrets(t, outsider, fixture)
 			}
 			if route.assertOutsiderBody != nil {
 				route.assertOutsiderBody(t, fixture, outsider)
@@ -682,6 +688,20 @@ func assertNoMemberFixtureCanary(t testing.TB, response *httptest.ResponseRecord
 	)
 }
 
+func assertNoSuccessfulFixtureSecrets(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
+	t.Helper()
+	assertNoResponseCanary(
+		t,
+		response,
+		securityPolicyCanary,
+		securityMemberCanary,
+		securityIdentityCanary,
+		securityStaleVersionCanary,
+		fixture.policyID.String(),
+		fixture.memberID.String(),
+	)
+}
+
 func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
 	t.Helper()
 	outputs := []string{response.Body.String()}
@@ -1058,7 +1078,7 @@ func scanUniqueJSONValue(decoder *json.Decoder, depth int) error {
 	}
 	switch delimiter {
 	case '{':
-		seen := make(map[string]struct{})
+		seen := make([]string, 0)
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			if err != nil {
@@ -1068,10 +1088,12 @@ func scanUniqueJSONValue(decoder *json.Decoder, depth int) error {
 			if !ok {
 				return errors.New("JSON object member name is not a string")
 			}
-			if _, duplicate := seen[key]; duplicate {
-				return fmt.Errorf("duplicate JSON member %q", key)
+			for _, existing := range seen {
+				if strings.EqualFold(existing, key) {
+					return fmt.Errorf("duplicate case-insensitive JSON member %q", key)
+				}
 			}
-			seen[key] = struct{}{}
+			seen = append(seen, key)
 			if err := scanUniqueJSONValue(decoder, depth+1); err != nil {
 				return err
 			}

@@ -132,6 +132,7 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 				t.Fatalf("success response contract failed: status=%d bytes=%d headers=%#v", response.Code, response.Body.Len(), response.Header())
 			}
 			assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+			assertNoSuccessfulFixtureSecrets(t, response, fixture)
 		case response.Code >= http.StatusBadRequest && response.Code <= 599:
 			assertSecurityProblemContract(t, response)
 			assertNoFixtureCanary(t, response, fixture)
