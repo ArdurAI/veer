@@ -32,6 +32,14 @@ func TestVerifyPolicyRejectsLegacyStatusContexts(t *testing.T) {
 	}
 }
 
+func TestVerifyPolicyRejectsForkSyncingOnUnlockedBranch(t *testing.T) {
+	changed := strings.Replace(expectedPolicy, `"allow_fork_syncing": false`, `"allow_fork_syncing": true`, 1)
+	if err := verifyPolicy([]byte(changed)); err == nil ||
+		!strings.Contains(err.Error(), "allow_fork_syncing must be false when lock_branch is false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDecodeJSONRejectsDuplicateKeys(t *testing.T) {
 	_, err := decodeJSON([]byte(`{"required_status_checks": {}, "required_status_checks": null}`))
 	if err == nil || !strings.Contains(err.Error(), `duplicate object key "required_status_checks"`) {

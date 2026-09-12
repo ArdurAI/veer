@@ -125,7 +125,7 @@ change the normal offline build contract.
 | `./hack/dev build` | Compile every Go package with path trimming. |
 | `./hack/dev coverage` | Run all Go tests with atomic coverage and require at least 80.0% aggregate statement coverage. |
 | `./hack/dev race` | Run all Go tests with the race detector; requires a host C compiler. |
-| `./hack/dev security` | Validate workflow syntax, immutable action locks, scanner/review/SBOM/branch policy, 66 negative fixtures, and Go security analysis. |
+| `./hack/dev security` | Validate workflow syntax, immutable action locks, scanner/review/SBOM/branch policy, 67 negative fixtures, and Go security analysis. |
 | `./hack/dev test` | Run all fast Go unit tests once. |
 | `./hack/dev api` | Validate OpenAPI, hierarchy/control/admission/authorization/audit/reconciliation projections, schema examples, expected-failure instances, runtime vocabulary drift, operation action annotations, and Veer-specific HTTP and evolution invariants without remote references. |
 | `./hack/dev docs` | Lint Markdown and verify community policy, DCO regressions, architecture, cost, stack, and security evidence, including negative contract fixtures. |
