@@ -19,6 +19,12 @@ const (
 	fuzzWorkspaceResourceMatch = "__security_fixture_resource_version__"
 )
 
+var retainedSecurityAuthenticationChallenges = map[string]string{
+	"req-fuzz-query-token":  `Bearer realm="veer", error="invalid_request"`,
+	"req-fuzz-missing-auth": `Bearer realm="veer"`,
+	"req-fuzz-invalid-auth": `Bearer realm="veer", error="invalid_token"`,
+}
+
 type securityFuzzSeed struct {
 	method, target, authorization, contentType, idempotencyKey, ifMatch, requestID string
 	body                                                                           []byte
@@ -37,6 +43,8 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-depth-0000001", fuzzWorkspaceResourceMatch, "req-fuzz-depth", []byte(strings.Repeat("[", 65) + "0" + strings.Repeat("]", 65)), http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-webhook-0001", fuzzWorkspaceResourceMatch, "req-fuzz-webhook", []byte(`{"webhooks":{"escape":{"post":{"requestBody":{"$ref":"https://attacker.invalid/schema"}}}}}`), http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-oversized-0001", fuzzWorkspaceResourceMatch, "req-fuzz-oversized", bytes.Repeat([]byte{'x'}, resource.MaxCanonicalBytes+1), http.StatusRequestEntityTooLarge},
+		{http.MethodPut, fuzzWorkspaceTarget, "", "application/json", "fuzz-missing-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-missing-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + invalidBearerCanary, "application/json", "fuzz-invalid-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-invalid-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
 		{http.MethodDelete, "/api/v1alpha1/workspaces/wsp_0000000000000001", "Bearer " + invalidBearerCanary, "", "fuzz-delete-00001", `"rv_0000000000000001"`, "req-fuzz-delete", nil, 0},
 	}
 	for _, seed := range seeds {
@@ -106,19 +114,21 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		if response.Code == http.StatusUnauthorized {
 			expectedChallenge := ""
 			if retainedRejectionStatus == http.StatusUnauthorized {
-				expectedChallenge = `Bearer realm="veer", error="invalid_request"`
+				var exists bool
+				expectedChallenge, exists = retainedSecurityAuthenticationChallenges[requestID]
+				if !exists {
+					t.Fatalf("retained 401 seed %q has no expected authentication challenge", requestID)
+				}
 			}
 			assertSecurityAuthenticationChallenge(t, response, expectedChallenge)
 		}
 
-		if response.Header().Get("Cache-Control") != "no-store" ||
-			response.Header().Get("X-Content-Type-Options") != "nosniff" {
-			t.Fatalf("security headers = %#v", response.Header())
-		}
+		assertSingletonHeader(t, response, "Cache-Control", "no-store")
+		assertSingletonHeader(t, response, "X-Content-Type-Options", "nosniff")
 		switch {
 		case response.Code >= http.StatusOK && response.Code < http.StatusMultipleChoices:
-			if response.Header().Get("Content-Type") != "application/json" ||
-				response.Body.Len() > reference.MaxPageBytes || !json.Valid(response.Body.Bytes()) {
+			assertSingletonHeader(t, response, "Content-Type", "application/json")
+			if response.Body.Len() > reference.MaxPageBytes || !json.Valid(response.Body.Bytes()) {
 				t.Fatalf("success response contract failed: status=%d bytes=%d headers=%#v", response.Code, response.Body.Len(), response.Header())
 			}
 		case response.Code >= http.StatusBadRequest && response.Code <= 599:

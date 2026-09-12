@@ -378,7 +378,7 @@ func publicSecurityRoutes() []securityRoute {
 			},
 			assertOutsiderBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertWorkspacePage(t, response, fixture.outsiderWorkspaceID, securityResourceCanary)
-				assertNoFixtureCanary(t, response, fixture)
+				assertNoMemberFixtureCanary(t, response, fixture)
 			},
 		},
 		{
@@ -415,6 +415,10 @@ func publicSecurityRoutes() []securityRoute {
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 			workspaceAdminOnly: true,
 			staleOutsiderCheck: true,
+			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
+				assertMutationReceipt(t, response, fixture.workspaceID)
+				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
+			},
 		},
 		{
 			operationID: "deleteWorkspace", method: http.MethodDelete,
@@ -633,11 +637,11 @@ func assertSecurityResponse(
 	if response.Code != status {
 		t.Fatalf("response status = %d, want %d; body=%s", response.Code, status, response.Body.String())
 	}
+	assertSingletonHeader(t, response, "Cache-Control", "no-store")
+	assertSingletonHeader(t, response, "X-Content-Type-Options", "nosniff")
 	requestIDs := response.Header().Values("Veer-Request-Id")
-	if response.Header().Get("Cache-Control") != "no-store" ||
-		response.Header().Get("X-Content-Type-Options") != "nosniff" ||
-		len(requestIDs) != 1 || requestIDs[0] == "" {
-		t.Fatalf("security headers = %#v", response.Header())
+	if len(requestIDs) != 1 || requestIDs[0] == "" {
+		t.Fatalf("Veer-Request-Id values = %q, want exactly one non-empty value", requestIDs)
 	}
 	if !json.Valid(response.Body.Bytes()) {
 		t.Fatalf("response is not JSON: %q", response.Body.Bytes())
@@ -647,8 +651,8 @@ func assertSecurityResponse(
 		if problem.Code != problemCode {
 			t.Fatalf("problem code = %q, want %q; body=%s", problem.Code, problemCode, response.Body.String())
 		}
-	} else if response.Header().Get("Content-Type") != "application/json" {
-		t.Fatalf("Content-Type = %q, want application/json", response.Header().Get("Content-Type"))
+	} else {
+		assertSingletonHeader(t, response, "Content-Type", "application/json")
 	}
 	assertNoBearerCanary(t, response)
 }
@@ -656,6 +660,24 @@ func assertSecurityResponse(
 func assertNoBearerCanary(t testing.TB, response *httptest.ResponseRecorder) {
 	t.Helper()
 	assertNoResponseCanary(t, response, securityBearerCanary, invalidBearerCanary)
+}
+
+func assertNoMemberFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
+	t.Helper()
+	assertNoResponseCanary(
+		t,
+		response,
+		securityResourceCanary,
+		securityPolicyCanary,
+		securityMemberCanary,
+		securityIdentityCanary,
+		securityStaleVersionCanary,
+		fixture.workspaceID.String(),
+		fixture.resourceVersion,
+		fixture.operationID.String(),
+		fixture.policyID.String(),
+		fixture.memberID.String(),
+	)
 }
 
 func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
@@ -702,7 +724,9 @@ func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fi
 		securityMemberCanary,
 		securityIdentityCanary,
 		securityStaleVersionCanary,
+		securityOutsiderCanary,
 		fixture.workspaceID.String(),
+		fixture.outsiderWorkspaceID.String(),
 		fixture.resourceVersion,
 		fixture.operationID.String(),
 		fixture.policyID.String(),
@@ -757,6 +781,18 @@ func assertSecurityAuthenticationChallenge(
 		default:
 			t.Fatalf("WWW-Authenticate = %q, want a canonical bearer challenge", challenges[0])
 		}
+	}
+}
+
+func assertSingletonHeader(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	name, want string,
+) {
+	t.Helper()
+	values := response.Header().Values(name)
+	if len(values) != 1 || values[0] != want {
+		t.Fatalf("%s values = %q, want exactly one %q", name, values, want)
 	}
 }
 
@@ -830,11 +866,38 @@ func assertOperationObject(
 	}
 }
 
+func assertMutationReceipt(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	wantResourceID resource.ID,
+) {
+	t.Helper()
+	var receipt reference.MutationReceipt
+	decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		t.Fatalf("decode mutation receipt: %v; body=%s", err, response.Body.String())
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		t.Fatalf("mutation receipt has trailing JSON: %v; body=%s", err, response.Body.String())
+	}
+	if receipt.ResourceID != wantResourceID {
+		t.Fatalf("mutation receipt resource ID = %q, want %q; body=%s", receipt.ResourceID, wantResourceID, response.Body.String())
+	}
+	if _, err := resource.ParseID(receipt.OperationID.String()); err != nil {
+		t.Fatalf("mutation receipt operation ID = %q: %v; body=%s", receipt.OperationID, err, response.Body.String())
+	}
+	assertSingletonHeader(
+		t,
+		response,
+		"Location",
+		"/api/v1alpha1/operations/"+receipt.OperationID.String(),
+	)
+}
+
 func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseRecorder) securityProblem {
 	t.Helper()
-	if response.Header().Get("Content-Type") != "application/problem+json" {
-		t.Fatalf("Content-Type = %q, want application/problem+json", response.Header().Get("Content-Type"))
-	}
+	assertSingletonHeader(t, response, "Content-Type", "application/problem+json")
 	if response.Body.Len() == 0 || response.Body.Len() > maximumSecurityProblemBytes {
 		t.Fatalf("problem body bytes = %d, want 1..%d", response.Body.Len(), maximumSecurityProblemBytes)
 	}
