@@ -73,6 +73,14 @@ routes are running, that bearer-token validation exists, or that the
 representative Workspace schema is the complete common resource
 implementation.
 
+Issue [#21](https://github.com/ArdurAI/veer/issues/21) subsequently implements
+the four published paths and seven operations in a loopback-only in-memory
+reference server. It uses the shared bearer parser, a fixed local credential
+adapter, and an injected closed action gate. That executable harness is not
+OIDC validation, tenant PolicySet enforcement, durable persistence, atomic
+audit/outbox acceptance, or a production deployment. Those boundaries remain
+owned by the issues below.
+
 - Issue [#17](https://github.com/ArdurAI/veer/issues/17) implements the common
   resource envelope, stable identity, serialization, and property tests.
 - Issue [#18](https://github.com/ArdurAI/veer/issues/18) implements the four
@@ -147,6 +155,11 @@ deletion is complete. Synchronous status-only persistence returns `200` with a
 bounded receipt and ETag. The receipt contains only resource identity, observed
 generation, resource version, and update time; the caller reads the point
 resource when it needs the full representation.
+
+The issue #21 reference server intentionally returns the same transport
+receipt while proving only process-local semantic acceptance. Its response is
+contract evidence, not evidence that the production durability, integrity,
+audit, or outbox meaning above has been implemented.
 
 The accepted-mutation response binds `Location` to the receipt's `operationId`:
 the header value is `/api/v1alpha1/operations/<operationId>`. This relationship

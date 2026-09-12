@@ -68,7 +68,11 @@ digest, effect, and reason. The exact contract and complete action matrix are in
 [ADR 0009](../architecture/0009-deterministic-hierarchical-authorization.md).
 The domain evaluator and OpenAPI projection are reference contracts. Until API
 and worker integration is implemented and tested, they are not evidence of
-runtime request or provider-effect enforcement.
+tenant-policy or provider-effect enforcement. The issue #21 loopback reference
+server does enforce one fixed local bearer credential and a closed action
+allow-list before its process-local lifecycle service. That harness does not
+load a PolicySet, resolve per-row list targets, or establish production
+authorization.
 
 ## Secrets and provider credentials
 

@@ -77,6 +77,12 @@ action and role registries, star-only Viewer inheritance, canonical Policy
 bindings, sealed Workspace/Environment targets, default-deny evaluation, and
 bounded decision representation. Its OpenAPI projection is a pure reference
 contract; no API route or worker enforcement is implemented by that document.
+Issue #21 adds a loopback-only reference server around the published
+Workspace/Operation routes plus process-local lifecycle semantics for all six
+resource kinds. It requires an injected bearer authenticator and closed action
+gate, but does not invoke the PolicySet evaluator, persist state, emit durable
+audit/outbox records, enqueue work, or execute a provider. Issue #24 owns
+authoritative route authorization and issue #30 owns durable acceptance.
 [ADR 0010](0010-provider-neutral-credential-broker.md) fixes a provider-neutral,
 process-local credential broker with separate secret-resolution and
 session-issuance ports, immutable operation/target/recipient bindings, exact
@@ -127,6 +133,9 @@ not imply that asynchronous provider work has already completed.
 - Idempotency keys for retry-safe writes.
 - Pagination and filtering with deterministic ordering.
 - Structured conditions for progress and failure.
+- A real loopback-only reference listener exercises the four published paths
+  and seven operations with process-local state; it is not the production API
+  composition root.
 
 ### Identity and policy
 

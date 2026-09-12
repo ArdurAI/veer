@@ -122,13 +122,24 @@ expect_rejection() {
 "$script_dir/verify-supply-chain.sh" >/dev/null
 
 codeql_runner_temp="$fixture_root/codeql-runner"
+mkdir -p -- "$codeql_runner_temp"
+codeql_runner_temp=$(
+  unset CDPATH
+  cd -- "$codeql_runner_temp"
+  pwd -P
+)
+codeql_go_root="$codeql_runner_temp/veer-codeql-go"
+codeql_go="$codeql_go_root/bin/go"
 codeql_wrapper="$codeql_runner_temp/codeql-action-go-tracing/bin/go"
-mkdir -p -- "$(dirname -- "$codeql_wrapper")"
-printf '#!/bin/bash\n\nexec %s "$@"' "$repo_root/.tools/bin/go" >"$codeql_wrapper"
+mkdir -p -- "$codeql_go_root/bin" "$(dirname -- "$codeql_wrapper")"
+printf '#!/bin/sh\nunset GOROOT\nexec %s "$@"\n' "$repo_root/.tools/bin/go" >"$codeql_go"
+chmod 0700 "$codeql_go"
+printf '#!/bin/bash\n\nexec %s "$@"' "$codeql_go" >"$codeql_wrapper"
 chmod 0700 "$codeql_wrapper"
 GITHUB_ACTIONS=true \
   RUNNER_OS=Linux \
   RUNNER_TEMP="$codeql_runner_temp" \
+  VEER_CODEQL_GOROOT="$codeql_go_root" \
   CODEQL_ACTION_GO_BINARY="$codeql_wrapper" \
   "$repo_root/hack/dev" _codeql-build >/dev/null
 
@@ -138,6 +149,7 @@ output=$(
   GITHUB_ACTIONS=true \
     RUNNER_OS=Linux \
     RUNNER_TEMP="$codeql_runner_temp" \
+    VEER_CODEQL_GOROOT="$codeql_go_root" \
     CODEQL_ACTION_GO_BINARY="$codeql_wrapper" \
     "$repo_root/hack/dev" _codeql-build 2>&1
 )
@@ -147,6 +159,23 @@ set -e
 case "$output" in
   *'CodeQL Go wrapper does not delegate exactly to the pinned toolchain'*) ;;
   *) fail "tampered CodeQL Go wrapper produced an unexpected failure: $output" ;;
+esac
+
+set +e
+output=$(
+  GITHUB_ACTIONS=true \
+    RUNNER_OS=Linux \
+    RUNNER_TEMP="$codeql_runner_temp" \
+    VEER_CODEQL_GOROOT="$repo_root/.tools/go" \
+    CODEQL_ACTION_GO_BINARY="$codeql_wrapper" \
+    "$repo_root/hack/dev" _codeql-build 2>&1
+)
+status=$?
+set -e
+[ "$status" -ne 0 ] || fail 'in-source CodeQL Go root unexpectedly passed'
+case "$output" in
+  *'VEER_CODEQL_GOROOT must resolve under RUNNER_TEMP and outside the source tree'*) ;;
+  *) fail "in-source CodeQL Go root produced an unexpected failure: $output" ;;
 esac
 
 gitlink_root="$fixture_root/gitlink-repository"
@@ -360,11 +389,18 @@ new_fixture
 replace_once .github/workflows/supply-chain.yml \
   'name: Bootstrap pinned build tools' 'name: Temporary CodeQL ordering marker'
 replace_once .github/workflows/supply-chain.yml \
-  'name: Select pinned Go for CodeQL' 'name: Bootstrap pinned build tools'
+  'name: Stage pinned Go outside source tree' 'name: Bootstrap pinned build tools'
 replace_once .github/workflows/supply-chain.yml \
-  'name: Temporary CodeQL ordering marker' 'name: Select pinned Go for CodeQL'
+  'name: Temporary CodeQL ordering marker' 'name: Stage pinned Go outside source tree'
 expect_rejection codeql-bootstrap-after-init \
-  'out-of-order policy marker: name: Select pinned Go for CodeQL'
+  'out-of-order policy marker: name: Stage pinned Go outside source tree'
+
+new_fixture
+replace_once .github/workflows/supply-chain.yml \
+  "veer_codeql_goroot=\"\$RUNNER_TEMP/veer-codeql-go\"" \
+  "veer_codeql_goroot=\"\$GITHUB_WORKSPACE/.tools/go\""
+expect_rejection codeql-toolchain-inside-source \
+  "missing required active policy: veer_codeql_goroot=\"\$RUNNER_TEMP/veer-codeql-go\""
 
 new_fixture
 insert_after_once .github/workflows/supply-chain.yml \

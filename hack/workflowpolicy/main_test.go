@@ -61,6 +61,20 @@ func TestVerifyWorkflowAcceptsExactSupplyPolicy(t *testing.T) {
 	}
 }
 
+func TestVerifyWorkflowRejectsCodeQLToolchainInsideSource(t *testing.T) {
+	contents, locks := repositorySupplyWorkflow(t)
+	changed := strings.Replace(
+		string(contents),
+		`veer_codeql_goroot="$RUNNER_TEMP/veer-codeql-go"`,
+		`veer_codeql_goroot="$GITHUB_WORKSPACE/.tools/go"`,
+		1,
+	)
+	_, err := verifyWorkflow("supply-chain.yml", []byte(changed), locks)
+	if err == nil || !strings.Contains(err.Error(), "$.jobs.codeql.steps[2].run must equal") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRequireExactCardinalityRejectsDuplicateSubtype(t *testing.T) {
 	actual := map[string]int{
 		"attestation/Attest source provenance": 2,

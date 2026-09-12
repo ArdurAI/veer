@@ -1,0 +1,106 @@
+# In-memory reference server
+
+Veer's first executable control-plane slice is the loopback-only
+`veer-reference-server`. It is a deterministic contract harness for issue #21,
+not the production `veer-api` service.
+
+## Proven boundary
+
+The reference service implements create, get, replace, status replace, list,
+and RESTRICT delete semantics for all six resource kinds:
+
+- Workspace;
+- Policy;
+- Environment;
+- ProviderConnection;
+- Application; and
+- Component.
+
+Service tests cover valid and invalid hierarchy placement, generation and
+resource-version changes, stale writes, keyed replays, idempotency conflicts,
+concurrent writes, exact label filtering, stable `(createdAt, id)` ordering,
+and opaque authenticated keyset pagination. The HTTP adapter exposes only the
+four paths and seven operations already published in
+[`veer-v1alpha1.json`](../api/openapi/veer-v1alpha1.json). Child-resource route
+topology remains intentionally unselected.
+
+The command opens a real `net/http` listener and handles interrupt-driven
+graceful shutdown. It accepts only a literal IPv4 or IPv6 loopback address,
+uses bounded header and connection timeouts, and requires a bearer credential
+from a regular non-symlink token file with no group or world permissions.
+Bearer syntax is parsed by Veer's fuzz-tested HTTP boundary; the reference
+adapter reduces the configured credential to a per-process, randomly keyed
+HMAC-SHA-256 digest immediately and compares fixed-size digests. A closed
+seven-action gate is invoked after authentication on every published
+operation.
+
+That gate is deliberately not Veer's tenant authorization evaluator. The
+fixed local Workload principal, bearer file, and action allow-list make the
+harness controllable on a trusted developer host, but do not validate OIDC,
+load Workspace membership or Policy resources, resolve a per-row list target,
+or enforce production authorization. Issue #24 owns that integration.
+
+## Run locally
+
+Create an ignored token file without putting the token in a command argument
+or committed file:
+
+```sh
+umask 077
+mkdir -p .tools
+openssl rand -hex 32 > .tools/reference-token
+
+go run ./cmd/veer-reference-server \
+  --listen 127.0.0.1:8080 \
+  --token-file .tools/reference-token
+```
+
+The token must use Veer's bounded RFC 6750 bearer-token character envelope.
+The process logs only its loopback listener address. It never logs the token.
+Send `SIGINT` or `SIGTERM` to drain and stop the listener.
+
+## Evidence
+
+Run the focused evidence set with:
+
+```sh
+go test ./internal/core/service/reference \
+  ./internal/adapters/store/memory \
+  ./internal/adapters/referenceaccess \
+  ./internal/transport/http \
+  ./cmd/veer-reference-server \
+  ./test/contract
+
+go test -race ./internal/core/service/reference \
+  ./internal/adapters/store/memory \
+  ./internal/adapters/referenceaccess \
+  ./internal/transport/http \
+  ./cmd/veer-reference-server \
+  ./test/contract
+```
+
+The contract test validates the checked-in OpenAPI document, records its
+SHA-256 digest, exercises deterministic black-box HTTP vectors, proves zero
+database, queue, and provider calls, and compares the complete report with
+[`reference-server-v1alpha1.golden.json`](../test/contract/testdata/reference-server-v1alpha1.golden.json).
+The command test uses a real ephemeral TCP listener and proves authentication,
+request handling, and graceful shutdown.
+
+## Explicit limitations
+
+- State, replay results, Operations, and page-token state disappear on process
+  restart. There is no database durability, rollback recovery, or cross-process
+  concurrency guarantee.
+- A successful mutation receipt proves reference-service acceptance only. It
+  does not prove the atomic state, audit, integrity, and outbox transaction
+  required for a production `202` response.
+- The command is loopback-only and does not terminate TLS. Exposing it through
+  a proxy, container port, tunnel, or public listener is unsupported.
+- The bearer adapter is a fixed local verifier, not OIDC. The action gate is
+  not Workspace membership or PolicySet authorization.
+- There is no provider execution, queue, worker, audit sink, telemetry export,
+  persistent secret, cloud resource, or paid API call.
+
+The local cost is bounded to one process's CPU and memory plus loopback I/O.
+The copy-on-write store favors deterministic reviewability over performance;
+it is not a capacity or production-cost model.

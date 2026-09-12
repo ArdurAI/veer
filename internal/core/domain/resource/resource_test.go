@@ -353,6 +353,75 @@ func TestRenamePreservesStableState(t *testing.T) {
 	}
 }
 
+func TestReplaceIntentAdvancesOneRevisionForCompleteWrite(t *testing.T) {
+	t.Parallel()
+
+	before := newTestResource(t, false)
+	updatedAt := time.Date(2026, 9, 2, 18, 0, 0, 0, time.UTC)
+	after, err := before.ReplaceIntent(
+		"renamed-workspace",
+		map[string]string{"team": "runtime"},
+		testSpec{Config: map[string]string{"a": "first", "z": "last"}, Region: "us-west-2"},
+		"rv_01J00000000000000000000001",
+		updatedAt,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceIntent() error = %v", err)
+	}
+	metadata := after.Metadata()
+	if metadata.DisplayName() != "renamed-workspace" || metadata.Labels()["team"] != "runtime" {
+		t.Fatalf("caller-owned metadata = %q / %#v", metadata.DisplayName(), metadata.Labels())
+	}
+	if metadata.Generation() != before.Metadata().Generation()+1 {
+		t.Fatalf("generation = %d, want %d", metadata.Generation(), before.Metadata().Generation()+1)
+	}
+	if metadata.ResourceVersion() != "rv_01J00000000000000000000001" || !metadata.UpdatedAt().Equal(updatedAt) {
+		t.Fatalf("revision metadata = %q / %s", metadata.ResourceVersion(), metadata.UpdatedAt())
+	}
+
+	replayed, err := after.ReplaceIntent(
+		"renamed-workspace",
+		map[string]string{"team": "runtime"},
+		testSpec{Config: map[string]string{"z": "last", "a": "first"}, Region: "us-west-2"},
+		"invalid version",
+		time.Time{},
+	)
+	if err != nil {
+		t.Fatalf("no-op ReplaceIntent() error = %v", err)
+	}
+	want, _ := MarshalCanonical(after)
+	got, _ := MarshalCanonical(replayed)
+	if !bytes.Equal(got, want) {
+		t.Fatal("no-op complete replacement changed canonical resource")
+	}
+}
+
+func TestReplaceIntentMetadataOnlyPreservesGeneration(t *testing.T) {
+	t.Parallel()
+
+	before := newTestResource(t, false)
+	spec, err := before.Spec()
+	if err != nil {
+		t.Fatalf("Spec() error = %v", err)
+	}
+	after, err := before.ReplaceIntent(
+		"metadata-only",
+		before.Metadata().Labels(),
+		spec,
+		"rv_01J00000000000000000000001",
+		time.Date(2026, 9, 2, 18, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("ReplaceIntent() error = %v", err)
+	}
+	if after.Metadata().Generation() != before.Metadata().Generation() {
+		t.Fatalf("metadata-only generation = %d, want %d", after.Metadata().Generation(), before.Metadata().Generation())
+	}
+	if after.Metadata().ResourceVersion() == before.Metadata().ResourceVersion() {
+		t.Fatal("metadata-only replacement did not advance resource version")
+	}
+}
+
 func TestSpecAndStatusGenerationTransitions(t *testing.T) {
 	t.Parallel()
 

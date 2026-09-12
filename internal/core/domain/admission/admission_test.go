@@ -562,6 +562,39 @@ func TestPolicyAdmissionDoesNotRetainBindingAliases(t *testing.T) {
 	}
 }
 
+func TestNormalizationSupportsStateIndependentRetryFingerprinting(t *testing.T) {
+	t.Parallel()
+
+	omitted, err := NormalizeIntent(intentJSON(hierarchy.KindWorkspace, false))
+	if err != nil {
+		t.Fatalf("NormalizeIntent(omitted) error = %v", err)
+	}
+	explicitRaw := bytes.Replace(
+		intentJSON(hierarchy.KindWorkspace, false),
+		[]byte(`"spec":{}`),
+		[]byte(`"spec":{"suspendReconciliation":false}`),
+		1,
+	)
+	explicit, err := NormalizeIntent(explicitRaw)
+	if err != nil {
+		t.Fatalf("NormalizeIntent(explicit) error = %v", err)
+	}
+	if !model.EqualIntent(omitted, explicit) {
+		t.Fatal("omitted and explicit Workspace defaults normalized differently")
+	}
+
+	status, err := NormalizeStatus(statusJSON(hierarchy.KindProviderConnection))
+	if err != nil {
+		t.Fatalf("NormalizeStatus() error = %v", err)
+	}
+	if status.Kind() != hierarchy.KindProviderConnection || status.ResourceGeneration() != int64(^uint64(0)>>1) {
+		t.Fatalf("normalized status kind/generation = %q/%d", status.Kind(), status.ResourceGeneration())
+	}
+
+	_, err = NormalizeIntent([]byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"x"},"spec":{},"unknown":true}`))
+	assertFailure(t, err, StageSchema, CodeUnknownField, "/unknown")
+}
+
 func TestAdmittedCreateMatrixGolden(t *testing.T) {
 	t.Parallel()
 

@@ -16,7 +16,27 @@ import (
 )
 
 const (
-	maximumPolicyBytes   = 512 * 1024
+	maximumPolicyBytes = 512 * 1024
+	codeQLStageCommand = `veer_codeql_goroot="$RUNNER_TEMP/veer-codeql-go"
+case "$veer_codeql_goroot" in
+  "$GITHUB_WORKSPACE" | "$GITHUB_WORKSPACE"/*)
+    printf '%s\n' 'CodeQL Go root must be outside the source tree' >&2
+    exit 1
+    ;;
+esac
+if [ -e "$veer_codeql_goroot" ] || [ -L "$veer_codeql_goroot" ]; then
+  printf '%s\n' 'CodeQL Go root already exists' >&2
+  exit 1
+fi
+cp -R -- "$GITHUB_WORKSPACE/.tools/go" "$veer_codeql_goroot"
+if [ ! -f "$veer_codeql_goroot/bin/go" ] || [ -L "$veer_codeql_goroot/bin/go" ] ||
+  [ ! -x "$veer_codeql_goroot/bin/go" ]; then
+  printf '%s\n' 'staged CodeQL Go binary is unavailable or unsafe' >&2
+  exit 1
+fi
+printf 'VEER_CODEQL_GOROOT=%s\n' "$veer_codeql_goroot" >> "$GITHUB_ENV"
+printf '%s\n' "$veer_codeql_goroot/bin" >> "$GITHUB_PATH"
+`
 	sourceArchiveCommand = `mkdir -p dist
 if archive_attributes=$(git grep -n -E 'export-(ignore|subst)' HEAD -- .gitattributes ':(glob)**/.gitattributes'); then
   printf '%s\n' "$archive_attributes" >&2
@@ -239,7 +259,7 @@ var expectedSecuritySteps = map[string]int{
 	"run/attest-source/generate-sbom":      1,
 	"run/codeql/bootstrap":                 1,
 	"run/codeql/build":                     1,
-	"run/codeql/select-go":                 1,
+	"run/codeql/stage-go":                  1,
 	"run/sbom/bootstrap-syft":              1,
 	"run/sbom/archive":                     1,
 	"run/sbom/generate":                    1,
@@ -283,7 +303,7 @@ var expectedWorkflowStepNames = map[string][]string{
 	"supply-chain.yml/codeql": {
 		"Check out source",
 		"Bootstrap pinned build tools",
-		"Select pinned Go for CodeQL",
+		"Stage pinned Go outside source tree",
 		"Initialize CodeQL",
 		"Build analyzed source",
 		"Analyze source",
@@ -472,9 +492,9 @@ var expectedRunSteps = map[string]runStepPolicy{
 		role:    "run/codeql/bootstrap",
 		shell:   "sh",
 	},
-	"supply-chain.yml/codeql/Select pinned Go for CodeQL": {
-		command: `printf '%s\n' "$GITHUB_WORKSPACE/.tools/bin" >> "$GITHUB_PATH"`,
-		role:    "run/codeql/select-go",
+	"supply-chain.yml/codeql/Stage pinned Go outside source tree": {
+		command: codeQLStageCommand,
+		role:    "run/codeql/stage-go",
 		shell:   "sh",
 	},
 	"supply-chain.yml/codeql/Build analyzed source": {

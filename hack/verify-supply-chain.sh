@@ -297,6 +297,8 @@ for required_text_value in \
   'name: CodeQL' \
   'languages: go' \
   'build-mode: manual' \
+  'name: Stage pinned Go outside source tree' \
+  "veer_codeql_goroot=\"\$RUNNER_TEMP/veer-codeql-go\"" \
   'run: ./hack/dev _codeql-build' \
   'name: SBOM' \
   'run: ./hack/dev bootstrap syft' \
@@ -311,6 +313,8 @@ for required_text_value in \
   'sbom-path: dist/veer-source.spdx.json'; do
   require_active_yaml_text "$supply_workflow" "$required_text_value"
 done
+require_text "$supply_workflow" \
+  "printf 'VEER_CODEQL_GOROOT=%s\\n' \"\$veer_codeql_goroot\" >> \"\$GITHUB_ENV\""
 reject_text "$supply_workflow" 'run: ./hack/dev build'
 syft_bootstraps=$(active_yaml_line_numbers "$supply_workflow" \
   'run: ./hack/dev bootstrap syft' | LC_ALL=C awk 'END { print NR + 0 }')
@@ -323,14 +327,18 @@ syft_scans=$(active_yaml_line_numbers "$supply_workflow" \
   fail "$supply_workflow must contain exactly two pinned source-archive Syft scans"
 require_ordered_text "$supply_workflow" \
   'name: Bootstrap pinned build tools' \
-  'name: Select pinned Go for CodeQL' \
+  'name: Stage pinned Go outside source tree' \
   'name: Initialize CodeQL' \
   'name: Build analyzed source' \
   'name: Analyze source'
 
 for required_text_value in \
   "expected_codeql_go=\"\$RUNNER_TEMP/codeql-action-go-tracing/bin/go\"" \
-  "expected_wrapper=\$(printf '#!/bin/bash\\n\\nexec %s \"\$@\"' \"\$bin_dir/go\")" \
+  "case \"\${VEER_CODEQL_GOROOT:-}\" in" \
+  "\"\$RUNNER_TEMP\"/*) ;;" \
+  "canonical_codeql_goroot=\$(" \
+  "codeql_go=\"\$canonical_codeql_goroot/bin/go\"" \
+  "expected_wrapper=\$(printf '#!/bin/bash\\n\\nexec %s \"\$@\"' \"\$codeql_go\")" \
   "[ \"\$actual_wrapper\" = \"\$expected_wrapper\" ]"; do
   require_text "$dev_script" "$required_text_value"
 done
