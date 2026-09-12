@@ -16,6 +16,7 @@ import (
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/isolation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 )
@@ -25,11 +26,11 @@ const opaquePageTokenBytes = 46 // "p1_" plus a base64url-encoded SHA-256 HMAC.
 var pageTokenPattern = regexp.MustCompile(`^p1_[A-Za-z0-9_-]{43}$`)
 
 type pageBinding struct {
-	principal   string
-	workspaceID resource.ID
-	kind        hierarchy.Kind
-	parentID    *resource.ID
-	filter      string
+	principal      string
+	workspaceScope string
+	kind           hierarchy.Kind
+	parentID       *resource.ID
+	filter         string
 }
 
 type pageTokenRecord struct {
@@ -89,20 +90,29 @@ func (service *Service) listWhere(
 		return Page{}, ErrInvalidCommand
 	}
 	query.MatchLabels = labels
+	var workspaceScopes isolation.WorkspaceScopeSet
 	if query.Kind == hierarchy.KindWorkspace {
 		if query.WorkspaceID != "" || query.ParentID != nil {
 			return Page{}, ErrInvalidCommand
 		}
-	} else if resourceIDInvalid(query.WorkspaceID) {
+		workspaceScopes, err = isolation.NewWorkspaceScopeSet(query.WorkspaceIDs...)
+	} else {
+		if len(query.WorkspaceIDs) != 0 || resourceIDInvalid(query.WorkspaceID) {
+			return Page{}, ErrInvalidCommand
+		}
+		_, workspaceScopes, err = newWorkspaceScopes(query.WorkspaceID)
+	}
+	if err != nil {
 		return Page{}, ErrInvalidCommand
 	}
+	query.WorkspaceIDs = workspaceScopes.WorkspaceIDs()
 	if query.ParentID != nil && resourceIDInvalid(*query.ParentID) {
 		return Page{}, ErrInvalidCommand
 	}
 
 	now := service.clock.Now()
 	binding := pageBinding{
-		principal: query.Principal.Fingerprint().String(), workspaceID: query.WorkspaceID,
+		principal: query.Principal.Fingerprint().String(), workspaceScope: scopeDigest(workspaceScopes),
 		kind: query.Kind, parentID: cloneID(query.ParentID), filter: filterDigest(labels),
 	}
 	var cursor *pageTokenRecord
@@ -115,8 +125,8 @@ func (service *Service) listWhere(
 	}
 
 	var candidates []Resource
-	err = service.store.View(ctx, func(reader ports.ReferenceReader) error {
-		values, err := loadResources(reader)
+	err = service.store.View(ctx, workspaceScopes, func(reader ports.ReferenceReader) error {
+		values, err := loadResources(reader, workspaceScopes)
 		if err != nil {
 			return err
 		}
@@ -267,7 +277,7 @@ func tokenCanonical(record pageTokenRecord) []byte {
 		parent = record.binding.parentID.String()
 	}
 	value := []string{
-		"veer.reference.page-token.v1", record.binding.principal, record.binding.workspaceID.String(),
+		"veer.reference.page-token.v1", record.binding.principal, record.binding.workspaceScope,
 		record.binding.kind.String(), parent, record.binding.filter,
 		record.lastCreatedAt.UTC().Format(timestampLayout), record.lastID.String(),
 		record.issuedAt.UTC().Format(timestampLayout), record.expiresAt.UTC().Format(timestampLayout),
@@ -281,8 +291,17 @@ func filterDigest(labels map[string]string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+func scopeDigest(scopes isolation.WorkspaceScopeSet) string {
+	hasher := sha256.New()
+	for _, workspaceID := range scopes.WorkspaceIDs() {
+		_, _ = hasher.Write([]byte(workspaceID.String()))
+		_, _ = hasher.Write([]byte{0})
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
 func equalPageBinding(left, right pageBinding) bool {
-	if left.principal != right.principal || left.workspaceID != right.workspaceID ||
+	if left.principal != right.principal || left.workspaceScope != right.workspaceScope ||
 		left.kind != right.kind || left.filter != right.filter {
 		return false
 	}

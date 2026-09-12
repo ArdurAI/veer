@@ -9,31 +9,45 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/ArdurAI/veer/internal/core/domain/isolation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 )
 
-var ErrInvalidCallback = errors.New("invalid reference-store callback")
+var (
+	ErrInvalidCallback   = errors.New("invalid reference-store callback")
+	ErrIdentityCollision = errors.New("reference-store identity exists in multiple Workspace scopes")
+)
 
 // Store is a serializable, copy-on-write reference store. Copy-on-write makes
 // callback failure observably atomic without leaking a mutable map alias.
 type Store struct {
 	mu         sync.RWMutex
-	resources  map[resource.ID][]byte
-	operations map[resource.ID][]byte
+	resources  map[resource.ID]map[resource.ID][]byte
+	operations map[resource.ID]map[resource.ID][]byte
 }
 
 // NewStore creates an empty initialized reference store.
 func NewStore() *Store {
 	return &Store{
-		resources:  make(map[resource.ID][]byte),
-		operations: make(map[resource.ID][]byte),
+		resources:  make(map[resource.ID]map[resource.ID][]byte),
+		operations: make(map[resource.ID]map[resource.ID][]byte),
 	}
 }
 
-// View runs callback against one locked, consistent state view.
-func (store *Store) View(ctx context.Context, callback func(ports.ReferenceReader) error) error {
+// View runs callback against one locked view containing only explicit scopes.
+func (store *Store) View(
+	ctx context.Context,
+	scopes isolation.WorkspaceScopeSet,
+	callback func(ports.ReferenceReader) error,
+) error {
 	if store == nil || callback == nil {
+		return ErrInvalidCallback
+	}
+	if err := isolation.ValidateWorkspaceScopeSet(scopes); err != nil {
+		return err
+	}
+	if ctx == nil {
 		return ErrInvalidCallback
 	}
 	if err := ctx.Err(); err != nil {
@@ -41,7 +55,15 @@ func (store *Store) View(ctx context.Context, callback func(ports.ReferenceReade
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	if err := callback(reader{resources: store.resources, operations: store.operations}); err != nil {
+	resources, err := scopedView(store.resources, scopes)
+	if err != nil {
+		return err
+	}
+	operations, err := scopedView(store.operations, scopes)
+	if err != nil {
+		return err
+	}
+	if err := callback(reader{resources: resources, operations: operations}); err != nil {
 		return err
 	}
 	return ctx.Err()
@@ -49,8 +71,18 @@ func (store *Store) View(ctx context.Context, callback func(ports.ReferenceReade
 
 // Update commits the callback's private working copy only after the callback
 // and its context both succeed.
-func (store *Store) Update(ctx context.Context, callback func(ports.ReferenceTransaction) error) error {
+func (store *Store) Update(
+	ctx context.Context,
+	scope isolation.WorkspaceScope,
+	callback func(ports.ReferenceTransaction) error,
+) error {
 	if store == nil || callback == nil {
+		return ErrInvalidCallback
+	}
+	if err := isolation.ValidateWorkspaceScope(scope); err != nil {
+		return err
+	}
+	if ctx == nil {
 		return ErrInvalidCallback
 	}
 	if err := ctx.Err(); err != nil {
@@ -59,10 +91,11 @@ func (store *Store) Update(ctx context.Context, callback func(ports.ReferenceTra
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
+	workspaceID := scope.WorkspaceID()
 	working := &transaction{
 		reader: reader{
-			resources:  cloneMap(store.resources),
-			operations: cloneMap(store.operations),
+			resources:  cloneMap(store.resources[workspaceID]),
+			operations: cloneMap(store.operations[workspaceID]),
 		},
 	}
 	if err := callback(working); err != nil {
@@ -71,8 +104,8 @@ func (store *Store) Update(ctx context.Context, callback func(ports.ReferenceTra
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	store.resources = working.resources
-	store.operations = working.operations
+	store.resources[workspaceID] = working.resources
+	store.operations[workspaceID] = working.operations
 	return nil
 }
 
@@ -119,6 +152,22 @@ func cloneMap(source map[resource.ID][]byte) map[resource.ID][]byte {
 		result[key] = bytes.Clone(value)
 	}
 	return result
+}
+
+func scopedView(
+	source map[resource.ID]map[resource.ID][]byte,
+	scopes isolation.WorkspaceScopeSet,
+) (map[resource.ID][]byte, error) {
+	result := make(map[resource.ID][]byte)
+	for _, scope := range scopes.Scopes() {
+		for id, value := range source[scope.WorkspaceID()] {
+			if _, exists := result[id]; exists {
+				return nil, ErrIdentityCollision
+			}
+			result[id] = value
+		}
+	}
+	return result, nil
 }
 
 var _ ports.ReferenceStore = (*Store)(nil)

@@ -2,7 +2,7 @@
 
 Veer's first executable control-plane slice is the loopback-only
 `veer-reference-server`. It is a deterministic contract and authorization
-harness for issues #21 and #24, not the production `veer-api` service.
+harness for issues #21, #24, and #26, not the production `veer-api` service.
 
 ## Proven boundary
 
@@ -19,7 +19,9 @@ and RESTRICT delete semantics for all six resource kinds:
 Service tests cover valid and invalid hierarchy placement, generation and
 resource-version changes, stale writes, keyed replays, idempotency conflicts,
 concurrent writes, exact label filtering, stable `(createdAt, id)` ordering,
-and opaque authenticated keyset pagination. The HTTP adapter exposes only the
+opaque authenticated keyset pagination, and cross-Workspace denial. Every
+store transaction is bound to one validated Workspace scope, while reads
+require an explicit non-empty scope set. The HTTP adapter exposes only the
 four paths and seven operations already published in
 [`veer-v1alpha1.json`](../api/openapi/veer-v1alpha1.json). Child-resource route
 topology remains intentionally unselected.
@@ -40,6 +42,15 @@ sealed target for get/replace/delete and Operation get, and evaluates every
 retained list row before it can influence page size or a cursor. Workspace
 create and status replacement remain reserved and return `403` without a
 resource or Operation mutation.
+
+The in-memory adapter partitions resources and Operations by stable Workspace
+ID. Missing scope is rejected before a callback runs, canonical ownership is
+rechecked after decoding, and a root-list cursor is bound to the canonical set
+of configured Workspace scopes. The global Operation route remains compatible
+by performing bounded, individually scoped lookups over those configured
+Workspaces; it never receives an unscoped store view. See the
+[workspace isolation matrix](security/workspace-isolation.md) for the complete
+evidence and deferred production boundaries.
 
 Accepted mutations retain a bounded process-local admission record. Plan
 construction replaces caller-supplied actor, decision, and Operation fields
@@ -81,6 +92,7 @@ Run the focused evidence set with:
 ```sh
 go test ./internal/core/service/reference \
   ./internal/core/service/referenceauthorization \
+  ./internal/core/domain/isolation \
   ./internal/adapters/store/memory \
   ./internal/adapters/referenceaccess \
   ./internal/transport/http \
@@ -89,6 +101,7 @@ go test ./internal/core/service/reference \
 
 go test -race ./internal/core/service/reference \
   ./internal/core/service/referenceauthorization \
+  ./internal/core/domain/isolation \
   ./internal/adapters/store/memory \
   ./internal/adapters/referenceaccess \
   ./internal/transport/http \
@@ -126,6 +139,9 @@ admission/revocation races, and effect/revocation exclusion.
   that an external provider call can be cancelled after dispatch.
 - There is no provider execution, queue, worker, audit sink, telemetry export,
   persistent secret, cloud resource, or paid API call.
+- Workspace partitioning is reference evidence only. Issue #30 owns composite
+  SQL ownership constraints, scoped query builders, runtime/database role
+  separation, forced RLS, migrations, and atomic state/audit/outbox commits.
 
 The local cost is bounded to one process's CPU and memory plus loopback I/O.
 The copy-on-write store favors deterministic reviewability over performance;

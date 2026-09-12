@@ -53,13 +53,14 @@ func (clock *authorizationClock) Advance(duration time.Duration) {
 func TestDeniedMutationLeavesResourceAndOperationIssuerUntouched(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
-	before, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID)
+	before, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	outsider := testPrincipal(t, "outsider")
 	command := reference.ReplaceCommand{
-		Principal: outsider, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: outsider, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:replace", IdempotencyKey: "denied-replace-0001",
 		Body: workspaceBody("denied", true),
@@ -73,7 +74,7 @@ func TestDeniedMutationLeavesResourceAndOperationIssuerUntouched(t *testing.T) {
 	if _, err := fixture.runtime.ReplaceStatus(ctx, reference.StatusCommand{Principal: fixture.principal}); !errors.Is(err, ErrDenied) {
 		t.Fatalf("ReplaceStatus(reserved) error = %v", err)
 	}
-	after, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID)
+	after, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +97,7 @@ func TestDeniedMutationLeavesResourceAndOperationIssuerUntouched(t *testing.T) {
 func TestPolicyReplacementRejectsCallerSuppliedMemberDirectory(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
-	before, err := fixture.raw.Get(ctx, fixture.principal, fixture.policyID)
+	before, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID, fixture.policyID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,14 +110,15 @@ func TestPolicyReplacementRejectsCallerSuppliedMemberDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindPolicy, ResourceID: fixture.policyID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindPolicy, ResourceID: fixture.policyID,
 		ExpectedResourceVersion: fixture.policyVersion,
 		CanonicalTarget:         "reference:test:forged-policy", IdempotencyKey: "forged-policy-0001",
 		Body: policyBody(forgedMember.ID()), Members: forgedDirectory,
 	}); err == nil {
 		t.Fatal("Policy replacement accepted a caller-supplied member directory")
 	}
-	after, err := fixture.raw.Get(ctx, fixture.principal, fixture.policyID)
+	after, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID, fixture.policyID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +151,7 @@ func TestListFiltersUnauthorizedRowsBeforePagination(t *testing.T) {
 func TestResourceAndOperationReadsUseCurrentPolicy(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
-	value, err := fixture.runtime.Get(ctx, fixture.principal, fixture.workspaceID)
+	value, err := fixture.runtime.Get(ctx, fixture.principal, fixture.workspaceID, fixture.workspaceID)
 	if err != nil || value.Metadata.ID() != fixture.workspaceID {
 		t.Fatalf("Get(authorized) = %s, %v", value.Metadata.ID(), err)
 	}
@@ -160,7 +162,9 @@ func TestResourceAndOperationReadsUseCurrentPolicy(t *testing.T) {
 		t.Fatalf("GetOperation(authorized) = %s, %v", operationValue.Value.ResourceID, err)
 	}
 	outsider := testPrincipal(t, "read-outsider")
-	if _, err := fixture.runtime.Get(ctx, outsider, fixture.workspaceID); !errors.Is(err, ErrDenied) {
+	if _, err := fixture.runtime.Get(
+		ctx, outsider, fixture.workspaceID, fixture.workspaceID,
+	); !errors.Is(err, ErrDenied) {
 		t.Fatalf("Get(outsider) error = %v", err)
 	}
 	if _, err := fixture.runtime.GetOperation(
@@ -169,7 +173,8 @@ func TestResourceAndOperationReadsUseCurrentPolicy(t *testing.T) {
 		t.Fatalf("GetOperation(outsider) error = %v", err)
 	}
 	if _, err := fixture.runtime.Delete(ctx, reference.DeleteCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:delete", IdempotencyKey: "delete-conflict-0001",
 	}); !errors.Is(err, reference.ErrLifecycleConflict) {
@@ -181,7 +186,8 @@ func TestMissingResourceAndOperationReadsAreIndistinguishableFromDenial(t *testi
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
 	if _, err := fixture.runtime.Get(
-		ctx, fixture.principal, resource.ID("wsp_missing_runtime_0001"),
+		ctx, fixture.principal,
+		resource.ID("wsp_missing_runtime_0001"), resource.ID("wsp_missing_runtime_0001"),
 	); !errors.Is(err, ErrDenied) {
 		t.Fatalf("Get(missing) error = %v, want denial", err)
 	}
@@ -195,8 +201,15 @@ func TestMissingResourceAndOperationReadsAreIndistinguishableFromDenial(t *testi
 func TestDeleteReplayAndExecutionUseRetainedAuthorizationTargets(t *testing.T) {
 	fixture, environment := newDeleteAuthorizationFixture(t)
 	ctx := context.Background()
+	value, err := fixture.runtime.Get(
+		ctx, fixture.principal, fixture.workspaceID, environment.ResourceID,
+	)
+	if err != nil || value.Metadata.ID() != environment.ResourceID {
+		t.Fatalf("Get(Environment through Workspace scope) = %s, %v", value.Metadata.ID(), err)
+	}
 	command := reference.DeleteCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindEnvironment, ResourceID: environment.ResourceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindEnvironment, ResourceID: environment.ResourceID,
 		ExpectedResourceVersion: environment.ResourceVersion,
 		CanonicalTarget:         "reference:test:delete-environment", IdempotencyKey: "delete-environment-0001",
 	}
@@ -208,7 +221,9 @@ func TestDeleteReplayAndExecutionUseRetainedAuthorizationTargets(t *testing.T) {
 	if err != nil || replay != receipt {
 		t.Fatalf("Delete(replay) = %#v, %v; want %#v", replay, err, receipt)
 	}
-	if _, err := fixture.runtime.Get(ctx, fixture.principal, environment.ResourceID); !errors.Is(err, ErrDenied) {
+	if _, err := fixture.runtime.Get(
+		ctx, fixture.principal, fixture.workspaceID, environment.ResourceID,
+	); !errors.Is(err, ErrDenied) {
 		t.Fatalf("Get(deleted) error = %v, want denial", err)
 	}
 	operationValue, err := fixture.runtime.GetOperation(ctx, fixture.principal, receipt.OperationID)
@@ -286,7 +301,8 @@ func TestPlanBindsAdmissionAndExecutionRejectsPolicyDriftAndRevocation(t *testin
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
 	receipt, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:plan", IdempotencyKey: "plan-replace-0001",
 		Body: workspaceBody("planned", true),
@@ -364,7 +380,8 @@ func TestMemberRevocationPreservesRemainingAdministratorAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindPolicy, ResourceID: fixture.policyID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindPolicy, ResourceID: fixture.policyID,
 		ExpectedResourceVersion: fixture.policyVersion,
 		CanonicalTarget:         "reference:test:two-administrators", IdempotencyKey: "two-administrators-0001",
 		Body: policyBody(fixture.member.ID(), remainingMember.ID()),
@@ -380,10 +397,14 @@ func TestMemberRevocationPreservesRemainingAdministratorAccess(t *testing.T) {
 	if err := fixture.runtime.ReplaceMembers(remaining); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.runtime.Get(ctx, fixture.principal, fixture.workspaceID); !errors.Is(err, ErrDenied) {
+	if _, err := fixture.runtime.Get(
+		ctx, fixture.principal, fixture.workspaceID, fixture.workspaceID,
+	); !errors.Is(err, ErrDenied) {
 		t.Fatalf("Get(revoked administrator) error = %v, want denial", err)
 	}
-	if _, err := fixture.runtime.Get(ctx, remainingPrincipal, fixture.workspaceID); err != nil {
+	if _, err := fixture.runtime.Get(
+		ctx, remainingPrincipal, fixture.workspaceID, fixture.workspaceID,
+	); err != nil {
 		t.Fatalf("Get(remaining administrator) error = %v", err)
 	}
 }
@@ -392,7 +413,8 @@ func TestExecutionRejectsResourceGenerationDrift(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
 	first, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:first-generation", IdempotencyKey: "first-generation-0001",
 		Body: workspaceBody("first generation", true),
@@ -405,7 +427,8 @@ func TestExecutionRejectsResourceGenerationDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: first.ResourceVersion,
 		CanonicalTarget:         "reference:test:next-generation", IdempotencyKey: "next-generation-0001",
 		Body: workspaceBody("next generation", false),
@@ -426,7 +449,8 @@ func TestAdmissionCapacityFailsBeforePersistence(t *testing.T) {
 	fixture.runtime.maximum = 1
 	ctx := context.Background()
 	first, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:first-capacity", IdempotencyKey: "first-capacity-0001",
 		Body: workspaceBody("first capacity", true),
@@ -434,12 +458,13 @@ func TestAdmissionCapacityFailsBeforePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID)
+	before, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second := reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: first.ResourceVersion,
 		CanonicalTarget:         "reference:test:second-capacity", IdempotencyKey: "second-capacity-0001",
 		Body: workspaceBody("second capacity", false),
@@ -447,7 +472,7 @@ func TestAdmissionCapacityFailsBeforePersistence(t *testing.T) {
 	if _, err := fixture.runtime.Replace(ctx, second); !errors.Is(err, reference.ErrCapacity) {
 		t.Fatalf("Replace(at admission capacity) error = %v", err)
 	}
-	after, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID)
+	after, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +493,8 @@ func TestExpiredReplayRotatesAdmissionToNewOperation(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
 	command := reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:replay-epoch", IdempotencyKey: "replay-epoch-0001",
 		Body: workspaceBody("first replay epoch", true),
@@ -510,7 +536,8 @@ func TestAdmissionAndRevocationRaceHasOnlySerializedOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:admission-race", IdempotencyKey: "admission-race-0001",
 		Body: workspaceBody("raced", true),
@@ -535,7 +562,7 @@ func TestAdmissionAndRevocationRaceHasOnlySerializedOutcomes(t *testing.T) {
 	if revokeErr != nil {
 		t.Fatal(revokeErr)
 	}
-	current, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID)
+	current, err := fixture.raw.Get(ctx, fixture.principal, fixture.workspaceID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +595,8 @@ func TestExecutionCallbackExcludesConcurrentRevocation(t *testing.T) {
 	fixture := newAuthorizationFixture(t, false)
 	ctx := context.Background()
 	receipt, err := fixture.runtime.Replace(ctx, reference.ReplaceCommand{
-		Principal: fixture.principal, Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
+		Principal: fixture.principal, WorkspaceID: fixture.workspaceID,
+		Kind: hierarchy.KindWorkspace, ResourceID: fixture.workspaceID,
 		ExpectedResourceVersion: fixture.resourceVersion,
 		CanonicalTarget:         "reference:test:effect-race", IdempotencyKey: "effect-race-0001",
 		Body: workspaceBody("effect", true),

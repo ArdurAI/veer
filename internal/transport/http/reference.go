@@ -200,7 +200,7 @@ func (handler *ReferenceHandler) serveWorkspaceItem(
 
 	switch request.Method {
 	case http.MethodGet:
-		value, err := handler.service.Get(request.Context(), principal, id)
+		value, err := handler.service.Get(request.Context(), principal, id, id)
 		if err != nil {
 			handler.writeServiceError(writer, requestID, err)
 			return
@@ -228,7 +228,8 @@ func (handler *ReferenceHandler) serveWorkspaceItem(
 			return
 		}
 		receipt, err := handler.service.Replace(request.Context(), reference.ReplaceCommand{
-			Principal: principal, Kind: hierarchy.KindWorkspace, ResourceID: id, ExpectedResourceVersion: version,
+			Principal: principal, WorkspaceID: id, Kind: hierarchy.KindWorkspace,
+			ResourceID: id, ExpectedResourceVersion: version,
 			CanonicalTarget: request.URL.Path, IdempotencyKey: key, Body: body,
 		})
 		if err != nil {
@@ -249,7 +250,8 @@ func (handler *ReferenceHandler) serveWorkspaceItem(
 			return
 		}
 		receipt, err := handler.service.Delete(request.Context(), reference.DeleteCommand{
-			Principal: principal, Kind: hierarchy.KindWorkspace, ResourceID: id, ExpectedResourceVersion: version,
+			Principal: principal, WorkspaceID: id, Kind: hierarchy.KindWorkspace,
+			ResourceID: id, ExpectedResourceVersion: version,
 			CanonicalTarget: request.URL.Path, IdempotencyKey: key,
 		})
 		if err != nil {
@@ -290,7 +292,8 @@ func (handler *ReferenceHandler) serveWorkspaceStatus(
 		return
 	}
 	receipt, err := handler.service.ReplaceStatus(request.Context(), reference.StatusCommand{
-		Principal: principal, Kind: hierarchy.KindWorkspace, ResourceID: id, ExpectedResourceVersion: version,
+		Principal: principal, WorkspaceID: id, Kind: hierarchy.KindWorkspace,
+		ResourceID: id, ExpectedResourceVersion: version,
 		CanonicalTarget: request.URL.Path, IdempotencyKey: key, Body: body,
 	})
 	if err != nil {

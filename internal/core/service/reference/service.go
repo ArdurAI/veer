@@ -17,6 +17,7 @@ import (
 	"github.com/ArdurAI/veer/internal/core/domain/admission"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/isolation"
 	"github.com/ArdurAI/veer/internal/core/domain/model"
 	"github.com/ArdurAI/veer/internal/core/domain/operation"
 	"github.com/ArdurAI/veer/internal/core/domain/reconciliation"
@@ -99,6 +100,13 @@ func (service *Service) Create(ctx context.Context, command CreateCommand) (Muta
 	if _, err := hierarchy.ParseKind(command.Kind.String()); err != nil || len(command.Body) == 0 {
 		return MutationReceipt{}, ErrInvalidCommand
 	}
+	if command.Kind == hierarchy.KindWorkspace {
+		if command.WorkspaceID != "" || command.ParentID != nil {
+			return MutationReceipt{}, ErrInvalidCommand
+		}
+	} else if resourceIDInvalid(command.WorkspaceID) || command.ParentID == nil || resourceIDInvalid(*command.ParentID) {
+		return MutationReceipt{}, ErrInvalidCommand
+	}
 	normalized, err := admission.NormalizeIntent(command.Body)
 	if err != nil {
 		return MutationReceipt{}, err
@@ -112,7 +120,7 @@ func (service *Service) Create(ctx context.Context, command CreateCommand) (Muta
 	}
 	now := service.clock.Now()
 	fingerprint, scope, key, err := service.idempotencyIdentity(
-		command.Principal, "POST", command.CanonicalTarget, command.IdempotencyKey, canonical,
+		command.Principal, command.WorkspaceID, "POST", command.CanonicalTarget, command.IdempotencyKey, canonical,
 	)
 	if err != nil {
 		return MutationReceipt{}, err
@@ -125,10 +133,18 @@ func (service *Service) Create(ctx context.Context, command CreateCommand) (Muta
 	if err != nil {
 		return MutationReceipt{}, fmt.Errorf("%w: issue resource identity", ErrInternal)
 	}
+	workspaceID := command.WorkspaceID
+	if command.Kind == hierarchy.KindWorkspace {
+		workspaceID = id
+	}
+	workspaceScope, workspaceScopes, err := newWorkspaceScopes(workspaceID)
+	if err != nil {
+		return MutationReceipt{}, fmt.Errorf("%w: issue Workspace scope", ErrInternal)
+	}
 	var receipt MutationReceipt
 	var completed replayRecord
-	err = service.store.Update(context.WithoutCancel(ctx), func(tx ports.ReferenceTransaction) error {
-		resources, err := loadResources(tx)
+	err = service.store.Update(context.WithoutCancel(ctx), workspaceScope, func(tx ports.ReferenceTransaction) error {
+		resources, err := loadResources(tx, workspaceScopes)
 		if err != nil {
 			return err
 		}
@@ -137,14 +153,7 @@ func (service *Service) Create(ctx context.Context, command CreateCommand) (Muta
 		}
 
 		createContext := admission.CreateContext{ID: id, ParentID: cloneID(command.ParentID), Members: command.Members}
-		if command.Kind == hierarchy.KindWorkspace {
-			if command.WorkspaceID != "" || command.ParentID != nil {
-				return ErrInvalidCommand
-			}
-		} else {
-			if _, err := resource.ParseID(command.WorkspaceID.String()); err != nil || command.ParentID == nil {
-				return ErrInvalidCommand
-			}
+		if command.Kind != hierarchy.KindWorkspace {
 			snapshot, err := snapshotFor(resources, command.WorkspaceID)
 			if err != nil {
 				return err
@@ -202,7 +211,7 @@ func (service *Service) Replace(ctx context.Context, command ReplaceCommand) (Mu
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	if err := service.validateAddressedMutation(
-		ctx, command.Principal, command.Kind, command.ResourceID, command.ExpectedResourceVersion,
+		ctx, command.Principal, command.WorkspaceID, command.Kind, command.ResourceID, command.ExpectedResourceVersion,
 		command.CanonicalTarget, command.IdempotencyKey,
 	); err != nil {
 		return MutationReceipt{}, err
@@ -220,7 +229,7 @@ func (service *Service) Replace(ctx context.Context, command ReplaceCommand) (Mu
 	}
 	now := service.clock.Now()
 	fingerprint, scope, key, err := service.idempotencyIdentity(
-		command.Principal, "PUT", command.CanonicalTarget, command.IdempotencyKey, canonical,
+		command.Principal, command.WorkspaceID, "PUT", command.CanonicalTarget, command.IdempotencyKey, canonical,
 	)
 	if err != nil {
 		return MutationReceipt{}, err
@@ -228,11 +237,15 @@ func (service *Service) Replace(ctx context.Context, command ReplaceCommand) (Mu
 	if replay, found, err := service.liveReplay(now, scope, command.IdempotencyKey, key, fingerprint, replayMutation); found || err != nil {
 		return replay.mutation, err
 	}
+	workspaceScope, workspaceScopes, err := newWorkspaceScopes(command.WorkspaceID)
+	if err != nil {
+		return MutationReceipt{}, ErrInvalidCommand
+	}
 
 	var receipt MutationReceipt
 	var completed replayRecord
-	err = service.store.Update(context.WithoutCancel(ctx), func(tx ports.ReferenceTransaction) error {
-		resources, err := loadResources(tx)
+	err = service.store.Update(context.WithoutCancel(ctx), workspaceScope, func(tx ports.ReferenceTransaction) error {
+		resources, err := loadResources(tx, workspaceScopes)
 		if err != nil {
 			return err
 		}
@@ -242,6 +255,9 @@ func (service *Service) Replace(ctx context.Context, command ReplaceCommand) (Mu
 		}
 		if current.Kind != command.Kind {
 			return ErrNotFound
+		}
+		if current.Metadata.WorkspaceID() != command.WorkspaceID {
+			return fmt.Errorf("%w: stored resource escaped Workspace scope", ErrInternal)
 		}
 		if current.Metadata.ResourceVersion().String() != command.ExpectedResourceVersion {
 			return &PreconditionError{CurrentResourceVersion: current.Metadata.ResourceVersion().String()}
@@ -312,7 +328,7 @@ func (service *Service) Delete(ctx context.Context, command DeleteCommand) (Muta
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	if err := service.validateAddressedMutation(
-		ctx, command.Principal, command.Kind, command.ResourceID, command.ExpectedResourceVersion,
+		ctx, command.Principal, command.WorkspaceID, command.Kind, command.ResourceID, command.ExpectedResourceVersion,
 		command.CanonicalTarget, command.IdempotencyKey,
 	); err != nil {
 		return MutationReceipt{}, err
@@ -320,7 +336,7 @@ func (service *Service) Delete(ctx context.Context, command DeleteCommand) (Muta
 	canonical := []byte(`{"delete":true}`)
 	now := service.clock.Now()
 	fingerprint, scope, key, err := service.idempotencyIdentity(
-		command.Principal, "DELETE", command.CanonicalTarget, command.IdempotencyKey, canonical,
+		command.Principal, command.WorkspaceID, "DELETE", command.CanonicalTarget, command.IdempotencyKey, canonical,
 	)
 	if err != nil {
 		return MutationReceipt{}, err
@@ -328,11 +344,15 @@ func (service *Service) Delete(ctx context.Context, command DeleteCommand) (Muta
 	if replay, found, err := service.liveReplay(now, scope, command.IdempotencyKey, key, fingerprint, replayMutation); found || err != nil {
 		return replay.mutation, err
 	}
+	workspaceScope, workspaceScopes, err := newWorkspaceScopes(command.WorkspaceID)
+	if err != nil {
+		return MutationReceipt{}, ErrInvalidCommand
+	}
 
 	var receipt MutationReceipt
 	var completed replayRecord
-	err = service.store.Update(context.WithoutCancel(ctx), func(tx ports.ReferenceTransaction) error {
-		resources, err := loadResources(tx)
+	err = service.store.Update(context.WithoutCancel(ctx), workspaceScope, func(tx ports.ReferenceTransaction) error {
+		resources, err := loadResources(tx, workspaceScopes)
 		if err != nil {
 			return err
 		}
@@ -342,6 +362,9 @@ func (service *Service) Delete(ctx context.Context, command DeleteCommand) (Muta
 		}
 		if current.Kind != command.Kind {
 			return ErrNotFound
+		}
+		if current.Metadata.WorkspaceID() != command.WorkspaceID {
+			return fmt.Errorf("%w: stored resource escaped Workspace scope", ErrInternal)
 		}
 		if current.Metadata.ResourceVersion().String() != command.ExpectedResourceVersion {
 			return &PreconditionError{CurrentResourceVersion: current.Metadata.ResourceVersion().String()}
@@ -396,7 +419,7 @@ func (service *Service) ReplaceStatus(ctx context.Context, command StatusCommand
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	if err := service.validateAddressedMutation(
-		ctx, command.Principal, command.Kind, command.ResourceID, command.ExpectedResourceVersion,
+		ctx, command.Principal, command.WorkspaceID, command.Kind, command.ResourceID, command.ExpectedResourceVersion,
 		command.CanonicalTarget, command.IdempotencyKey,
 	); err != nil {
 		return StatusReceipt{}, err
@@ -414,7 +437,7 @@ func (service *Service) ReplaceStatus(ctx context.Context, command StatusCommand
 	}
 	now := service.clock.Now()
 	fingerprint, scope, key, err := service.idempotencyIdentity(
-		command.Principal, "PUT", command.CanonicalTarget, command.IdempotencyKey, canonical,
+		command.Principal, command.WorkspaceID, "PUT", command.CanonicalTarget, command.IdempotencyKey, canonical,
 	)
 	if err != nil {
 		return StatusReceipt{}, err
@@ -422,11 +445,15 @@ func (service *Service) ReplaceStatus(ctx context.Context, command StatusCommand
 	if replay, found, err := service.liveReplay(now, scope, command.IdempotencyKey, key, fingerprint, replayStatus); found || err != nil {
 		return replay.status, err
 	}
+	workspaceScope, workspaceScopes, err := newWorkspaceScopes(command.WorkspaceID)
+	if err != nil {
+		return StatusReceipt{}, ErrInvalidCommand
+	}
 
 	var receipt StatusReceipt
 	var completed replayRecord
-	err = service.store.Update(context.WithoutCancel(ctx), func(tx ports.ReferenceTransaction) error {
-		resources, err := loadResources(tx)
+	err = service.store.Update(context.WithoutCancel(ctx), workspaceScope, func(tx ports.ReferenceTransaction) error {
+		resources, err := loadResources(tx, workspaceScopes)
 		if err != nil {
 			return err
 		}
@@ -436,6 +463,9 @@ func (service *Service) ReplaceStatus(ctx context.Context, command StatusCommand
 		}
 		if current.Kind != command.Kind {
 			return ErrNotFound
+		}
+		if current.Metadata.WorkspaceID() != command.WorkspaceID {
+			return fmt.Errorf("%w: stored resource escaped Workspace scope", ErrInternal)
 		}
 		if current.Metadata.ResourceVersion().String() != command.ExpectedResourceVersion {
 			return &PreconditionError{CurrentResourceVersion: current.Metadata.ResourceVersion().String()}
@@ -494,15 +524,24 @@ func (service *Service) ReplaceStatus(ctx context.Context, command StatusCommand
 }
 
 // Get returns one ownership-safe canonical resource snapshot.
-func (service *Service) Get(ctx context.Context, principal identity.Principal, id resource.ID) (Resource, error) {
+func (service *Service) Get(
+	ctx context.Context,
+	principal identity.Principal,
+	workspaceID resource.ID,
+	id resource.ID,
+) (Resource, error) {
 	if service == nil {
 		return Resource{}, ErrInvalidConfiguration
 	}
-	if ctx == nil || identity.ValidatePrincipal(principal) != nil || resourceIDInvalid(id) {
+	if ctx == nil || identity.ValidatePrincipal(principal) != nil || resourceIDInvalid(workspaceID) || resourceIDInvalid(id) {
+		return Resource{}, ErrInvalidCommand
+	}
+	_, workspaceScopes, err := newWorkspaceScopes(workspaceID)
+	if err != nil {
 		return Resource{}, ErrInvalidCommand
 	}
 	var result Resource
-	err := service.store.View(ctx, func(reader ports.ReferenceReader) error {
+	err = service.store.View(ctx, workspaceScopes, func(reader ports.ReferenceReader) error {
 		data, exists := reader.GetResource(id)
 		if !exists {
 			return ErrNotFound
@@ -511,6 +550,9 @@ func (service *Service) Get(ctx context.Context, principal identity.Principal, i
 		if err != nil {
 			return err
 		}
+		if value.Metadata.WorkspaceID() != workspaceID {
+			return fmt.Errorf("%w: stored resource escaped Workspace scope", ErrInternal)
+		}
 		result = cloneResource(value)
 		return nil
 	})
@@ -518,15 +560,24 @@ func (service *Service) Get(ctx context.Context, principal identity.Principal, i
 }
 
 // GetOperation returns one validated canonical operation snapshot.
-func (service *Service) GetOperation(ctx context.Context, principal identity.Principal, id resource.ID) (Operation, error) {
+func (service *Service) GetOperation(
+	ctx context.Context,
+	principal identity.Principal,
+	workspaceID resource.ID,
+	id resource.ID,
+) (Operation, error) {
 	if service == nil {
 		return Operation{}, ErrInvalidConfiguration
 	}
-	if ctx == nil || identity.ValidatePrincipal(principal) != nil || resourceIDInvalid(id) {
+	if ctx == nil || identity.ValidatePrincipal(principal) != nil || resourceIDInvalid(workspaceID) || resourceIDInvalid(id) {
+		return Operation{}, ErrInvalidCommand
+	}
+	_, workspaceScopes, err := newWorkspaceScopes(workspaceID)
+	if err != nil {
 		return Operation{}, ErrInvalidCommand
 	}
 	var result Operation
-	err := service.store.View(ctx, func(reader ports.ReferenceReader) error {
+	err = service.store.View(ctx, workspaceScopes, func(reader ports.ReferenceReader) error {
 		data, exists := reader.GetOperation(id)
 		if !exists {
 			return ErrNotFound
@@ -534,6 +585,9 @@ func (service *Service) GetOperation(ctx context.Context, principal identity.Pri
 		value, err := operation.UnmarshalCanonical(data)
 		if err != nil {
 			return fmt.Errorf("%w: invalid stored operation", ErrInternal)
+		}
+		if value.WorkspaceID != workspaceID {
+			return fmt.Errorf("%w: stored Operation escaped Workspace scope", ErrInternal)
 		}
 		canonical, err := operation.MarshalCanonical(value)
 		if err != nil || !bytes.Equal(canonical, data) {
@@ -586,6 +640,7 @@ func (service *Service) validateMutation(
 func (service *Service) validateAddressedMutation(
 	ctx context.Context,
 	principal identity.Principal,
+	workspaceID resource.ID,
 	kind hierarchy.Kind,
 	id resource.ID,
 	version, target, key string,
@@ -596,7 +651,7 @@ func (service *Service) validateAddressedMutation(
 	if _, err := hierarchy.ParseKind(kind.String()); err != nil {
 		return ErrInvalidCommand
 	}
-	if resourceIDInvalid(id) || !resourceVersionPattern.MatchString(version) {
+	if resourceIDInvalid(workspaceID) || resourceIDInvalid(id) || !resourceVersionPattern.MatchString(version) {
 		return ErrInvalidCommand
 	}
 	return nil
@@ -604,6 +659,7 @@ func (service *Service) validateAddressedMutation(
 
 func (service *Service) idempotencyIdentity(
 	principal identity.Principal,
+	workspaceID resource.ID,
 	method, target, key string,
 	canonical []byte,
 ) (reconciliation.RequestFingerprint, reconciliation.IdempotencyScope, string, error) {
@@ -611,11 +667,12 @@ func (service *Service) idempotencyIdentity(
 	if err != nil {
 		return reconciliation.RequestFingerprint{}, reconciliation.IdempotencyScope{}, "", ErrInvalidCommand
 	}
-	scope, err := reconciliation.NewIdempotencyScope(principal, method, []byte(target))
+	scopeTarget := mutationScopeTarget(workspaceID, target)
+	scope, err := reconciliation.NewIdempotencyScope(principal, method, scopeTarget)
 	if err != nil {
 		return reconciliation.RequestFingerprint{}, reconciliation.IdempotencyScope{}, "", ErrInvalidCommand
 	}
-	return fingerprint, scope, service.replayMapKey(principal, method, target, key), nil
+	return fingerprint, scope, service.replayMapKey(principal, workspaceID, method, target, key), nil
 }
 
 func (service *Service) liveReplay(
@@ -710,7 +767,11 @@ func (service *Service) saveReplay(now time.Time, key string, record replayRecor
 	service.replays[key] = record
 }
 
-func (service *Service) replayMapKey(principal identity.Principal, method, target, key string) string {
+func (service *Service) replayMapKey(
+	principal identity.Principal,
+	workspaceID resource.ID,
+	method, target, key string,
+) string {
 	hasher := hmac.New(sha256.New, service.tokenKey)
 	writeFrame := func(value string) {
 		var size [8]byte
@@ -720,13 +781,31 @@ func (service *Service) replayMapKey(principal identity.Principal, method, targe
 	}
 	writeFrame("veer.reference.replay.v1")
 	writeFrame(principal.Fingerprint().String())
+	writeFrame(workspaceID.String())
 	writeFrame(method)
 	writeFrame(target)
 	writeFrame(key)
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-func loadResources(reader ports.ReferenceReader) ([]Resource, error) {
+func mutationScopeTarget(workspaceID resource.ID, target string) []byte {
+	hasher := sha256.New()
+	var size [8]byte
+	writeFrame := func(value string) {
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = hasher.Write(size[:])
+		_, _ = hasher.Write([]byte(value))
+	}
+	writeFrame("veer.reference.mutation-scope.v1")
+	writeFrame(workspaceID.String())
+	writeFrame(target)
+	return hasher.Sum(nil)
+}
+
+func loadResources(reader ports.ReferenceReader, scopes isolation.WorkspaceScopeSet) ([]Resource, error) {
+	if isolation.ValidateWorkspaceScopeSet(scopes) != nil {
+		return nil, fmt.Errorf("%w: invalid retained Workspace scopes", ErrInternal)
+	}
 	canonical := reader.ListResources()
 	result := make([]Resource, 0, len(canonical))
 	for _, data := range canonical {
@@ -734,9 +813,26 @@ func loadResources(reader ports.ReferenceReader) ([]Resource, error) {
 		if err != nil {
 			return nil, err
 		}
+		if !scopes.Contains(value.Metadata.WorkspaceID()) {
+			return nil, fmt.Errorf("%w: stored resource escaped Workspace scope", ErrInternal)
+		}
 		result = append(result, value)
 	}
 	return result, nil
+}
+
+func newWorkspaceScopes(
+	workspaceID resource.ID,
+) (isolation.WorkspaceScope, isolation.WorkspaceScopeSet, error) {
+	scope, err := isolation.NewWorkspaceScope(workspaceID)
+	if err != nil {
+		return isolation.WorkspaceScope{}, isolation.WorkspaceScopeSet{}, err
+	}
+	scopes, err := isolation.NewWorkspaceScopeSet(workspaceID)
+	if err != nil {
+		return isolation.WorkspaceScope{}, isolation.WorkspaceScopeSet{}, err
+	}
+	return scope, scopes, nil
 }
 
 func findResource(resources []Resource, id resource.ID) (Resource, bool) {
