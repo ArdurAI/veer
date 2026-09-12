@@ -545,10 +545,14 @@ func assertWorkspacePage(
 	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode workspace page: %v; body=%s", err, response.Body.String())
 	}
-	if len(page.Items) != 1 || page.Items[0].Metadata.ID != wantID.String() || page.NextPageToken != "" {
+	var firstID string
+	if len(page.Items) > 0 {
+		firstID = page.Items[0].Metadata.ID
+	}
+	if len(page.Items) != 1 || firstID != wantID.String() || page.NextPageToken != "" {
 		t.Fatalf(
 			"workspace page = items:%d id:%q next:%q, want 1/%q/empty; body=%s",
-			len(page.Items), page.Items[0].Metadata.ID, page.NextPageToken, wantID, response.Body.String(),
+			len(page.Items), firstID, page.NextPageToken, wantID, response.Body.String(),
 		)
 	}
 	assertNoResponseCanary(t, response, forbiddenCanary)
