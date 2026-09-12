@@ -1,0 +1,282 @@
+{
+  "contract": "veer-reference-server-v1alpha1",
+  "openapiArtifact": "api/openapi/veer-v1alpha1.json",
+  "openapiSha256": "7f7ab682e07e4cd9d4b5e626c2aafdc416efe43cb08ddc8a55b9bc6cf448237e",
+  "openapiValidated": true,
+  "providerCalls": 0,
+  "databaseCalls": 0,
+  "queueCalls": 0,
+  "vectors": [
+    {
+      "name": "create-workspace",
+      "method": "POST",
+      "target": "/api/v1alpha1/workspaces",
+      "status": 202,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-create",
+        "location": "/api/v1alpha1/operations/op_0000000000000001"
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "operationId": "op_0000000000000001",
+        "generation": 1,
+        "resourceVersion": "rv_0000000000000001",
+        "acceptedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "create-workspace-replay",
+      "method": "POST",
+      "target": "/api/v1alpha1/workspaces",
+      "status": 202,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-create-replay",
+        "location": "/api/v1alpha1/operations/op_0000000000000001"
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "operationId": "op_0000000000000001",
+        "generation": 1,
+        "resourceVersion": "rv_0000000000000001",
+        "acceptedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "get-workspace",
+      "method": "GET",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001",
+      "status": 200,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-get",
+        "etag": "\"rv_0000000000000001\""
+      },
+      "body": {
+        "apiVersion": "v1alpha1",
+        "kind": "Workspace",
+        "metadata": {
+          "id": "wsp_0000000000000001",
+          "workspaceId": "wsp_0000000000000001",
+          "displayName": "payments",
+          "labels": {
+            "team": "platform"
+          },
+          "generation": 1,
+          "resourceVersion": "rv_0000000000000001",
+          "createdAt": "2026-09-12T12:00:00.000Z",
+          "updatedAt": "2026-09-12T12:00:00.000Z"
+        },
+        "spec": {
+          "suspendReconciliation": false
+        },
+        "status": {
+          "conditions": [],
+          "observedGeneration": 0
+        }
+      }
+    },
+    {
+      "name": "get-create-operation",
+      "method": "GET",
+      "target": "/api/v1alpha1/operations/op_0000000000000001",
+      "status": 200,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-operation",
+        "etag": "\"rv_0000000000000002\""
+      },
+      "body": {
+        "id": "op_0000000000000001",
+        "workspaceId": "wsp_0000000000000001",
+        "resourceId": "wsp_0000000000000001",
+        "generation": 1,
+        "resourceVersion": "rv_0000000000000002",
+        "phase": "Pending",
+        "createdAt": "2026-09-12T12:00:00.000Z",
+        "updatedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "replace-workspace",
+      "method": "PUT",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001",
+      "status": 202,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-replace",
+        "location": "/api/v1alpha1/operations/op_0000000000000002"
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "operationId": "op_0000000000000002",
+        "generation": 2,
+        "resourceVersion": "rv_0000000000000003",
+        "acceptedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "replace-workspace-replay",
+      "method": "PUT",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001",
+      "status": 202,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-replace-replay",
+        "location": "/api/v1alpha1/operations/op_0000000000000002"
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "operationId": "op_0000000000000002",
+        "generation": 2,
+        "resourceVersion": "rv_0000000000000003",
+        "acceptedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "replace-workspace-stale",
+      "method": "PUT",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001",
+      "status": 412,
+      "headers": {
+        "contentType": "application/problem+json",
+        "requestId": "req-replace-stale",
+        "etag": "\"rv_0000000000000003\""
+      },
+      "body": {
+        "type": "urn:veer:problem:precondition-failed",
+        "title": "Resource version is stale",
+        "status": 412,
+        "instance": "urn:veer:request:req-replace-stale",
+        "code": "precondition-failed",
+        "requestId": "req-replace-stale"
+      }
+    },
+    {
+      "name": "replace-workspace-status",
+      "method": "PUT",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001/status",
+      "status": 200,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-status",
+        "etag": "\"rv_0000000000000005\""
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "observedGeneration": 2,
+        "resourceVersion": "rv_0000000000000005",
+        "updatedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "replace-workspace-status-replay",
+      "method": "PUT",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001/status",
+      "status": 200,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-status-replay",
+        "etag": "\"rv_0000000000000005\""
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "observedGeneration": 2,
+        "resourceVersion": "rv_0000000000000005",
+        "updatedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "list-workspaces",
+      "method": "GET",
+      "target": "/api/v1alpha1/workspaces?pageSize=1",
+      "status": 200,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-list"
+      },
+      "body": {
+        "items": [
+          {
+            "apiVersion": "v1alpha1",
+            "kind": "Workspace",
+            "metadata": {
+              "id": "wsp_0000000000000001",
+              "workspaceId": "wsp_0000000000000001",
+              "displayName": "payments-production",
+              "labels": {
+                "team": "platform"
+              },
+              "generation": 2,
+              "resourceVersion": "rv_0000000000000005",
+              "createdAt": "2026-09-12T12:00:00.000Z",
+              "updatedAt": "2026-09-12T12:00:00.000Z"
+            },
+            "spec": {
+              "suspendReconciliation": true
+            },
+            "status": {
+              "conditions": [],
+              "observedGeneration": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "delete-workspace",
+      "method": "DELETE",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001",
+      "status": 202,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-delete",
+        "location": "/api/v1alpha1/operations/op_0000000000000003"
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "operationId": "op_0000000000000003",
+        "generation": 2,
+        "resourceVersion": "rv_0000000000000006",
+        "acceptedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "delete-workspace-replay",
+      "method": "DELETE",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001",
+      "status": 202,
+      "headers": {
+        "contentType": "application/json",
+        "requestId": "req-delete-replay",
+        "location": "/api/v1alpha1/operations/op_0000000000000003"
+      },
+      "body": {
+        "resourceId": "wsp_0000000000000001",
+        "operationId": "op_0000000000000003",
+        "generation": 2,
+        "resourceVersion": "rv_0000000000000006",
+        "acceptedAt": "2026-09-12T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "get-deleted-workspace",
+      "method": "GET",
+      "target": "/api/v1alpha1/workspaces/wsp_0000000000000001",
+      "status": 404,
+      "headers": {
+        "contentType": "application/problem+json",
+        "requestId": "req-get-deleted"
+      },
+      "body": {
+        "type": "urn:veer:problem:not-found",
+        "title": "Resource not found",
+        "status": 404,
+        "instance": "urn:veer:request:req-get-deleted",
+        "code": "not-found",
+        "requestId": "req-get-deleted"
+      }
+    }
+  ]
+}

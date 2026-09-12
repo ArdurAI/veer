@@ -142,6 +142,23 @@ The aggregate command emits machine-readable lines such as
 CI logs a stable step name, outcome, and duration without printing environment
 variables or credentials.
 
+## Reference-server contract
+
+Issue #21 adds the loopback-only `cmd/veer-reference-server` composition root,
+process-local store and lifecycle service, mandatory injected authentication
+and action-authorization boundaries, the published Workspace/Operation HTTP
+handler, and a deterministic black-box report. `./hack/dev test` includes its
+unit, concurrency, real-listener, OpenAPI, and golden-vector tests; the hosted
+race and coverage jobs repeat the complete package set under their respective
+gates.
+
+Use the focused commands, safe token-file workflow, evidence map, cost notes,
+and explicit non-production limitations in the
+[reference-server guide](reference-server.md). Any change to the OpenAPI
+artifact or black-box responses must intentionally update the checked-in
+golden report after review; an unexplained SHA-256 or vector change is contract
+drift, not a snapshot refresh.
+
 ## Contribution attestation
 
 Veer uses the Developer Certificate of Origin 1.1.

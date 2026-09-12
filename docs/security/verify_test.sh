@@ -335,7 +335,7 @@ model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| High \| \*\*TM-001 / {
-      sub(/OIDC, short lifetime, and token exclusion are accepted requirements only/, "Accept unsigned tokens and emit raw credentials")
+	      sub(/The loopback reference server strips one header-only Bearer value/, "Accept unsigned tokens and emit raw credentials")
   }
   { print }
 ' "$model" >"$rewritten_model"
@@ -676,7 +676,7 @@ model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| API and GitOps edge \|/ {
-      sub(/`docs\/architecture\/overview[.]md:5-24`; `docs\/architecture\/0002-alpha-implementation-stack[.]md:72-87`/, "No source evidence retained")
+	      sub(/`docs\/architecture\/overview[.]md:5-24`; `docs\/architecture\/0002-alpha-implementation-stack[.]md:72-87`; `docs\/reference-server[.]md:1-105`/, "No source evidence retained")
   }
   { print }
 ' "$model" >"$rewritten_model"
@@ -1358,7 +1358,7 @@ model="$test_root/docs/security/threat-model.md"
 rewritten_model="$test_root/threat-model.md"
 LC_ALL=C awk '
   /^\| API and GitOps edge \|/ {
-      sub(/Bound request size and destination, authenticate, authorize, validate, admit, and atomically record accepted intent/, "Accept unbounded unauthenticated requests")
+	      sub(/Bound request size and destination, authenticate, authorize, validate, admit, and record accepted intent/, "Accept unbounded unauthenticated requests")
   }
   { print }
 ' "$model" >"$rewritten_model"

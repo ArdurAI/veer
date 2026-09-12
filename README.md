@@ -11,8 +11,11 @@ reliability.
 
 ## Status
 
-Veer is in the pre-alpha foundation phase. APIs, storage formats, and
-deployment topology are not yet stable.
+Veer is in the pre-alpha foundation phase. A loopback-only in-memory reference
+server now executes the published Workspace and Operation contract and all six
+resource kinds have service-level lifecycle coverage. APIs, durable storage,
+production identity/policy enforcement, provider execution, and deployment
+topology are not yet stable or operable.
 
 ## Development
 
@@ -101,6 +104,7 @@ The first implementation slice targets AWS and Kubernetes:
 - [Tamper-evident audit and privileged administration](docs/architecture/0011-tamper-evident-audit-and-privileged-administration.md)
 - [Reconciliation reliability, idempotency, and fencing](docs/architecture/0012-reconciliation-reliability-and-fencing.md)
 - [OpenAPI v1alpha1 baseline](api/openapi/veer-v1alpha1.json)
+- [In-memory reference server and evidence](docs/reference-server.md)
 - [Local development](docs/development.md)
 - [Security model](docs/security/model.md)
 - [Formal threat model and data classification](docs/security/threat-model.md)

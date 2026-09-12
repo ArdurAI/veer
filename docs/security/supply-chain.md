@@ -100,8 +100,10 @@ mis-scoped, or expired entry; gosec additionally requires both a rule ID and
 justification. The current G115 entries preserve bounded `uint32` protocol
 fields or a capacity counter, the G101 entries identify public vocabulary that
 resembles secret names, and G118 records the bounded revocation lifecycle that
-must finish cleanup after its caller stops waiting. `nolint` and `lint:ignore`
-remain prohibited, as do unregistered `#nosec` annotations. Gosec scans
+must finish cleanup after its caller stops waiting. G304 records the explicitly
+configured, identity-checked private reference-token file; G705 records bounded
+JSON problem output with a safe request-ID grammar and `nosniff`. `nolint` and
+`lint:ignore` remain prohibited, as do unregistered `#nosec` annotations. Gosec scans
 checked-in generated Go files rather than trusting a self-declared generated
 header to remove compiled code from analysis. GitHub dependency-review advisory
 allowlists remain prohibited.

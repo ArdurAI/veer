@@ -10,3 +10,5 @@ VEER-SEC-008	G101	internal/core/domain/reconciliation/vocabulary.go	info@ardur.a
 VEER-SEC-009	G101	internal/core/domain/authorization/vocabulary.go	info@ardur.ai	2027-03-08	credential.resolve is a public authorization action identifier and never stores credential material
 VEER-SEC-010	G101	api/openapi/contract.go	info@ardur.ai	2027-03-08	providerTokenPattern validates public provider names and is not a token or credential
 VEER-SEC-011	G118	internal/core/service/credentialbroker/lifecycle.go	info@ardur.ai	2027-03-08	revocation uses its own bounded backend context so cleanup and terminal publication survive caller cancellation
+VEER-SEC-012	G304	cmd/veer-reference-server/main.go	info@ardur.ai	2027-03-08	the operator-selected token path is identity-checked and must resolve to a private regular non-symlink file
+VEER-SEC-013	G705	internal/transport/http/reference.go	info@ardur.ai	2027-03-08	problem bodies are JSON-escaped and nosniff while request identifiers use a validated non-HTML grammar

@@ -242,6 +242,55 @@ func (resource Resource[Spec, Status]) CanonicalSpec() []byte {
 	return bytes.Clone(resource.spec)
 }
 
+// ReplaceIntent atomically replaces all caller-owned desired-state fields.
+// The complete write consumes at most one resource version and update time;
+// generation advances exactly once only when the canonical spec changes.
+// An exact replay is a no-op even when the supplied version and time are
+// otherwise invalid.
+func (resource Resource[Spec, Status]) ReplaceIntent(
+	displayName string,
+	labels map[string]string,
+	spec Spec,
+	nextResourceVersion string,
+	updatedAt time.Time,
+) (Resource[Spec, Status], error) {
+	if err := validateDisplayName(displayName); err != nil {
+		return resource, err
+	}
+	normalizedLabels, err := validateLabels(labels)
+	if err != nil {
+		return resource, err
+	}
+	canonicalSpec, _, err := canonicalizeObject(spec, "spec")
+	if err != nil {
+		return resource, err
+	}
+
+	specChanged := !bytes.Equal(canonicalSpec, resource.spec)
+	if displayName == resource.metadata.displayName &&
+		labelsEqual(normalizedLabels, resource.metadata.labels) && !specChanged {
+		return resource, nil
+	}
+	if specChanged && resource.metadata.generation == Generation(math.MaxInt64) {
+		return resource, ErrGenerationOverflow
+	}
+
+	result, err := resource.advance(nextResourceVersion, updatedAt)
+	if err != nil {
+		return resource, err
+	}
+	result.metadata.displayName = displayName
+	result.metadata.labels = normalizedLabels
+	result.spec = canonicalSpec
+	if specChanged {
+		result.metadata.generation++
+	}
+	if err := result.validateSize(); err != nil {
+		return resource, err
+	}
+	return result, nil
+}
+
 // Rename returns a copy with a new display name. An identical name is a no-op
 // and consumes neither a resource version nor an update timestamp.
 func (resource Resource[Spec, Status]) Rename(

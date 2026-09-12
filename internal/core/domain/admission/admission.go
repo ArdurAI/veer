@@ -47,6 +47,61 @@ type CreateResult struct {
 	intent    model.Intent
 }
 
+// NormalizeIntent runs the transport-shape, semantic, defaulting, and
+// conversion stages that do not require current persistence state. Services
+// use the result to fingerprint a retry before evaluating a stale current
+// resource. Immutable placement and reference validation still run only in
+// AdmitCreate or AdmitReplace before a fresh mutation can commit.
+func NormalizeIntent(raw []byte) (model.Intent, error) {
+	document, failure := parseRaw(raw)
+	if failure != nil {
+		return nil, failure
+	}
+	source, failure := schemaIntent(document)
+	if failure != nil {
+		return nil, failure
+	}
+	if failure := semanticIntent(source); failure != nil {
+		return nil, failure
+	}
+	defaulted, failure := defaultIntent(source)
+	if failure != nil {
+		return nil, failure
+	}
+	intent, failure := convertIntent(defaulted)
+	if failure != nil {
+		return nil, failure
+	}
+	return model.CloneIntent(intent), nil
+}
+
+// NormalizeStatus runs status processing without a current-resource lookup.
+// MaxInt64 is used only as the temporary observation ceiling; AdmitStatus
+// enforces the actual current generation before any fresh write commits.
+func NormalizeStatus(raw []byte) (model.StatusWrite, error) {
+	document, failure := parseRaw(raw)
+	if failure != nil {
+		return nil, failure
+	}
+	source, failure := schemaStatus(document)
+	if failure != nil {
+		return nil, failure
+	}
+	const maximumGeneration = int64(^uint64(0) >> 1)
+	if failure := semanticStatus(source, maximumGeneration); failure != nil {
+		return nil, failure
+	}
+	defaulted, failure := defaultStatus(source)
+	if failure != nil {
+		return nil, failure
+	}
+	status, failure := convertStatus(defaulted, maximumGeneration)
+	if failure != nil {
+		return nil, failure
+	}
+	return model.CloneStatusWrite(status), nil
+}
+
 // Placement returns an independent server-derived placement.
 func (result CreateResult) Placement() hierarchy.Placement {
 	return result.placement.Clone()
