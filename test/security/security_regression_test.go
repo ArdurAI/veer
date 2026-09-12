@@ -35,6 +35,8 @@ const (
 	securityBearerCanary         = "security-route-bearer-canary"
 	invalidBearerCanary          = "invalid-security-route-bearer-canary"
 	securityResourceCanary       = "security-resource-confidential-canary"
+	securityPolicyCanary         = "security-policy-confidential-canary"
+	securityMemberCanary         = "mem_security_confidential_0001"
 	securityIdentityCanary       = "security-identity-confidential-canary"
 	maximumSecurityProblemBytes  = 1_024
 	maximumSecurityFieldPathSize = 96
@@ -89,6 +91,8 @@ type securityFixture struct {
 	outsiderWorkspaceID resource.ID
 	resourceVersion     string
 	operationID         resource.ID
+	policyID            resource.ID
+	memberID            resource.ID
 }
 
 type securityAccess struct {
@@ -331,11 +335,11 @@ func newSecurityFixtureForRole(t testing.TB, memberRole authorization.Role) secu
 	if err != nil {
 		t.Fatal(err)
 	}
-	memberDirectory := createSecurityPolicy(
-		t, service, member, workspace.ResourceID, resource.ID("mem_security_matrix_0001"),
-		memberRole, "security member policy", "security:bootstrap:policy", "security-bootstrap-policy-0001",
+	memberDirectory, memberPolicy := createSecurityPolicy(
+		t, service, member, workspace.ResourceID, resource.ID(securityMemberCanary),
+		memberRole, securityPolicyCanary, "security:bootstrap:policy", "security-bootstrap-policy-0001",
 	)
-	outsiderDirectory := createSecurityPolicy(
+	outsiderDirectory, _ := createSecurityPolicy(
 		t, service, outsider, outsiderWorkspace.ResourceID, resource.ID("mem_security_matrix_0002"),
 		authorization.RoleWorkspaceAdministrator, "security outsider policy",
 		"security:bootstrap:outsider-policy", "security-bootstrap-policy-0002",
@@ -360,6 +364,7 @@ func newSecurityFixtureForRole(t testing.TB, memberRole authorization.Role) secu
 		memberHandler: memberHandler, outsiderHandler: outsiderHandler,
 		workspaceID: workspace.ResourceID, outsiderWorkspaceID: outsiderWorkspace.ResourceID,
 		resourceVersion: workspace.ResourceVersion, operationID: workspace.OperationID,
+		policyID: memberPolicy.ResourceID, memberID: resource.ID(securityMemberCanary),
 	}
 }
 
@@ -371,7 +376,7 @@ func createSecurityPolicy(
 	memberID resource.ID,
 	role authorization.Role,
 	displayName, canonicalTarget, idempotencyKey string,
-) authorization.MemberDirectory {
+) (authorization.MemberDirectory, reference.MutationReceipt) {
 	t.Helper()
 	record, err := authorization.NewMemberRecord(authorization.MemberInput{
 		ID: memberID, WorkspaceID: workspaceID, Kind: principal.Kind(),
@@ -400,14 +405,15 @@ func createSecurityPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Create(context.Background(), reference.CreateCommand{
+	receipt, err := service.Create(context.Background(), reference.CreateCommand{
 		Principal: principal, Kind: hierarchy.KindPolicy, WorkspaceID: workspaceID, ParentID: &parentID,
 		CanonicalTarget: canonicalTarget, IdempotencyKey: idempotencyKey,
 		Body: policyBody, Members: directory,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return directory
+	return directory, receipt
 }
 
 func securityPrincipal(t testing.TB, subject string) identity.Principal {
@@ -488,9 +494,13 @@ func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fi
 		t,
 		response,
 		securityResourceCanary,
+		securityPolicyCanary,
+		securityMemberCanary,
 		securityIdentityCanary,
 		fixture.workspaceID.String(),
 		fixture.operationID.String(),
+		fixture.policyID.String(),
+		fixture.memberID.String(),
 	)
 }
 
