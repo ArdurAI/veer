@@ -7,11 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -30,31 +32,63 @@ import (
 )
 
 const (
-	securityBearerCanary = "security-route-bearer-canary"
-	invalidBearerCanary  = "invalid-security-route-bearer-canary"
+	securityBearerCanary         = "security-route-bearer-canary"
+	invalidBearerCanary          = "invalid-security-route-bearer-canary"
+	securityResourceCanary       = "security-resource-confidential-canary"
+	securityIdentityCanary       = "security-identity-confidential-canary"
+	maximumSecurityProblemBytes  = 1_024
+	maximumSecurityFieldPathSize = 96
+)
+
+var (
+	securityProblemCodePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	securityRequestIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	securityFieldPathPattern   = regexp.MustCompile(`^(/([^~/]|~0|~1)*)+$`)
+	securityProblemStatuses    = map[string]int{
+		"validation-failed":       http.StatusBadRequest,
+		"authentication-required": http.StatusUnauthorized,
+		"authorization-denied":    http.StatusForbidden,
+		"not-found":               http.StatusNotFound,
+		"method-not-allowed":      http.StatusMethodNotAllowed,
+		"idempotency-key-reused":  http.StatusConflict,
+		"uniqueness-conflict":     http.StatusConflict,
+		"lifecycle-conflict":      http.StatusConflict,
+		"policy-conflict":         http.StatusConflict,
+		"precondition-failed":     http.StatusPreconditionFailed,
+		"request-too-large":       http.StatusRequestEntityTooLarge,
+		"unsupported-media-type":  http.StatusUnsupportedMediaType,
+		"precondition-required":   http.StatusPreconditionRequired,
+		"rate-limited":            http.StatusTooManyRequests,
+		"internal-failure":        http.StatusInternalServerError,
+		"unavailable":             http.StatusServiceUnavailable,
+	}
 )
 
 type securityRoute struct {
-	operationID        string
-	method             string
-	pathTemplate       string
-	target             func(securityFixture) string
-	body               func(securityFixture) []byte
-	headers            func(securityFixture) map[string]string
-	memberStatus       int
-	memberOutcome      string
-	outsiderStatus     int
-	outsiderOutcome    string
-	assertMemberBody   func(*testing.T, *httptest.ResponseRecorder)
-	assertOutsiderBody func(*testing.T, *httptest.ResponseRecorder)
+	operationID         string
+	method              string
+	pathTemplate        string
+	target              func(securityFixture) string
+	body                func(securityFixture) []byte
+	headers             func(securityFixture) map[string]string
+	memberStatus        int
+	memberOutcome       string
+	memberProblemCode   string
+	outsiderStatus      int
+	outsiderOutcome     string
+	outsiderProblemCode string
+	allRolesDenied      bool
+	assertMemberBody    func(*testing.T, securityFixture, *httptest.ResponseRecorder)
+	assertOutsiderBody  func(*testing.T, securityFixture, *httptest.ResponseRecorder)
 }
 
 type securityFixture struct {
-	memberHandler   http.Handler
-	outsiderHandler http.Handler
-	workspaceID     resource.ID
-	resourceVersion string
-	operationID     resource.ID
+	memberHandler       http.Handler
+	outsiderHandler     http.Handler
+	workspaceID         resource.ID
+	outsiderWorkspaceID resource.ID
+	resourceVersion     string
+	operationID         resource.ID
 }
 
 type securityAccess struct {
@@ -94,6 +128,24 @@ type securityRouteResult struct {
 	InvalidCredentialStatus int    `json:"invalidCredentialStatus"`
 }
 
+type securityFieldViolation struct {
+	Field   string `json:"field"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type securityProblem struct {
+	Type              string                   `json:"type"`
+	Title             string                   `json:"title"`
+	Status            int                      `json:"status"`
+	Detail            string                   `json:"detail,omitempty"`
+	Instance          string                   `json:"instance"`
+	Code              string                   `json:"code"`
+	RequestID         string                   `json:"requestId"`
+	Errors            []securityFieldViolation `json:"errors,omitempty"`
+	RetryAfterSeconds int                      `json:"retryAfterSeconds,omitempty"`
+}
+
 func TestPublicRouteSecurityMatrix(t *testing.T) {
 	routes := publicSecurityRoutes()
 	assertOpenAPIRouteCoverage(t, routes)
@@ -104,25 +156,45 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 		t.Run(route.operationID, func(t *testing.T) {
 			fixture := newSecurityFixture(t)
 			member := securityRequest(t, fixture.memberHandler, route, fixture, securityBearerCanary)
-			assertSecurityResponse(t, member, route.memberStatus)
+			assertSecurityResponse(t, member, route.memberStatus, route.memberProblemCode)
+			if route.memberStatus >= http.StatusBadRequest {
+				assertNoFixtureCanary(t, member, fixture)
+			}
 			if route.assertMemberBody != nil {
-				route.assertMemberBody(t, member)
+				route.assertMemberBody(t, fixture, member)
 			}
 
 			fixture = newSecurityFixture(t)
 			outsider := securityRequest(t, fixture.outsiderHandler, route, fixture, securityBearerCanary)
-			assertSecurityResponse(t, outsider, route.outsiderStatus)
+			assertSecurityResponse(t, outsider, route.outsiderStatus, route.outsiderProblemCode)
+			if route.outsiderStatus >= http.StatusBadRequest {
+				assertNoFixtureCanary(t, outsider, fixture)
+			}
 			if route.assertOutsiderBody != nil {
-				route.assertOutsiderBody(t, outsider)
+				route.assertOutsiderBody(t, fixture, outsider)
 			}
 
 			fixture = newSecurityFixture(t)
 			missing := securityRequest(t, fixture.memberHandler, route, fixture, "")
 			assertAuthenticationDenial(t, missing, `Bearer realm="veer"`)
+			assertNoFixtureCanary(t, missing, fixture)
 
 			fixture = newSecurityFixture(t)
 			invalid := securityRequest(t, fixture.memberHandler, route, fixture, invalidBearerCanary)
 			assertAuthenticationDenial(t, invalid, `Bearer realm="veer", error="invalid_token"`)
+			assertNoFixtureCanary(t, invalid, fixture)
+
+			if route.allRolesDenied {
+				for _, role := range authorization.Roles() {
+					role := role
+					t.Run("reserved-"+role.String(), func(t *testing.T) {
+						roleFixture := newSecurityFixtureForRole(t, role)
+						denied := securityRequest(t, roleFixture.memberHandler, route, roleFixture, securityBearerCanary)
+						assertSecurityResponse(t, denied, http.StatusForbidden, "authorization-denied")
+						assertNoFixtureCanary(t, denied, roleFixture)
+					})
+				}
+			}
 
 			results = append(results, securityRouteResult{
 				OperationID: route.operationID, Method: route.method, PathTemplate: route.pathTemplate,
@@ -151,14 +223,15 @@ func publicSecurityRoutes() []securityRoute {
 		{
 			operationID: "listWorkspaces", method: http.MethodGet,
 			pathTemplate: "/api/v1alpha1/workspaces",
-			target:       func(securityFixture) string { return "/api/v1alpha1/workspaces" },
+			target:       func(securityFixture) string { return "/api/v1alpha1/workspaces?pageSize=1" },
 			memberStatus: http.StatusOK, memberOutcome: "allowed",
-			outsiderStatus: http.StatusOK, outsiderOutcome: "denied-by-row-filter",
-			assertMemberBody: func(t *testing.T, response *httptest.ResponseRecorder) {
-				assertWorkspacePageLength(t, response, 1)
+			outsiderStatus: http.StatusOK, outsiderOutcome: "denied-rows-filtered-before-pagination",
+			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
+				assertWorkspacePage(t, response, fixture.workspaceID, "security outsider workspace")
 			},
-			assertOutsiderBody: func(t *testing.T, response *httptest.ResponseRecorder) {
-				assertWorkspacePageLength(t, response, 0)
+			assertOutsiderBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
+				assertWorkspacePage(t, response, fixture.outsiderWorkspaceID, securityResourceCanary)
+				assertNoFixtureCanary(t, response, fixture)
 			},
 		},
 		{
@@ -172,14 +245,15 @@ func publicSecurityRoutes() []securityRoute {
 					"Idempotency-Key": "security-route-create-0001",
 				}
 			},
-			memberStatus: http.StatusForbidden, memberOutcome: "service-reserved-deny",
-			outsiderStatus: http.StatusForbidden, outsiderOutcome: "service-reserved-deny",
+			memberStatus: http.StatusForbidden, memberOutcome: "service-reserved-deny", memberProblemCode: "authorization-denied",
+			outsiderStatus: http.StatusForbidden, outsiderOutcome: "service-reserved-deny", outsiderProblemCode: "authorization-denied",
+			allRolesDenied: true,
 		},
 		{
 			operationID: "getWorkspace", method: http.MethodGet,
 			pathTemplate: "/api/v1alpha1/workspaces/{workspaceId}", target: workspaceTarget,
 			memberStatus: http.StatusOK, memberOutcome: "allowed",
-			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied",
+			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 		},
 		{
 			operationID: "replaceWorkspace", method: http.MethodPut,
@@ -187,14 +261,14 @@ func publicSecurityRoutes() []securityRoute {
 			body:         func(securityFixture) []byte { return validWorkspaceBody("replacement") },
 			headers:      mutationHeaders,
 			memberStatus: http.StatusAccepted, memberOutcome: "allowed",
-			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied",
+			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 		},
 		{
 			operationID: "deleteWorkspace", method: http.MethodDelete,
 			pathTemplate: "/api/v1alpha1/workspaces/{workspaceId}", target: workspaceTarget,
 			headers:      mutationHeaders,
-			memberStatus: http.StatusConflict, memberOutcome: "authorization-allowed-lifecycle-denied",
-			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied",
+			memberStatus: http.StatusConflict, memberOutcome: "authorization-allowed-lifecycle-denied", memberProblemCode: "lifecycle-conflict",
+			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 		},
 		{
 			operationID: "replaceWorkspaceStatus", method: http.MethodPut,
@@ -204,8 +278,9 @@ func publicSecurityRoutes() []securityRoute {
 				return []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","status":{"observedGeneration":1,"conditions":[]}}`)
 			},
 			headers:      mutationHeaders,
-			memberStatus: http.StatusForbidden, memberOutcome: "service-reserved-deny",
-			outsiderStatus: http.StatusForbidden, outsiderOutcome: "service-reserved-deny",
+			memberStatus: http.StatusForbidden, memberOutcome: "service-reserved-deny", memberProblemCode: "authorization-denied",
+			outsiderStatus: http.StatusForbidden, outsiderOutcome: "service-reserved-deny", outsiderProblemCode: "authorization-denied",
+			allRolesDenied: true,
 		},
 		{
 			operationID: "getOperation", method: http.MethodGet,
@@ -214,14 +289,21 @@ func publicSecurityRoutes() []securityRoute {
 				return "/api/v1alpha1/operations/" + fixture.operationID.String()
 			},
 			memberStatus: http.StatusOK, memberOutcome: "allowed",
-			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied",
+			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 		},
 	}
 }
 
 func newSecurityFixture(t testing.TB) securityFixture {
+	return newSecurityFixtureForRole(t, authorization.RoleWorkspaceAdministrator)
+}
+
+func newSecurityFixtureForRole(t testing.TB, memberRole authorization.Role) securityFixture {
 	t.Helper()
-	member := securityPrincipal(t, "security-member")
+	if _, err := authorization.ParseRole(memberRole.String()); err != nil {
+		t.Fatal(err)
+	}
+	member := securityPrincipal(t, securityIdentityCanary)
 	outsider := securityPrincipal(t, "security-outsider")
 	service, err := reference.New(reference.Config{
 		Store: memory.NewStore(), Clock: reference.ClockFunc(func() time.Time {
@@ -236,37 +318,32 @@ func newSecurityFixture(t testing.TB) securityFixture {
 	workspace, err := service.Create(context.Background(), reference.CreateCommand{
 		Principal: member, Kind: hierarchy.KindWorkspace,
 		CanonicalTarget: "security:bootstrap:workspace", IdempotencyKey: "security-bootstrap-workspace-0001",
-		Body: validWorkspaceBody("security workspace"),
+		Body: validWorkspaceBody(securityResourceCanary),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	memberID := resource.ID("mem_security_matrix_0001")
-	record, err := authorization.NewMemberRecord(authorization.MemberInput{
-		ID: memberID, WorkspaceID: workspace.ResourceID, Kind: member.Kind(),
-		LogicalIdentity: member.LogicalIdentity(),
+	outsiderWorkspace, err := service.Create(context.Background(), reference.CreateCommand{
+		Principal: outsider, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "security:bootstrap:outsider-workspace", IdempotencyKey: "security-bootstrap-workspace-0002",
+		Body: validWorkspaceBody("security outsider workspace"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory, err := authorization.NewMemberDirectory(
-		workspace.ResourceID,
-		[]authorization.MemberRecord{record},
+	memberDirectory := createSecurityPolicy(
+		t, service, member, workspace.ResourceID, resource.ID("mem_security_matrix_0001"),
+		memberRole, "security member policy", "security:bootstrap:policy", "security-bootstrap-policy-0001",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parentID := workspace.ResourceID
-	policyBody := []byte(`{"apiVersion":"v1alpha1","kind":"Policy","metadata":{"displayName":"security matrix administrator"},"spec":{"bindings":[{"memberId":"` + memberID.String() + `","role":"WorkspaceAdministrator","scope":{"kind":"Workspace"}}]}}`)
-	if _, err := service.Create(context.Background(), reference.CreateCommand{
-		Principal: member, Kind: hierarchy.KindPolicy, WorkspaceID: workspace.ResourceID, ParentID: &parentID,
-		CanonicalTarget: "security:bootstrap:policy", IdempotencyKey: "security-bootstrap-policy-0001",
-		Body: policyBody, Members: directory,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	outsiderDirectory := createSecurityPolicy(
+		t, service, outsider, outsiderWorkspace.ResourceID, resource.ID("mem_security_matrix_0002"),
+		authorization.RoleWorkspaceAdministrator, "security outsider policy",
+		"security:bootstrap:outsider-policy", "security-bootstrap-policy-0002",
+	)
 	runtime, err := referenceauthorization.New(referenceauthorization.Config{
-		Reference: service, MemberDirectories: []authorization.MemberDirectory{directory}, MaximumAdmissions: 32,
+		Reference:         service,
+		MemberDirectories: []authorization.MemberDirectory{memberDirectory, outsiderDirectory},
+		MaximumAdmissions: 32,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -281,9 +358,56 @@ func newSecurityFixture(t testing.TB) securityFixture {
 	}
 	return securityFixture{
 		memberHandler: memberHandler, outsiderHandler: outsiderHandler,
-		workspaceID: workspace.ResourceID, resourceVersion: workspace.ResourceVersion,
-		operationID: workspace.OperationID,
+		workspaceID: workspace.ResourceID, outsiderWorkspaceID: outsiderWorkspace.ResourceID,
+		resourceVersion: workspace.ResourceVersion, operationID: workspace.OperationID,
 	}
+}
+
+func createSecurityPolicy(
+	t testing.TB,
+	service *reference.Service,
+	principal identity.Principal,
+	workspaceID resource.ID,
+	memberID resource.ID,
+	role authorization.Role,
+	displayName, canonicalTarget, idempotencyKey string,
+) authorization.MemberDirectory {
+	t.Helper()
+	record, err := authorization.NewMemberRecord(authorization.MemberInput{
+		ID: memberID, WorkspaceID: workspaceID, Kind: principal.Kind(),
+		LogicalIdentity: principal.LogicalIdentity(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := authorization.NewMemberDirectory(
+		workspaceID,
+		[]authorization.MemberRecord{record},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := workspaceID
+	policyBody, err := json.Marshal(map[string]any{
+		"apiVersion": "v1alpha1",
+		"kind":       "Policy",
+		"metadata":   map[string]any{"displayName": displayName},
+		"spec": map[string]any{"bindings": []any{map[string]any{
+			"memberId": memberID.String(), "role": role.String(),
+			"scope": map[string]any{"kind": "Workspace"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(context.Background(), reference.CreateCommand{
+		Principal: principal, Kind: hierarchy.KindPolicy, WorkspaceID: workspaceID, ParentID: &parentID,
+		CanonicalTarget: canonicalTarget, IdempotencyKey: idempotencyKey,
+		Body: policyBody, Members: directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return directory
 }
 
 func securityPrincipal(t testing.TB, subject string) identity.Principal {
@@ -324,7 +448,12 @@ func securityRequest(
 	return response
 }
 
-func assertSecurityResponse(t testing.TB, response *httptest.ResponseRecorder, status int) {
+func assertSecurityResponse(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	status int,
+	problemCode string,
+) {
 	t.Helper()
 	if response.Code != status {
 		t.Fatalf("response status = %d, want %d; body=%s", response.Code, status, response.Body.String())
@@ -337,44 +466,151 @@ func assertSecurityResponse(t testing.TB, response *httptest.ResponseRecorder, s
 	if !json.Valid(response.Body.Bytes()) {
 		t.Fatalf("response is not JSON: %q", response.Body.Bytes())
 	}
+	if problemCode != "" {
+		problem := assertSecurityProblemContract(t, response)
+		if problem.Code != problemCode {
+			t.Fatalf("problem code = %q, want %q; body=%s", problem.Code, problemCode, response.Body.String())
+		}
+	} else if response.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", response.Header().Get("Content-Type"))
+	}
 	assertNoBearerCanary(t, response)
 }
 
 func assertNoBearerCanary(t testing.TB, response *httptest.ResponseRecorder) {
+	t.Helper()
+	assertNoResponseCanary(t, response, securityBearerCanary, invalidBearerCanary)
+}
+
+func assertNoFixtureCanary(t testing.TB, response *httptest.ResponseRecorder, fixture securityFixture) {
+	t.Helper()
+	assertNoResponseCanary(
+		t,
+		response,
+		securityResourceCanary,
+		securityIdentityCanary,
+		fixture.workspaceID.String(),
+		fixture.operationID.String(),
+	)
+}
+
+func assertNoResponseCanary(t testing.TB, response *httptest.ResponseRecorder, canaries ...string) {
 	t.Helper()
 	outputs := []string{response.Body.String()}
 	for _, values := range response.Header() {
 		outputs = append(outputs, values...)
 	}
 	for _, output := range outputs {
-		if strings.Contains(output, securityBearerCanary) || strings.Contains(output, invalidBearerCanary) {
-			t.Fatalf("response disclosed a bearer canary: %q", output)
+		for _, canary := range canaries {
+			if canary != "" && strings.Contains(output, canary) {
+				t.Fatalf("response disclosed confidentiality canary %q in %q", canary, output)
+			}
 		}
 	}
 }
 
 func assertAuthenticationDenial(t testing.TB, response *httptest.ResponseRecorder, challenge string) {
 	t.Helper()
-	assertSecurityResponse(t, response, http.StatusUnauthorized)
+	assertSecurityResponse(t, response, http.StatusUnauthorized, "authentication-required")
 	if response.Header().Get("WWW-Authenticate") != challenge {
 		t.Fatalf("WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), challenge)
 	}
-	var problem struct {
-		Code string `json:"code"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil || problem.Code != "authentication-required" {
-		t.Fatalf("authentication problem = %q, %v", response.Body.Bytes(), err)
-	}
 }
 
-func assertWorkspacePageLength(t testing.TB, response *httptest.ResponseRecorder, want int) {
+func assertWorkspacePage(
+	t testing.TB,
+	response *httptest.ResponseRecorder,
+	wantID resource.ID,
+	forbiddenCanary string,
+) {
 	t.Helper()
 	var page struct {
-		Items []json.RawMessage `json:"items"`
+		Items []struct {
+			Metadata struct {
+				ID string `json:"id"`
+			} `json:"metadata"`
+		} `json:"items"`
+		NextPageToken string `json:"nextPageToken"`
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || len(page.Items) != want {
-		t.Fatalf("workspace page length = %d, want %d; error=%v body=%s", len(page.Items), want, err, response.Body.String())
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode workspace page: %v; body=%s", err, response.Body.String())
 	}
+	if len(page.Items) != 1 || page.Items[0].Metadata.ID != wantID.String() || page.NextPageToken != "" {
+		t.Fatalf(
+			"workspace page = items:%d id:%q next:%q, want 1/%q/empty; body=%s",
+			len(page.Items), page.Items[0].Metadata.ID, page.NextPageToken, wantID, response.Body.String(),
+		)
+	}
+	assertNoResponseCanary(t, response, forbiddenCanary)
+}
+
+func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseRecorder) securityProblem {
+	t.Helper()
+	if response.Header().Get("Content-Type") != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, want application/problem+json", response.Header().Get("Content-Type"))
+	}
+	if response.Body.Len() == 0 || response.Body.Len() > maximumSecurityProblemBytes {
+		t.Fatalf("problem body bytes = %d, want 1..%d", response.Body.Len(), maximumSecurityProblemBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
+	decoder.DisallowUnknownFields()
+	var problem securityProblem
+	if err := decoder.Decode(&problem); err != nil {
+		t.Fatalf("decode runtime problem: %v; body=%s", err, response.Body.String())
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		t.Fatalf("runtime problem has trailing JSON: %v; body=%s", err, response.Body.String())
+	}
+	wantStatus, codeKnown := securityProblemStatuses[problem.Code]
+	if !codeKnown || wantStatus != response.Code || problem.Status != response.Code {
+		t.Fatalf(
+			"runtime problem code/status = %q/%d/%d, want a closed code for HTTP %d",
+			problem.Code, problem.Status, wantStatus, response.Code,
+		)
+	}
+	requestID := response.Header().Get("Veer-Request-Id")
+	if !securityRequestIDPattern.MatchString(problem.RequestID) || problem.RequestID != requestID ||
+		problem.Instance != "urn:veer:request:"+problem.RequestID ||
+		problem.Type != "urn:veer:problem:"+problem.Code {
+		t.Fatalf(
+			"runtime problem identity = type:%q instance:%q request:%q header:%q",
+			problem.Type, problem.Instance, problem.RequestID, requestID,
+		)
+	}
+	if len(problem.Type) > 81 || !safeSecurityProblemText(problem.Title, 64, true) ||
+		!safeSecurityProblemText(problem.Detail, 192, false) || len(problem.Instance) > 81 ||
+		len(problem.Code) > 64 || !securityProblemCodePattern.MatchString(problem.Code) {
+		t.Fatalf("runtime problem primitive bounds failed: %#v", problem)
+	}
+	if len(problem.Errors) > 1 {
+		t.Fatalf("runtime problem errors = %d, want at most 1", len(problem.Errors))
+	}
+	for _, violation := range problem.Errors {
+		if len(violation.Field) == 0 || len(violation.Field) > maximumSecurityFieldPathSize ||
+			!securityFieldPathPattern.MatchString(violation.Field) ||
+			len(violation.Code) == 0 || len(violation.Code) > 32 ||
+			!securityProblemCodePattern.MatchString(violation.Code) ||
+			!safeSecurityProblemText(violation.Message, 96, false) {
+			t.Fatalf("runtime field violation bounds failed: %#v", violation)
+		}
+	}
+	if problem.RetryAfterSeconds < 0 || problem.RetryAfterSeconds > 86_400 {
+		t.Fatalf("runtime retryAfterSeconds = %d, want 0 or 1..86400", problem.RetryAfterSeconds)
+	}
+	return problem
+}
+
+func safeSecurityProblemText(value string, maximum int, required bool) bool {
+	if len(value) > maximum || required && value == "" {
+		return false
+	}
+	for index := range len(value) {
+		character := value[index]
+		if character < 0x20 || character > 0x7e || strings.ContainsRune(`"&<>\`, rune(character)) {
+			return false
+		}
+	}
+	return true
 }
 
 func assertOpenAPIRouteCoverage(t *testing.T, routes []securityRoute) {

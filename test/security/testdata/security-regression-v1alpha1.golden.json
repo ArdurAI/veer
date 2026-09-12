@@ -11,7 +11,7 @@
       "memberStatus": 200,
       "memberOutcome": "allowed",
       "outsiderStatus": 200,
-      "outsiderOutcome": "denied-by-row-filter",
+      "outsiderOutcome": "denied-rows-filtered-before-pagination",
       "missingCredentialStatus": 401,
       "invalidCredentialStatus": 401
     },

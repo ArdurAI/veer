@@ -15,7 +15,7 @@ result is
 
 | Operation | Authenticated member | Authenticated outsider | Missing or invalid credential |
 | --- | --- | --- | --- |
-| `listWorkspaces` | `200`, authorized row returned | `200`, denied rows removed before pagination | `401` |
+| `listWorkspaces` | `200`, own row returned; denied row removed before the one-item page | `200`, own row returned; denied row removed before the one-item page | `401` |
 | `createWorkspace` | `403`, service-reserved tenant action | `403`, service-reserved tenant action | `401` |
 | `getWorkspace` | `200` | `403` | `401` |
 | `replaceWorkspace` | `202` | `403` | `401` |
@@ -27,7 +27,8 @@ Workspace creation and status replacement intentionally have no tenant allow
 case. The closed authorization matrix reserves both actions. Treating a `2xx`
 response as required evidence would weaken the security contract. Their
 positive path proves that a valid credential reaches the authorization layer;
-their invariant is a tenant `403` for every role.
+their invariant is a tenant `403` for every value in the closed four-role
+registry.
 
 ## Retained untrusted-input and fuzz corpus
 
@@ -42,12 +43,16 @@ remain available for time-bounded fuzzing:
 | Resource admission | `FuzzAdmitRaw` | every resource kind, duplicate and unknown fields, invalid Unicode, depth/node/byte bounds, trailing values |
 | Closed domain values | fuzz targets under `internal/core/domain` | invalid sum types, identifiers, hierarchy, role/action vocabulary, operations, conditions, audit canonicalization, credentials, and reconciliation digests |
 
-The public-boundary target asserts panic freedom, bounded JSON responses,
-mandatory no-store/nosniff/correlation headers, and bearer-canary absence. The
-OpenAPI validator independently rejects remote servers, remote references, and
-webhook expansion. No provider response parser exists yet; provider-specific
-malicious-response corpora belong with the adapters introduced by issues #38
-and #41.
+The public-boundary target sends malformed body seeds through the
+member-authorized Workspace replacement route so they reach admission parsing.
+It asserts panic freedom, bounded JSON responses, mandatory
+no-store/nosniff/correlation headers, and bearer-canary absence. Every runtime
+problem response must use a closed code/status pair, bind its request ID and
+problem URNs, stay below 1,024 bytes, contain at most one field violation, and
+respect the field-path and text bounds. The OpenAPI validator independently
+rejects remote servers, remote references, and webhook expansion. No provider
+response parser exists yet; provider-specific malicious-response corpora belong
+with the adapters introduced by issues #38 and #41.
 
 Run the public-boundary fuzzer for one minute with:
 
@@ -63,7 +68,7 @@ go test ./test/security -run '^$' -fuzz '^FuzzReferencePublicBoundary$' -fuzztim
 | Credential state | `TestCredentialValuesRedactAndRejectSerialization`, `FuzzSourceMaterialSafety`, and broker lease/lifecycle tests cover source/session material, requests, brokers, leases, rotation, errors, and destruction | Raw material remains callback-bounded; diagnostics redact; serialization rejected |
 | Identity and bearer state | Identity diagnostic/serialization tests, bearer canary tests, OIDC negative corpus, and the route matrix cover principals, request carriers, challenges, problems, and headers | Raw token and identity claims absent from output; rejected request carriers scrubbed |
 | Audit and privileged state | `TestOpaqueRuntimeValuesForbidLossyGenericSerialization` and `TestAdministrationDiagnosticsAndSerializationAreSafe` cover audit/elevation values, nested containers, errors, formatting, and `slog` | Canaries absent; opaque runtime values reject lossy serialization |
-| HTTP errors | Route matrix and `FuzzReferencePublicBoundary` exercise every public route plus malformed/bounded input | Only closed problem codes and bounded field paths are returned; bearer canaries absent |
+| HTTP errors | Route matrix and `FuzzReferencePublicBoundary` exercise every public route plus malformed/bounded input | Only closed problem codes and bounded field paths are returned; bearer, resource, operation, and identity canaries are absent from denied responses |
 | Logs | Package redaction tests send every sensitive value through `fmt` and `slog` | Canaries absent from implemented logging surfaces |
 | Traces | No tracer or trace exporter exists | Not applicable at this revision; issue #63 must add canaries with the first implementation |
 | Metrics | No metrics registry or exporter exists | Not applicable at this revision; issue #63 must add label/value canaries and cardinality bounds |
@@ -84,6 +89,7 @@ go test ./internal/transport/http ./internal/adapters/identity/oidc \
 ./hack/dev security
 ./hack/dev check
 ./hack/dev race
+./hack/dev coverage
 ```
 
 The OAuth token restrictions are cross-checked against
