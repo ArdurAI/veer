@@ -55,6 +55,7 @@ func NewReferenceHandler(
 
 func (handler *ReferenceHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	writer.Header().Set("Cache-Control", "no-store")
 	credential, credentialPresent, authenticationErr := ExtractBearer(request)
 	requestID, requestIDValid := handler.requestID(request)
 	if !requestIDValid {
@@ -515,6 +516,8 @@ func (handler *ReferenceHandler) writeServiceError(writer http.ResponseWriter, r
 		handler.writeProblem(writer, requestID, http.StatusConflict, "idempotency-key-reused", "Request conflicts with a prior mutation", nil)
 	case errors.Is(err, reference.ErrLifecycleConflict):
 		handler.writeProblem(writer, requestID, http.StatusConflict, "lifecycle-conflict", "Resource lifecycle conflict", nil)
+	case errors.Is(err, reference.ErrCapacity):
+		handler.writeUnavailable(writer, requestID)
 	case errors.Is(err, reference.ErrInvalidPageToken), errors.Is(err, reference.ErrInvalidCommand):
 		handler.writeProblem(writer, requestID, http.StatusBadRequest, "validation-failed", "Request validation failed", nil)
 	default:
@@ -587,9 +590,9 @@ func (handler *ReferenceHandler) writeProblem(
 		Instance: "urn:veer:request:" + requestID, Code: code, RequestID: requestID, Errors: violations,
 	})
 	if err != nil || len(encoded) > 1_024 {
-		quotedInstance := strconv.Quote("urn:veer:request:" + requestID)
-		quotedRequestID := strconv.Quote(requestID)
-		encoded = []byte(`{"type":"urn:veer:problem:internal-failure","title":"Internal failure","status":500,"instance":` + quotedInstance + `,"code":"internal-failure","requestId":` + quotedRequestID + `}`)
+		const fallbackRequestID = "internal"
+		writer.Header().Set("Veer-Request-Id", fallbackRequestID)
+		encoded = []byte(`{"type":"urn:veer:problem:internal-failure","title":"Internal failure","status":500,"instance":"urn:veer:request:internal","code":"internal-failure","requestId":"internal"}`)
 		status = http.StatusInternalServerError
 	}
 	writer.WriteHeader(status)

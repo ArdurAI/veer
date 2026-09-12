@@ -36,6 +36,7 @@ var (
 	ErrLifecycleConflict    = errors.New("reference resource lifecycle conflict")
 	ErrIdempotencyConflict  = errors.New("reference idempotency key conflicts")
 	ErrReplayUnavailable    = errors.New("reference idempotency result is unavailable")
+	ErrCapacity             = errors.New("reference service capacity is exhausted")
 	ErrInvalidPageToken     = errors.New("invalid reference page token")
 	ErrPageTooLarge         = errors.New("reference page cannot make progress within byte limit")
 	ErrInternal             = errors.New("reference service invariant failure")

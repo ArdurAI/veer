@@ -94,8 +94,7 @@ func run(ctx context.Context, args []string, output io.Writer, listen listenFunc
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
 		WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: maximumHeaderBytes,
-		ErrorLog:    log.New(output, "", 0),
-		BaseContext: func(net.Listener) context.Context { return ctx },
+		ErrorLog: log.New(output, "", 0),
 	}
 	_, _ = fmt.Fprintf(output, "veer reference server listening on %s\n", listener.Addr())
 	serveResult := make(chan error, 1)
@@ -136,7 +135,8 @@ func validateLoopbackAddress(address string) error {
 
 func loadCredential(path string) (ports.BearerCredential, error) {
 	linkInfo, err := os.Lstat(path)
-	if err != nil || linkInfo.Mode()&os.ModeSymlink != 0 {
+	if err != nil || linkInfo.Mode()&os.ModeSymlink != 0 || !linkInfo.Mode().IsRegular() ||
+		linkInfo.Mode().Perm()&0o077 != 0 {
 		return ports.BearerCredential{}, errors.New("reference token file is unavailable or unsafe")
 	}
 	file, err := os.Open(path) // #nosec G304 -- VEER-SEC-012: explicit path is identity-checked and restricted to a private regular non-symlink file

@@ -268,6 +268,30 @@ func TestListFilteringOrderingPaginationAndTokenBinding(t *testing.T) {
 			t.Fatalf("Create(%s) error = %v", test.name, err)
 		}
 	}
+	fixture.clock.Advance(time.Second)
+	if _, err := fixture.service.Create(ctx, reference.CreateCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "/api/v1alpha1/workspaces", IdempotencyKey: "page-create-missing-label",
+		Body: []byte(`{"apiVersion":"v1alpha1","kind":"Workspace","metadata":{"displayName":"missing-label"},"spec":{}}`),
+	}); err != nil {
+		t.Fatalf("Create(missing label) error = %v", err)
+	}
+	fixture.clock.Advance(time.Second)
+	if _, err := fixture.service.Create(ctx, reference.CreateCommand{
+		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		CanonicalTarget: "/api/v1alpha1/workspaces", IdempotencyKey: "page-create-empty-label",
+		Body: workspaceBody("empty-label", "", false),
+	}); err != nil {
+		t.Fatalf("Create(empty label) error = %v", err)
+	}
+	emptyLabelPage, err := fixture.service.List(ctx, reference.ListQuery{
+		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+		MatchLabels: map[string]string{"team": ""},
+	})
+	if err != nil || len(emptyLabelPage.Items) != 1 ||
+		emptyLabelPage.Items[0].Metadata.DisplayName() != "empty-label" {
+		t.Fatalf("List(explicit empty label) items/error = %d/%v", len(emptyLabelPage.Items), err)
+	}
 
 	query := reference.ListQuery{
 		Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
@@ -400,6 +424,30 @@ func TestConcurrentDistinctWritesHaveOneETagWinner(t *testing.T) {
 	group.Wait()
 	if successes.Load() != 1 || stale.Load() != 1 {
 		t.Fatalf("race outcomes success/stale = %d/%d, want 1/1", successes.Load(), stale.Load())
+	}
+}
+
+func TestReplayCapacityIsClassified(t *testing.T) {
+	fixture := newFixture(t)
+	service, err := reference.New(reference.Config{
+		Store: fixture.store, Clock: fixture.clock, Issuer: &reference.SequentialIssuer{},
+		PageTokenKey: []byte("0123456789abcdef0123456789abcdef"), MaximumPageTokens: 64, MaximumReplays: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, name := range []string{"first", "second"} {
+		_, err = service.Create(context.Background(), reference.CreateCommand{
+			Principal: fixture.principal, Kind: hierarchy.KindWorkspace,
+			CanonicalTarget: "/api/v1alpha1/workspaces", IdempotencyKey: idempotencyKey("capacity", index),
+			Body: intentBody(hierarchy.KindWorkspace, name, false),
+		})
+		if index == 0 && err != nil {
+			t.Fatalf("Create(first) error = %v", err)
+		}
+		if index == 1 && !errors.Is(err, reference.ErrCapacity) {
+			t.Fatalf("Create(at replay capacity) error = %v, want ErrCapacity", err)
+		}
 	}
 }
 

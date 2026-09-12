@@ -3,6 +3,7 @@ package reference
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -472,7 +473,7 @@ func (service *Service) ReplaceStatus(ctx context.Context, command StatusCommand
 		receipt = StatusReceipt{
 			ResourceID: command.ResourceID, ObservedGeneration: observations[0],
 			ResourceVersion: replaced.Metadata.ResourceVersion().String(),
-			UpdatedAt:       replaced.Metadata.UpdatedAt().Format(timestampLayout),
+			UpdatedAt:       formatTimestamp(replaced.Metadata.UpdatedAt()),
 		}
 		reservation, err := service.reserveFresh(now, scope, command.IdempotencyKey, fingerprint)
 		if err != nil {
@@ -614,7 +615,7 @@ func (service *Service) idempotencyIdentity(
 	if err != nil {
 		return reconciliation.RequestFingerprint{}, reconciliation.IdempotencyScope{}, "", ErrInvalidCommand
 	}
-	return fingerprint, scope, replayMapKey(principal, method, target, key), nil
+	return fingerprint, scope, service.replayMapKey(principal, method, target, key), nil
 }
 
 func (service *Service) liveReplay(
@@ -656,6 +657,9 @@ func (service *Service) reserveFresh(
 	}
 	if errors.Is(err, reconciliation.ErrInvalidIdempotency) {
 		return reconciliation.Reservation{}, ErrInvalidCommand
+	}
+	if errors.Is(err, reconciliation.ErrCapacity) {
+		return reconciliation.Reservation{}, ErrCapacity
 	}
 	if err != nil {
 		return reconciliation.Reservation{}, fmt.Errorf("%w: reserve idempotency", ErrInternal)
@@ -706,8 +710,8 @@ func (service *Service) saveReplay(now time.Time, key string, record replayRecor
 	service.replays[key] = record
 }
 
-func replayMapKey(principal identity.Principal, method, target, key string) string {
-	hasher := sha256.New()
+func (service *Service) replayMapKey(principal identity.Principal, method, target, key string) string {
+	hasher := hmac.New(sha256.New, service.tokenKey)
 	writeFrame := func(value string) {
 		var size [8]byte
 		binary.BigEndian.PutUint64(size[:], uint64(len(value)))

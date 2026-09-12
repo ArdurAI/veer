@@ -169,7 +169,8 @@ func matchesList(value Resource, query ListQuery) bool {
 	}
 	labels := value.Metadata.Labels()
 	for key, expected := range query.MatchLabels {
-		if labels[key] != expected {
+		actual, present := labels[key]
+		if !present || actual != expected {
 			return false
 		}
 	}
@@ -187,7 +188,7 @@ func afterCursor(value Resource, cursor pageTokenRecord) bool {
 func (service *Service) issuePageToken(record pageTokenRecord, now time.Time) (string, error) {
 	service.reclaimPageTokens(now)
 	if len(service.tokens) >= service.tokenLimit || record.lastID == "" || !record.expiresAt.After(record.issuedAt) {
-		return "", fmt.Errorf("%w: page-token capacity", ErrInternal)
+		return "", ErrCapacity
 	}
 	canonical := tokenCanonical(record)
 	mac := hmac.New(sha256.New, service.tokenKey)
@@ -206,12 +207,6 @@ func (service *Service) resolvePageToken(token string, binding pageBinding, now 
 	}
 	record, exists := service.tokens[token]
 	if !exists || !now.Before(record.expiresAt) || !equalPageBinding(record.binding, binding) {
-		return pageTokenRecord{}, ErrInvalidPageToken
-	}
-	mac := hmac.New(sha256.New, service.tokenKey)
-	_, _ = mac.Write(tokenCanonical(record))
-	want := "p1_" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(token), []byte(want)) {
 		return pageTokenRecord{}, ErrInvalidPageToken
 	}
 	return clonePageTokenRecord(record), nil

@@ -47,9 +47,8 @@ or committed file:
 
 ```sh
 umask 077
-IFS= read -r VEER_REFERENCE_TOKEN
-printf '%s\n' "$VEER_REFERENCE_TOKEN" > .tools/reference-token
-unset VEER_REFERENCE_TOKEN
+mkdir -p .tools
+openssl rand -hex 32 > .tools/reference-token
 
 go run ./cmd/veer-reference-server \
   --listen 127.0.0.1:8080 \

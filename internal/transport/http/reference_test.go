@@ -229,11 +229,18 @@ func TestReferenceProblemFallbackAndETagQuoteUnexpectedInput(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &fallback); err != nil {
 		t.Fatal(err)
 	}
-	if fallback.RequestID != requestID || fallback.Instance != "urn:veer:request:"+requestID {
+	if fallback.RequestID != "internal" || fallback.Instance != "urn:veer:request:internal" ||
+		response.Header().Get("Veer-Request-Id") != fallback.RequestID {
 		t.Fatalf("fallback request binding = %q/%q", fallback.RequestID, fallback.Instance)
 	}
 	if got := quoteETag(`rv_"unexpected`); got != `"rv_\"unexpected"` {
 		t.Fatalf("quoteETag() = %q", got)
+	}
+	capacity := httptest.NewRecorder()
+	handler.writeServiceError(capacity, "req-capacity", reference.ErrCapacity)
+	assertReferenceProblem(t, capacity, http.StatusServiceUnavailable, "unavailable")
+	if capacity.Header().Get("Retry-After") != "10" {
+		t.Fatalf("capacity Retry-After = %q", capacity.Header().Get("Retry-After"))
 	}
 }
 
@@ -278,6 +285,9 @@ func referenceRequest(
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+	}
 	return response
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -136,5 +137,24 @@ func TestRunRejectsUnsafeConfigurationBeforeListening(t *testing.T) {
 	}, io.Discard, listen, bytes.NewReader(bytes.Repeat([]byte{0x61}, 32)))
 	if err == nil || listenCalled {
 		t.Fatalf("run(symlink token) error/listen = %v/%t", err, listenCalled)
+	}
+
+	fifo := filepath.Join(t.TempDir(), "token-fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- run(context.Background(), []string{
+			"--listen", "127.0.0.1:0", "--token-file", fifo,
+		}, io.Discard, listen, bytes.NewReader(bytes.Repeat([]byte{0x61}, 32)))
+	}()
+	select {
+	case err := <-result:
+		if err == nil || listenCalled {
+			t.Fatalf("run(FIFO token) error/listen = %v/%t", err, listenCalled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run(FIFO token) blocked before rejecting the special file")
 	}
 }
