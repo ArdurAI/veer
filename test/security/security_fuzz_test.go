@@ -131,6 +131,7 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 			if response.Body.Len() > reference.MaxPageBytes || !json.Valid(response.Body.Bytes()) {
 				t.Fatalf("success response contract failed: status=%d bytes=%d headers=%#v", response.Code, response.Body.Len(), response.Header())
 			}
+			assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 		case response.Code >= http.StatusBadRequest && response.Code <= 599:
 			assertSecurityProblemContract(t, response)
 			assertNoFixtureCanary(t, response, fixture)

@@ -375,6 +375,7 @@ func publicSecurityRoutes() []securityRoute {
 			outsiderStatus: http.StatusOK, outsiderOutcome: "denied-rows-filtered-before-pagination",
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertWorkspacePage(t, response, fixture.workspaceID, securityOutsiderCanary)
+				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 			assertOutsiderBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertWorkspacePage(t, response, fixture.outsiderWorkspaceID, securityResourceCanary)
@@ -451,6 +452,7 @@ func publicSecurityRoutes() []securityRoute {
 			outsiderStatus: http.StatusForbidden, outsiderOutcome: "authorization-denied", outsiderProblemCode: "authorization-denied",
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				assertOperationObject(t, response, fixture.operationID, fixture.workspaceID, fixture.workspaceID)
+				assertNoResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			},
 		},
 	}
