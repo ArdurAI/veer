@@ -448,6 +448,10 @@ func writeOrCompareSecurityMatrix(t *testing.T, results []securityRouteResult) {
 	got = append(got, '\n')
 	golden := filepath.Join(root, "test/security/testdata/security-regression-v1alpha1.golden.json")
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if t.Failed() {
+			t.Log("skipping security matrix update after a failed route observation")
+			return
+		}
 		if err := os.WriteFile(golden, got, 0o644); err != nil {
 			t.Fatal(err)
 		}
