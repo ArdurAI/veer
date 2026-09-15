@@ -34,6 +34,13 @@ Every inheriting role must also pass the scoped list, Workspace read, and
 Operation read cases. Rejected mutations compare both principals' visible
 state and a recorder covering every committed resource/operation write and
 issued identifier/version, including writes under previously unseen IDs.
+Rejected authorized replacements with a valid key also make a corrected retry
+on the same fixture with that exact key, then replay the accepted request.
+The retry must create a persisted operation; the replay must return the same
+receipt without any new store writes or identifier allocation. This observes
+idempotency-ledger and replay-map effects that resource snapshots cannot see.
+A dedicated regression covers stale preconditions with unchanged and changed
+intent, malformed JSON, and malformed request IDs.
 Accepted replacement receipts bind to the persisted Workspace generation and
 version, and to the new Operation's identity, generation, canonical bytes, and
 own ETag. Operation versions are independent of Workspace versions.

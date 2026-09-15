@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ArdurAI/veer/internal/core/domain/reconciliation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 )
 
@@ -200,6 +201,10 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 			t.Fatalf("unexpected HTTP status %d", response.Code)
 		}
 		assertNoBearerCanary(t, response)
+		if authorizedFixtureTarget && response.Code >= http.StatusBadRequest &&
+			reconciliation.ValidateIdempotencyKey(idempotencyKey) == nil {
+			assertSecurityIdempotencyKeyReusable(t, fixture, idempotencyKey)
+		}
 	})
 }
 

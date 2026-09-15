@@ -554,6 +554,81 @@ func TestCrossPrincipalMutationReplayDenied(t *testing.T) {
 	assertSecurityRuntimeStateUnchanged(t, before, after)
 }
 
+func TestRejectedReplacementPreservesIdempotencyKey(t *testing.T) {
+	const key = "security-rejected-key-0001"
+	cases := []struct {
+		name, requestID, problemCode string
+		body                         []byte
+		stale                        bool
+		status                       int
+	}{
+		{"stale-same-intent", "req-key-stale-same", "precondition-failed", validWorkspaceBody("replacement"), true, http.StatusPreconditionFailed},
+		{"stale-changed-intent", "req-key-stale-changed", "precondition-failed", validWorkspaceBody("rejected-intent"), true, http.StatusPreconditionFailed},
+		{"malformed-json", "req-key-invalid-json", "validation-failed", []byte(`{"metadata":`), false, http.StatusBadRequest},
+		{"malformed-request-id", strings.Repeat("a", 65), "validation-failed", validWorkspaceBody("replacement"), false, http.StatusBadRequest},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSecurityFixture(t)
+			route := securityReplacementRetryRoute(key)
+			route.body = func(securityFixture) []byte { return test.body }
+			headers := map[string]string{"Veer-Request-Id": test.requestID}
+			if test.stale {
+				headers["If-Match"] = strconv.Quote(securityStaleVersionCanary)
+			}
+			response := securityRequestWithStateInvariant(t, fixture, route, test.status, func() *httptest.ResponseRecorder {
+				return securityRequestWithHeaderOverrides(t, fixture.memberHandler, route, fixture, securityBearerCanary, headers)
+			})
+			assertSecurityResponse(t, response, test.status, test.problemCode)
+			if test.stale {
+				assertNoFixtureCanaryWithCurrentETag(t, response, fixture)
+			} else {
+				assertNoFixtureCanary(t, response, fixture)
+			}
+			assertSecurityIdempotencyKeyReusable(t, fixture, key)
+		})
+	}
+}
+
+func securityReplacementRetryRoute(key string) securityRoute {
+	return securityRoute{
+		operationID: "replaceWorkspace",
+		method:      http.MethodPut,
+		target: func(fixture securityFixture) string {
+			return "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
+		},
+		body: func(securityFixture) []byte { return validWorkspaceBody("replacement") },
+		headers: func(fixture securityFixture) map[string]string {
+			return map[string]string{
+				"Content-Type":    "application/json",
+				"Idempotency-Key": key,
+				"If-Match":        strconv.Quote(fixture.resourceVersion),
+			}
+		},
+	}
+}
+
+func assertSecurityIdempotencyKeyReusable(t testing.TB, fixture securityFixture, key string) {
+	t.Helper()
+	route := securityReplacementRetryRoute(key)
+	retry := securityRequest(t, fixture.memberHandler, route, fixture, securityBearerCanary)
+	assertSecurityResponse(t, retry, http.StatusAccepted, "")
+	receipt := assertMutationReceipt(t, retry, fixture.workspaceID)
+	assertReplacementOperation(t, fixture, receipt)
+	assertNoSuccessfulFixtureSecrets(t, retry, fixture)
+
+	before := observeSecurityRuntimeState(t, fixture, fixture.operationID, receipt.OperationID)
+	replay := securityRequest(t, fixture.memberHandler, route, fixture, securityBearerCanary)
+	assertSecurityResponse(t, replay, http.StatusAccepted, "")
+	assertMutationReceipt(t, replay, fixture.workspaceID)
+	assertNoSuccessfulFixtureSecrets(t, replay, fixture)
+	if !bytes.Equal(replay.Body.Bytes(), retry.Body.Bytes()) {
+		t.Fatalf("corrected retry replay changed its receipt: first=%s replay=%s", retry.Body.String(), replay.Body.String())
+	}
+	after := observeSecurityRuntimeState(t, fixture, fixture.operationID, receipt.OperationID)
+	assertSecurityRuntimeStateUnchanged(t, before, after)
+}
+
 func publicSecurityRoutes() []securityRoute {
 	workspaceTarget := func(fixture securityFixture) string {
 		return "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
