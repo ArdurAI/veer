@@ -30,6 +30,14 @@ positive path proves that a valid credential reaches the authorization layer;
 their invariant is a tenant `403` for every value in the closed four-role
 registry.
 
+Every inheriting role must also pass the scoped list, Workspace read, and
+Operation read cases. Rejected mutations compare both principals' visible
+state and a recorder covering every committed resource/operation write and
+issued identifier/version, including writes under previously unseen IDs.
+Accepted replacement receipts bind to the persisted Workspace generation and
+version, and to the new Operation's identity, generation, canonical bytes, and
+own ETag. Operation versions are independent of Workspace versions.
+
 ## Retained untrusted-input and fuzz corpus
 
 The following fuzz targets run their seed corpus during ordinary `go test` and
@@ -37,7 +45,7 @@ remain available for time-bounded fuzzing:
 
 | Boundary | Target | Retained input classes |
 | --- | --- | --- |
-| Public HTTP routes | `FuzzReferencePublicBoundary` | alternate token carrier, encoded path, duplicate JSON member, unknown credential-like field, trailing JSON, invalid UTF-8, depth bomb, webhook/remote-reference shape, oversized body, invalid credential |
+| Public HTTP routes | `FuzzReferencePublicBoundary` | alternate token carrier, encoded path, duplicate JSON member, unknown credential-like field, trailing JSON, invalid UTF-8, depth bomb, webhook/remote-reference shape, oversized body, invalid credential, minimized invalid idempotency key, malformed request ID, disallowed methods on every route family |
 | Bearer extraction | `FuzzExtractBearer`, `FuzzCredentialTrailerScrubbing` | header/query/cookie/trailer ambiguity, divergent query views, body and trailer aliasing, arbitrary casing |
 | OIDC/JWKS | deterministic negative corpus in `internal/adapters/identity/oidc` | non-canonical JWT segments, duplicate members, forbidden remote key headers, claim failures, redirect/cookie response state, malformed and over-bound keys |
 | Resource admission | `FuzzAdmitRaw` | every resource kind, duplicate and unknown fields, invalid Unicode, depth/node/byte bounds, trailing values |
@@ -51,7 +59,12 @@ problem response must use unique JSON members and a closed code/status/title
 tuple, bind its request ID and problem URNs, bind required retry body/header
 metadata, stay below 1,024 bytes, contain at most one field violation, and
 respect the field-path and text bounds. Valid client request IDs must be echoed
-exactly. The OpenAPI validator independently
+exactly; malformed supplied IDs must receive `400 validation-failed`. A `405`
+requires one exact route-specific `Allow` header, and an authorized stale
+precondition requires the current singleton ETag. Successful JSON must contain
+valid UTF-8 and unique members; decoded canonical JSON is scanned alongside
+wire bytes so escaped canaries cannot bypass the confidentiality checks.
+The OpenAPI validator independently
 rejects remote servers, remote references, and webhook expansion. No provider
 response parser exists yet; provider-specific malicious-response corpora belong
 with the adapters introduced by issues #38 and #41.
@@ -84,6 +97,7 @@ matrix, fuzz corpus, and redaction table before merge.
 
 ```sh
 go test ./test/security -count=1
+go test ./test/security -run '^Test' -count=100
 go test ./internal/transport/http ./internal/adapters/identity/oidc \
   ./internal/core/domain/admission ./internal/core/domain/credential \
   ./internal/core/service/credentialbroker ./internal/core/domain/reconciliation \

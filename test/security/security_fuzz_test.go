@@ -39,6 +39,12 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		{http.MethodGet, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-workspace", nil, http.StatusOK},
 		{http.MethodGet, fuzzOperationTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-operation", nil, http.StatusOK},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-replace-00001", fuzzWorkspaceResourceMatch, "req-fuzz-replace", validWorkspaceBody("replacement"), http.StatusAccepted},
+		{http.MethodPut, fuzzWorkspaceTarget, "BeArer " + securityBearerCanary, "applicAtion/json", "0", fuzzWorkspaceResourceMatch, "i", validWorkspaceBody("0"), http.StatusBadRequest},
+		{http.MethodGet, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", strings.Repeat("a", 65), nil, http.StatusBadRequest},
+		{http.MethodPatch, "/api/v1alpha1/workspaces", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-allow-list", nil, http.StatusMethodNotAllowed},
+		{http.MethodPatch, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-allow-workspace", nil, http.StatusMethodNotAllowed},
+		{http.MethodPatch, fuzzWorkspaceTarget + "/status", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-allow-status", nil, http.StatusMethodNotAllowed},
+		{http.MethodPatch, fuzzOperationTarget, "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-allow-operation", nil, http.StatusMethodNotAllowed},
 		{http.MethodGet, "/api/v1alpha1/workspaces?access_token=" + url.QueryEscape(invalidBearerCanary), "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-query-token", nil, http.StatusUnauthorized},
 		{http.MethodGet, "/api/v1alpha1/workspaces/%2e%2e", "Bearer " + securityBearerCanary, "", "", "", "req-fuzz-encoded-path", nil, http.StatusBadRequest},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-duplicate-0001", fuzzWorkspaceResourceMatch, "req-fuzz-duplicate", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusBadRequest},
@@ -51,6 +57,8 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		{http.MethodPut, fuzzWorkspaceTarget, "", "application/json", "fuzz-missing-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-missing-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + invalidBearerCanary, "application/json", "fuzz-invalid-auth-0001", fuzzWorkspaceResourceMatch, "req-fuzz-invalid-auth", []byte(`{"apiVersion":"v1alpha1","apiVersion":"v2","kind":"Workspace","metadata":{"displayName":"x"},"spec":{}}`), http.StatusUnauthorized},
 		{http.MethodPut, fuzzWorkspaceTarget, "Bearer " + securityBearerCanary, "application/json", "fuzz-stale-0000001", `"rv_security_stale_fuzz_0001"`, "req-fuzz-stale", validWorkspaceBody("replacement"), http.StatusPreconditionFailed},
+		{http.MethodPut, fuzzWorkspaceTarget, "BeArer " + securityBearerCanary, "application/json", "fuzz-stale-case-0001", `"rv_security_stale_fuzz_0001"`, "req-fuzz-stale-case", validWorkspaceBody("replacement"), http.StatusPreconditionFailed},
+		{http.MethodPut, fuzzWorkspaceTarget, "Bearer   " + securityBearerCanary, "application/json", "fuzz-stale-space-001", `"rv_security_stale_fuzz_0001"`, "req-fuzz-stale-space", validWorkspaceBody("replacement"), http.StatusPreconditionFailed},
 		{http.MethodDelete, "/api/v1alpha1/workspaces/wsp_0000000000000001", "Bearer " + invalidBearerCanary, "", "fuzz-delete-00001", `"rv_0000000000000001"`, "req-fuzz-delete", nil, 0},
 	}
 	for _, seed := range seeds {
@@ -72,9 +80,9 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 			seeds, method, target, authorization, contentType, idempotencyKey, ifMatch, requestID, body,
 		)
 		fixture := newSecurityFixture(t)
-		authorizedFixtureTarget := method == http.MethodPut && target == fuzzWorkspaceTarget &&
-			authorization == "Bearer "+securityBearerCanary
-		authorizedFixtureMutation := authorizedFixtureTarget && ifMatch == fuzzWorkspaceResourceMatch
+		if target == fuzzWorkspaceTarget+"/status" {
+			target = "/api/v1alpha1/workspaces/" + fixture.workspaceID.String() + "/status"
+		}
 		if target == fuzzWorkspaceTarget {
 			target = "/api/v1alpha1/workspaces/" + fixture.workspaceID.String()
 		}
@@ -88,6 +96,13 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 		if err != nil {
 			return
 		}
+		scheme, token, hasScheme := strings.Cut(authorization, " ")
+		fixtureAuthenticated := hasScheme && strings.EqualFold(scheme, "Bearer") &&
+			strings.TrimLeft(token, " ") == securityBearerCanary
+		authorizedFixtureTarget := fixtureAuthenticated && request.Method == http.MethodPut &&
+			request.URL.Path == "/api/v1alpha1/workspaces/"+fixture.workspaceID.String() &&
+			request.URL.RawQuery == "" && request.URL.EscapedPath() == request.URL.Path
+		authorizedFixtureMutation := authorizedFixtureTarget && ifMatch == `"`+fixture.resourceVersion+`"`
 		request.RequestURI = target
 		for name, value := range map[string]string{
 			"Authorization":   authorization,
@@ -100,8 +115,20 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 				request.Header.Set(name, value)
 			}
 		}
+		var before securityRuntimeSnapshot
+		nonReadRequest := request.Method != http.MethodGet
+		if nonReadRequest {
+			before = observeSecurityRuntimeState(t, fixture, fixture.operationID)
+		}
 		response := httptest.NewRecorder()
 		fixture.memberHandler.ServeHTTP(response, request)
+		if nonReadRequest && response.Code >= http.StatusBadRequest {
+			after := observeSecurityRuntimeState(t, fixture, fixture.operationID)
+			if before.mutationState != after.mutationState {
+				t.Logf("rejected request status=%d body=%s", response.Code, response.Body.String())
+			}
+			assertSecurityRuntimeStateUnchanged(t, before, after)
+		}
 		responseRequestIDs := response.Header().Values("Veer-Request-Id")
 		if len(responseRequestIDs) != 1 || responseRequestIDs[0] == "" {
 			t.Fatalf("response request ID values = %q, want exactly one non-empty value", responseRequestIDs)
@@ -112,6 +139,9 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 				"response request ID = %q, want echoed client value %q",
 				responseRequestIDs[0], requestID,
 			)
+		}
+		if requestID != "" && !securityRequestIDPattern.MatchString(requestID) {
+			assertSecurityResponse(t, response, http.StatusBadRequest, "validation-failed")
 		}
 		if authorizedFixtureMutation && response.Code == http.StatusForbidden {
 			t.Fatalf("authorized fixture mutation was denied before reaching admission: body=%s", response.Body.String())
@@ -152,8 +182,15 @@ func FuzzReferencePublicBoundary(f *testing.F) {
 			}
 			assertNoSuccessfulResponseCanary(t, response, fixture.outsiderWorkspaceID.String(), securityOutsiderCanary)
 			assertNoSuccessfulFixtureSecrets(t, response, fixture)
+			if operationID == "replaceWorkspace" {
+				receipt := assertMutationReceipt(t, response, fixture.workspaceID)
+				assertReplacementOperation(t, fixture, receipt)
+			}
 		case response.Code >= http.StatusBadRequest && response.Code <= 599:
 			assertSecurityProblemContract(t, response)
+			if response.Code == http.StatusMethodNotAllowed {
+				assertSecurityAllowHeader(t, response, request)
+			}
 			if response.Code == http.StatusPreconditionFailed && authorizedFixtureTarget {
 				assertNoFixtureCanaryWithCurrentETag(t, response, fixture)
 			} else {

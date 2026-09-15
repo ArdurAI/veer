@@ -3,12 +3,39 @@ package reconciliation
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
 const fixtureIdempotencyKey = "idem-0123456789ABC"
+
+func TestValidateIdempotencyKey(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "minimum", value: "idem-0123456789A", valid: true},
+		{name: "maximum", value: strings.Repeat("a", MaxIdempotencyKeyBytes), valid: true},
+		{name: "too short", value: "0"},
+		{name: "too long", value: strings.Repeat("a", MaxIdempotencyKeyBytes+1)},
+		{name: "space", value: "idem-0123456789 A"},
+		{name: "newline", value: "idem-0123456789\nA"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateIdempotencyKey(test.value)
+			if test.valid && err != nil {
+				t.Fatalf("ValidateIdempotencyKey(%q) error = %v", test.value, err)
+			}
+			if !test.valid && !errors.Is(err, ErrInvalidIdempotency) {
+				t.Fatalf("ValidateIdempotencyKey(%q) error = %v, want ErrInvalidIdempotency", test.value, err)
+			}
+		})
+	}
+}
 
 func TestIdempotencyWindowIsFixedNonSlidingAtExactBoundary(t *testing.T) {
 	t.Parallel()

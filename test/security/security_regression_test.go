@@ -18,14 +18,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ArdurAI/veer/api/openapi"
 	"github.com/ArdurAI/veer/internal/adapters/store/memory"
 	"github.com/ArdurAI/veer/internal/core/domain/authorization"
 	"github.com/ArdurAI/veer/internal/core/domain/hierarchy"
 	"github.com/ArdurAI/veer/internal/core/domain/identity"
+	"github.com/ArdurAI/veer/internal/core/domain/isolation"
 	"github.com/ArdurAI/veer/internal/core/domain/resource"
 	"github.com/ArdurAI/veer/internal/core/ports"
 	"github.com/ArdurAI/veer/internal/core/service/reference"
@@ -111,11 +114,14 @@ type securityFixture struct {
 	outsiderOperationID     resource.ID
 	policyID                resource.ID
 	memberID                resource.ID
+	runtimeState            *securityRuntimeStateRecorder
+	store                   ports.ReferenceStore
 }
 
 type securityRuntimeSnapshot struct {
-	member   securityPrincipalRuntimeSnapshot
-	outsider securityPrincipalRuntimeSnapshot
+	member        securityPrincipalRuntimeSnapshot
+	outsider      securityPrincipalRuntimeSnapshot
+	mutationState string
 }
 
 type securityPrincipalRuntimeSnapshot struct {
@@ -123,6 +129,114 @@ type securityPrincipalRuntimeSnapshot struct {
 	workspace     string
 	workspaceETag string
 	operations    string
+}
+
+type securityRuntimeStateRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (recorder *securityRuntimeStateRecorder) record(events ...string) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.events = append(recorder.events, events...)
+}
+
+func (recorder *securityRuntimeStateRecorder) snapshot() string {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return strings.Join(recorder.events, "\n")
+}
+
+type securityRecordingStore struct {
+	delegate *memory.Store
+	state    *securityRuntimeStateRecorder
+}
+
+func (store *securityRecordingStore) View(
+	ctx context.Context,
+	scopes isolation.WorkspaceScopeSet,
+	callback func(ports.ReferenceReader) error,
+) error {
+	return store.delegate.View(ctx, scopes, callback)
+}
+
+func (store *securityRecordingStore) Update(
+	ctx context.Context,
+	scope isolation.WorkspaceScope,
+	callback func(ports.ReferenceTransaction) error,
+) error {
+	if callback == nil {
+		return store.delegate.Update(ctx, scope, nil)
+	}
+	var events []string
+	err := store.delegate.Update(ctx, scope, func(transaction ports.ReferenceTransaction) error {
+		return callback(&securityRecordingTransaction{
+			ReferenceTransaction: transaction,
+			events:               &events,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	store.state.record(append(
+		[]string{"store update workspace=" + scope.WorkspaceID().String()}, events...,
+	)...)
+	return nil
+}
+
+type securityRecordingTransaction struct {
+	ports.ReferenceTransaction
+	events *[]string
+}
+
+func (transaction *securityRecordingTransaction) PutResource(id resource.ID, value []byte) {
+	transaction.ReferenceTransaction.PutResource(id, value)
+	*transaction.events = append(*transaction.events, securityMutationEvent("put resource", id, value))
+}
+
+func (transaction *securityRecordingTransaction) DeleteResource(id resource.ID) {
+	transaction.ReferenceTransaction.DeleteResource(id)
+	*transaction.events = append(*transaction.events, "delete resource id="+id.String())
+}
+
+func (transaction *securityRecordingTransaction) PutOperation(id resource.ID, value []byte) {
+	transaction.ReferenceTransaction.PutOperation(id, value)
+	*transaction.events = append(*transaction.events, securityMutationEvent("put operation", id, value))
+}
+
+func securityMutationEvent(action string, id resource.ID, value []byte) string {
+	digest := sha256.Sum256(value)
+	return fmt.Sprintf("%s id=%s bytes=%d sha256=%s", action, id, len(value), hex.EncodeToString(digest[:]))
+}
+
+type securityRecordingIssuer struct {
+	delegate reference.Issuer
+	state    *securityRuntimeStateRecorder
+}
+
+func (issuer *securityRecordingIssuer) ResourceID(kind hierarchy.Kind) (resource.ID, error) {
+	id, err := issuer.delegate.ResourceID(kind)
+	if err == nil {
+		issuer.state.record("issue resource kind=" + kind.String() + " id=" + id.String())
+	}
+	return id, err
+}
+
+func (issuer *securityRecordingIssuer) OperationID() (resource.ID, error) {
+	id, err := issuer.delegate.OperationID()
+	if err == nil {
+		issuer.state.record("issue operation id=" + id.String())
+	}
+	return id, err
+}
+
+func (issuer *securityRecordingIssuer) ResourceVersion() (string, error) {
+	version, err := issuer.delegate.ResourceVersion()
+	if err == nil {
+		issuer.state.record("issue resource-version=" + version)
+	}
+	return version, err
 }
 
 type securityAccess struct {
@@ -360,6 +474,17 @@ func TestPublicRouteSecurityMatrix(t *testing.T) {
 			assertAuthenticationDenial(t, invalid, `Bearer realm="veer", error="invalid_token"`)
 			assertNoFixtureCanary(t, invalid, fixture)
 
+			if route.method == http.MethodGet {
+				for _, role := range authorization.Roles() {
+					t.Run("allowed-read-"+role.String(), func(t *testing.T) {
+						roleFixture := newSecurityFixtureForRole(t, role)
+						allowed := securityRequest(t, roleFixture.memberHandler, route, roleFixture, securityBearerCanary)
+						assertSecurityResponse(t, allowed, http.StatusOK, "")
+						assertNoSuccessfulFixtureSecrets(t, allowed, roleFixture)
+						route.assertMemberBody(t, roleFixture, allowed)
+					})
+				}
+			}
 			if route.allRolesDenied {
 				for _, role := range authorization.Roles() {
 					role := role
@@ -418,6 +543,7 @@ func TestCrossPrincipalMutationReplayDenied(t *testing.T) {
 	member := securityRequest(t, fixture.memberHandler, route, fixture, securityBearerCanary)
 	assertSecurityResponse(t, member, http.StatusAccepted, "")
 	receipt := assertMutationReceipt(t, member, fixture.workspaceID)
+	assertReplacementOperation(t, fixture, receipt)
 	assertNoSuccessfulFixtureSecrets(t, member, fixture)
 
 	before := observeSecurityRuntimeState(t, fixture, fixture.operationID, receipt.OperationID)
@@ -493,6 +619,7 @@ func publicSecurityRoutes() []securityRoute {
 			staleOutsiderCheck: true,
 			assertMemberBody: func(t *testing.T, fixture securityFixture, response *httptest.ResponseRecorder) {
 				receipt := assertMutationReceipt(t, response, fixture.workspaceID)
+				assertReplacementOperation(t, fixture, receipt)
 				if receipt.ResourceVersion == fixture.resourceVersion {
 					t.Fatalf("replacement resource version = %q, want advancement from %q", receipt.ResourceVersion, fixture.resourceVersion)
 				}
@@ -561,11 +688,14 @@ func newSecurityFixtureForRole(t testing.TB, memberRole authorization.Role) secu
 	}
 	member := securityPrincipal(t, securityIdentityCanary)
 	outsider := securityPrincipal(t, "security-outsider")
+	runtimeState := &securityRuntimeStateRecorder{}
+	store := &securityRecordingStore{delegate: memory.NewStore(), state: runtimeState}
+	issuer := &securityRecordingIssuer{delegate: &reference.SequentialIssuer{}, state: runtimeState}
 	service, err := reference.New(reference.Config{
-		Store: memory.NewStore(), Clock: reference.ClockFunc(func() time.Time {
+		Store: store, Clock: reference.ClockFunc(func() time.Time {
 			return time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
 		}),
-		Issuer: &reference.SequentialIssuer{}, PageTokenKey: bytes.Repeat([]byte{0x28}, 32),
+		Issuer: issuer, PageTokenKey: bytes.Repeat([]byte{0x28}, 32),
 		MaximumPageTokens: 16, MaximumReplays: 32,
 	})
 	if err != nil {
@@ -618,6 +748,7 @@ func newSecurityFixtureForRole(t testing.TB, memberRole authorization.Role) secu
 		resourceVersion: workspace.ResourceVersion, outsiderResourceVersion: outsiderWorkspace.ResourceVersion,
 		operationID: workspace.OperationID, outsiderOperationID: outsiderWorkspace.OperationID,
 		policyID: memberPolicy.ResourceID, memberID: resource.ID(securityMemberCanary),
+		runtimeState: runtimeState, store: store,
 	}
 }
 
@@ -757,6 +888,7 @@ func observeSecurityRuntimeState(
 		outsider: observeSecurityPrincipalRuntimeState(
 			t, fixture.outsiderHandler, fixture.outsiderWorkspaceID, fixture.outsiderOperationID,
 		),
+		mutationState: fixture.runtimeState.snapshot(),
 	}
 }
 
@@ -797,6 +929,13 @@ func assertSecurityRuntimeStateUnchanged(
 	before, after securityRuntimeSnapshot,
 ) {
 	t.Helper()
+	if before.mutationState != after.mutationState {
+		delta := after.mutationState
+		if strings.HasPrefix(after.mutationState, before.mutationState) {
+			delta = strings.TrimPrefix(after.mutationState, before.mutationState)
+		}
+		t.Fatalf("denied mutation changed the complete store or issuer mutation state: delta=%q", delta)
+	}
 	assertSecurityPrincipalRuntimeStateUnchanged(t, "member", before.member, after.member)
 	assertSecurityPrincipalRuntimeStateUnchanged(t, "outsider", before.outsider, after.outsider)
 }
@@ -937,14 +1076,14 @@ func assertNoFixtureCanaryExceptHeaders(
 		}
 		outputs[0] = string(encoded)
 	}
+	for name, want := range allowedHeaders {
+		assertSingletonHeader(t, response, name, want)
+	}
 	for name, values := range response.Header() {
 		if problemResponse && strings.EqualFold(name, "Veer-Request-Id") {
 			continue
 		}
-		if want, allowed := allowedHeaders[http.CanonicalHeaderKey(name)]; allowed {
-			if len(values) != 1 || values[0] != want {
-				t.Fatalf("%s values = %q, want exactly one allowed value %q", name, values, want)
-			}
+		if _, allowed := allowedHeaders[http.CanonicalHeaderKey(name)]; allowed {
 			continue
 		}
 		outputs = append(outputs, values...)
@@ -961,7 +1100,9 @@ func assertNoFixtureCanaryExceptHeaders(
 		fixture.workspaceID.String(),
 		fixture.outsiderWorkspaceID.String(),
 		fixture.resourceVersion,
+		fixture.outsiderResourceVersion,
 		fixture.operationID.String(),
+		fixture.outsiderOperationID.String(),
 		fixture.policyID.String(),
 		fixture.memberID.String(),
 	)
@@ -977,7 +1118,11 @@ func assertNoSuccessfulResponseCanary(
 	if len(requestIDs) != 1 || !securityRequestIDPattern.MatchString(requestIDs[0]) {
 		t.Fatalf("Veer-Request-Id values = %q, want exactly one canonical value", requestIDs)
 	}
-	outputs := []string{response.Body.String()}
+	canonical, err := canonicalSecurityJSON(response.Body.Bytes())
+	if err != nil {
+		t.Fatalf("decode successful JSON for confidentiality scan: %v", err)
+	}
+	outputs := []string{response.Body.String(), canonical}
 	for name, values := range response.Header() {
 		if strings.EqualFold(name, "Veer-Request-Id") {
 			continue
@@ -989,11 +1134,55 @@ func assertNoSuccessfulResponseCanary(
 
 func assertNoResponseCanary(t testing.TB, response *httptest.ResponseRecorder, canaries ...string) {
 	t.Helper()
-	outputs := []string{response.Body.String()}
+	canonical, err := canonicalSecurityJSON(response.Body.Bytes())
+	if err != nil {
+		t.Fatalf("decode JSON for confidentiality scan: %v", err)
+	}
+	outputs := []string{response.Body.String(), canonical}
 	for _, values := range response.Header() {
 		outputs = append(outputs, values...)
 	}
 	assertOutputsDoNotContainCanaries(t, outputs, canaries...)
+}
+
+func canonicalSecurityJSON(body []byte) (string, error) {
+	if !utf8.Valid(body) {
+		return "", errors.New("JSON contains invalid UTF-8")
+	}
+	if err := validateUniqueJSONMembers(body); err != nil {
+		return "", err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return "", err
+	}
+	canonical, err := json.Marshal(value)
+	return string(canonical), err
+}
+
+func TestSecurityJSONCanonicalization(t *testing.T) {
+	t.Parallel()
+	for _, canary := range []string{securityPolicyCanary, securityIdentityCanary, securityBearerCanary} {
+		t.Run(canary, func(t *testing.T) {
+			escaped := strings.ReplaceAll(canary, "-", `\u002d`)
+			body := []byte(`{"nested":[{"` + escaped + `":"` + escaped + `"}]}`)
+			canonical, err := canonicalSecurityJSON(body)
+			if err != nil || strings.Count(canonical, canary) != 2 {
+				t.Fatalf("decoded canary is not visible in both member name and value: %q, %v", canonical, err)
+			}
+		})
+	}
+	for _, body := range [][]byte{
+		{'{', '"', 'x', '"', ':', '"', 0xff, '"', '}'},
+		[]byte(`{"x":"secret","\u0078":"safe"}`),
+		[]byte(`{"x":"secret"} {"x":"safe"}`),
+	} {
+		if _, err := canonicalSecurityJSON(body); err == nil {
+			t.Fatalf("accepted malformed or ambiguous JSON: %q", body)
+		}
+	}
 }
 
 func assertOutputsDoNotContainCanaries(t testing.TB, outputs []string, canaries ...string) {
@@ -1165,6 +1354,84 @@ func assertMutationReceipt(
 		"/api/v1alpha1/operations/"+receipt.OperationID.String(),
 	)
 	return receipt
+}
+
+func assertReplacementOperation(t testing.TB, fixture securityFixture, receipt reference.MutationReceipt) {
+	t.Helper()
+	if receipt.OperationID == fixture.operationID {
+		t.Fatal("replacement receipt reused the bootstrap operation")
+	}
+	scopes, err := isolation.NewWorkspaceScopeSet(fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operationBytes, workspaceBytes []byte
+	if err := fixture.store.View(context.Background(), scopes, func(reader ports.ReferenceReader) error {
+		var exists bool
+		operationBytes, exists = reader.GetOperation(receipt.OperationID)
+		if !exists {
+			return errors.New("replacement operation was not persisted")
+		}
+		workspaceBytes, exists = reader.GetResource(fixture.workspaceID)
+		if !exists {
+			return errors.New("replacement workspace was not persisted")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	operationResponse := securityAuthorizedGet(
+		t, fixture.memberHandler, "/api/v1alpha1/operations/"+receipt.OperationID.String(),
+	)
+	assertOperationObject(t, operationResponse, receipt.OperationID, fixture.workspaceID, receipt.ResourceID)
+	assertNoSuccessfulFixtureSecrets(t, operationResponse, fixture)
+	if !bytes.Equal(operationResponse.Body.Bytes(), operationBytes) {
+		t.Fatal("replacement operation response differs from its persisted canonical bytes")
+	}
+	var persistedOperation struct {
+		Generation int64 `json:"generation"`
+	}
+	var persistedWorkspace struct {
+		Metadata struct {
+			Generation      int64  `json:"generation"`
+			ResourceVersion string `json:"resourceVersion"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(operationBytes, &persistedOperation); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(workspaceBytes, &persistedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Generation < 1 || persistedOperation.Generation != receipt.Generation ||
+		persistedWorkspace.Metadata.Generation != receipt.Generation ||
+		persistedWorkspace.Metadata.ResourceVersion != receipt.ResourceVersion {
+		t.Fatalf("replacement receipt is not bound to persisted workspace and operation: receipt=%+v operation=%+v workspace=%+v",
+			receipt, persistedOperation, persistedWorkspace)
+	}
+}
+
+func assertSecurityAllowHeader(t testing.TB, response *httptest.ResponseRecorder, request *http.Request) {
+	t.Helper()
+	path := request.URL.Path
+	// The operation endpoint rejects methods before parsing its identifier.
+	if strings.HasPrefix(path, "/api/v1alpha1/operations/") {
+		path = "/api/v1alpha1/operations/{operationId}"
+	}
+	var methods []string
+	for _, route := range publicSecurityRoutes() {
+		if securityPathMatches(route.pathTemplate, path) {
+			if route.method == request.Method {
+				t.Fatalf("405 rejected an allowed method %q on %q", request.Method, request.URL.Path)
+			}
+			methods = append(methods, route.method)
+		}
+	}
+	if len(methods) == 0 {
+		t.Fatalf("405 has no matched public route: %q", request.URL.Path)
+	}
+	sort.Strings(methods)
+	assertSingletonHeader(t, response, "Allow", strings.Join(methods, ", "))
 }
 
 func assertSecurityProblemContract(t testing.TB, response *httptest.ResponseRecorder) securityProblem {
