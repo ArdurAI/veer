@@ -628,7 +628,8 @@ func (service *Service) validateMutation(
 	target, key string,
 ) error {
 	if service == nil || ctx == nil || ctx.Err() != nil || identity.ValidatePrincipal(principal) != nil ||
-		len(target) == 0 || len(target) > reconciliation.MaxEvidenceBytes || len(key) == 0 {
+		len(target) == 0 || len(target) > reconciliation.MaxEvidenceBytes ||
+		reconciliation.ValidateIdempotencyKey(key) != nil {
 		if ctx != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}

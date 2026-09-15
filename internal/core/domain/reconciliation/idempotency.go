@@ -153,7 +153,7 @@ func (ledger *IdempotencyLedger) Reserve(
 	fingerprint RequestFingerprint,
 ) (Reservation, IdempotencyDisposition, error) {
 	if ledger == nil || !ledger.initialized || !scope.initialized || !scope.digest.initialized ||
-		!validIdempotencyKey(key) || !fingerprint.initialized {
+		ValidateIdempotencyKey(key) != nil || !fingerprint.initialized {
 		return Reservation{}, "", ErrInvalidIdempotency
 	}
 	now, err := normalizeTime(databaseTime)
@@ -417,9 +417,14 @@ func validateReservation(value Reservation) error {
 	return nil
 }
 
-func validIdempotencyKey(value string) bool {
-	return len(value) >= MinIdempotencyKeyBytes && len(value) <= MaxIdempotencyKeyBytes &&
-		!strings.ContainsAny(value, "\r\n") && idempotencyKeyPattern.MatchString(value)
+// ValidateIdempotencyKey enforces the public mutation-key grammar without
+// reserving ledger state.
+func ValidateIdempotencyKey(value string) error {
+	if len(value) < MinIdempotencyKeyBytes || len(value) > MaxIdempotencyKeyBytes ||
+		strings.ContainsAny(value, "\r\n") || !idempotencyKeyPattern.MatchString(value) {
+		return ErrInvalidIdempotency
+	}
+	return nil
 }
 
 func validMutationMethod(value string) bool {
